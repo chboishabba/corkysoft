@@ -1,4 +1,4 @@
-# corkysoft
+# corkysoft - bill gates' FOMO
 
 A tool for estimating and optimising costs.
 <img width="1580" height="1054" alt="image" src="https://github.com/user-attachments/assets/2e39742e-6cc2-472a-9304-11b98e2eb158" />
