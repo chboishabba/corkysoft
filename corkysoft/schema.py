@@ -95,9 +95,42 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             region TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS truck_positions (
+            truck_id TEXT PRIMARY KEY,
+            lat REAL NOT NULL,
+            lon REAL NOT NULL,
+            status TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            heading REAL,
+            speed_kph REAL,
+            notes TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS active_routes (
+            route_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER,
+            truck_id TEXT NOT NULL UNIQUE,
+            origin_lat REAL NOT NULL,
+            origin_lon REAL NOT NULL,
+            dest_lat REAL NOT NULL,
+            dest_lon REAL NOT NULL,
+            progress REAL NOT NULL DEFAULT 0 CHECK(progress BETWEEN 0 AND 1),
+            eta TEXT,
+            status TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            notes TEXT,
+            FOREIGN KEY(truck_id) REFERENCES truck_positions(truck_id) ON DELETE CASCADE,
+            FOREIGN KEY(job_id) REFERENCES historical_jobs(id) ON DELETE SET NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_active_routes_job_id
+            ON active_routes(job_id)
+            WHERE job_id IS NOT NULL;
+
         CREATE INDEX IF NOT EXISTS idx_packing_service ON packing_rate_tiers(service_code, min_volume);
         CREATE INDEX IF NOT EXISTS idx_seasonal_active ON seasonal_uplifts(active);
         CREATE INDEX IF NOT EXISTS idx_modifier_active ON modifier_fees(active);
+        CREATE INDEX IF NOT EXISTS idx_truck_positions_status ON truck_positions(status);
         """
     )
 

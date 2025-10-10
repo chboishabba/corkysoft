@@ -72,12 +72,27 @@ Key visuals include:
 
 - A histogram with break-even bands, a fitted bell curve, and kurtosis/skewness call-outs for quick shape diagnostics.
 - Optional profitability tabs that compare $/m³ against $/km and contrast quoted vs cost-derived $/m³, including margin outlier tables.
+- A live network map that blends historical job filters with real-time truck telemetry, colouring corridors by profitability band and highlighting active trucks/routes.
 
 ```bash
 streamlit run streamlit_price_distribution.py
 ```
 
 By default it reads from `routes.db`. Set `CORKYSOFT_DB` or `ROUTES_DB` to point at a different SQLite database.
+
+#### Mock telemetry ingestion
+
+The Streamlit map expects live data in the `truck_positions` and `active_routes` tables. A mock ingestor keeps these tables fresh:
+
+```bash
+python -m analytics.ingest_live_data --interval 5 --iterations 0
+```
+
+- `--interval` controls the seconds between updates.
+- `--iterations` can limit the run for testing (omit for a continuous loop).
+- `--trucks` lets you specify custom truck IDs.
+
+The script reuses historical jobs with geocoded origins/destinations and gracefully falls back to seeded depots so the map always has routes to display.
 
 ### Commands
 
@@ -138,6 +153,8 @@ ID    Origin             → Origin (resolved)             Destination         �
 * **addresses**: normalised + geocoded address cache used by jobs and historical imports.
 * **jobs**: origin/destination foreign keys into `addresses`, hourly/per-km rates, computed distance, duration, costs, resolved coordinates, timestamps.
 * **geocode_cache**: cached lat/lon results keyed by `place,country`.
+* **truck_positions**: latest lat/lon, status, heading and speed for each active truck.
+* **active_routes**: in-flight jobs mapped to trucks with origin/destination coordinates, progress, ETA and profit-band overlays.
 * **lane_base_rates**: per-m³ and metro-hourly lane pricing keyed by corridor code.
 * **modifier_fees**: flat / per-m³ / percentage surcharges such as difficult access or piano handling.
 * **packing_rate_tiers**: tiered packing & unpacking rates by cubic metres.

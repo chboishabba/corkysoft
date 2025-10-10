@@ -18,6 +18,29 @@ from .db import (
     set_parameter_value,
 )
 
+PROFITABILITY_BANDS: Sequence[tuple[float, float, str]] = (
+    (-float("inf"), 0.0, "Below break-even"),
+    (0.0, 50.0, "0-50 above break-even"),
+    (50.0, 100.0, "50-100 above break-even"),
+    (100.0, float("inf"), "100+ above break-even"),
+)
+
+PROFITABILITY_COLOURS = {
+    "Below break-even": [217, 83, 79],
+    "0-50 above break-even": [240, 173, 78],
+    "50-100 above break-even": [91, 192, 222],
+    "100+ above break-even": [92, 184, 92],
+    "Unknown": [128, 128, 128],
+}
+
+PROFITABILITY_WIDTHS = {
+    "Below break-even": 200,
+    "0-50 above break-even": 120,
+    "50-100 above break-even": 100,
+    "100+ above break-even": 80,
+    "Unknown": 80,
+}
+
 BREAK_EVEN_KEY = "break_even_per_m3"
 DEFAULT_BREAK_EVEN_VALUE = 250.0
 DEFAULT_BREAK_EVEN_DESCRIPTION = "Baseline break-even $/m³ across the network"
@@ -417,6 +440,74 @@ def summarise_profitability(df: pd.DataFrame) -> ProfitabilitySummary:
         margin_total_median=margin_total_median,
         margin_total_pct_median=margin_total_pct_median,
     )
+
+
+def classify_profit_band(value: Optional[float], break_even: float) -> str:
+    """Return the profitability band label for a per-m³ price."""
+
+    if value is None:
+        return "Unknown"
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return "Unknown"
+    if math.isnan(numeric_value):
+        return "Unknown"
+
+    diff = numeric_value - break_even
+    for lower, upper, label in PROFITABILITY_BANDS:
+        if lower <= diff < upper:
+            return label
+    return "Unknown"
+
+
+def prepare_route_map_data(
+    df: pd.DataFrame,
+    break_even: float,
+) -> pd.DataFrame:
+    """Prepare per-job map records containing profitability bands and colours."""
+
+    required_columns = {
+        "origin_lat",
+        "origin_lon",
+        "dest_lat",
+        "dest_lon",
+        "price_per_m3",
+    }
+    if not required_columns.issubset(df.columns):
+        return pd.DataFrame(
+            columns=[
+                "id",
+                "origin_lat",
+                "origin_lon",
+                "dest_lat",
+                "dest_lon",
+                "price_per_m3",
+                "profit_band",
+                "colour",
+                "tooltip",
+            ]
+        )
+
+    map_df = df.dropna(subset=["origin_lat", "origin_lon", "dest_lat", "dest_lon"]).copy()
+    if map_df.empty:
+        return map_df
+
+    map_df["profit_band"] = map_df["price_per_m3"].apply(lambda value: classify_profit_band(value, break_even))
+    map_df["colour"] = map_df["profit_band"].map(PROFITABILITY_COLOURS)
+    map_df["colour"] = map_df["colour"].apply(
+        lambda value: value if isinstance(value, (list, tuple)) else [128, 128, 128]
+    )
+    map_df["line_width"] = map_df["profit_band"].map(PROFITABILITY_WIDTHS).fillna(80)
+
+    def _format_tooltip(row: pd.Series) -> str:
+        corridor = row.get("corridor_display", "Corridor")
+        price = row.get("price_per_m3")
+        price_text = "n/a" if pd.isna(price) else f"${price:,.0f} per m³"
+        return f"{corridor}: {row['profit_band']} ({price_text})"
+
+    map_df["tooltip"] = map_df.apply(_format_tooltip, axis=1)
+    return map_df
 
 
 def _band_styles():
