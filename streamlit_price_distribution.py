@@ -7,6 +7,7 @@ from datetime import date
 from typing import Optional
 
 import pandas as pd
+import pydeck as pdk
 import streamlit as st
 
 from analytics.db import connection_scope
@@ -161,86 +162,212 @@ with connection_scope() as conn:
         st.warning("No jobs match the selected filters.")
         st.stop()
 
-    summary = summarise_distribution(filtered_df, break_even_value)
-    profitability_summary = summarise_profitability(filtered_df)
-    render_summary(summary, break_even_value, profitability_summary)
+    summary_tab, map_tab = st.tabs(["Profitability", "Map"])
 
-    histogram_tab, profitability_tab = st.tabs([
-        "Histogram",
-        "Profitability insights",
-    ])
+    with summary_tab:
+        summary = summarise_distribution(filtered_df, break_even_value)
+        profitability_summary = summarise_profitability(filtered_df)
+        render_summary(summary, break_even_value, profitability_summary)
 
-    with histogram_tab:
-        histogram = create_histogram(filtered_df, break_even_value)
-        st.plotly_chart(histogram, use_container_width=True)
-        st.caption(
-            "Histogram overlays include the normal distribution fit plus kurtosis and dispersion markers for context."
-        )
+        histogram_tab, profitability_tab = st.tabs([
+            "Histogram",
+            "Profitability insights",
+        ])
 
-    with profitability_tab:
-        st.markdown("### Profitability insights")
-        view_options = {
-            "m³ vs km profitability": create_m3_vs_km_figure,
-            "Quoted vs calculated $/m³": create_m3_margin_figure,
-        }
-        selected_view = st.radio(
-            "Choose a view",
-            list(view_options.keys()),
-            horizontal=True,
-            help="Switch between per-kilometre earnings and quoted-versus-cost comparisons.",
-        )
-        fig = view_options[selected_view](filtered_df)
-        st.plotly_chart(fig, use_container_width=True)
-
-        if "margin_per_m3" in filtered_df.columns:
-            st.markdown("#### Margin outliers")
-            ranked = (
-                filtered_df.dropna(subset=["margin_per_m3"])
-                .sort_values("margin_per_m3")
+        with histogram_tab:
+            histogram = create_histogram(filtered_df, break_even_value)
+            st.plotly_chart(histogram, use_container_width=True)
+            st.caption(
+                "Histogram overlays include the normal distribution fit plus kurtosis and dispersion markers for context."
             )
-            if not ranked.empty:
-                low_cols, high_cols = st.columns(2)
-                display_fields = [
-                    col
-                    for col in [
-                        "job_date",
-                        "client_display",
-                        "corridor_display",
-                        "price_per_m3",
-                        "final_cost_per_m3",
-                        "margin_per_m3",
-                        "margin_per_m3_pct",
+
+        with profitability_tab:
+            st.markdown("### Profitability insights")
+            view_options = {
+                "m³ vs km profitability": create_m3_vs_km_figure,
+                "Quoted vs calculated $/m³": create_m3_margin_figure,
+            }
+            selected_view = st.radio(
+                "Choose a view",
+                list(view_options.keys()),
+                horizontal=True,
+                help="Switch between per-kilometre earnings and quoted-versus-cost comparisons.",
+            )
+            fig = view_options[selected_view](filtered_df)
+            st.plotly_chart(fig, use_container_width=True)
+
+            if "margin_per_m3" in filtered_df.columns:
+                st.markdown("#### Margin outliers")
+                ranked = (
+                    filtered_df.dropna(subset=["margin_per_m3"])
+                    .sort_values("margin_per_m3")
+                )
+                if not ranked.empty:
+                    low_cols, high_cols = st.columns(2)
+                    display_fields = [
+                        col
+                        for col in [
+                            "job_date",
+                            "client_display",
+                            "corridor_display",
+                            "price_per_m3",
+                            "final_cost_per_m3",
+                            "margin_per_m3",
+                            "margin_per_m3_pct",
+                        ]
+                        if col in ranked.columns
                     ]
-                    if col in ranked.columns
-                ]
-                low_cols.write("Lowest margin jobs")
-                low_cols.dataframe(ranked.head(5)[display_fields])
-                high_cols.write("Highest margin jobs")
-                high_cols.dataframe(ranked.tail(5).iloc[::-1][display_fields])
-            else:
-                st.info("No margin data available to highlight outliers yet.")
+                    low_cols.write("Lowest margin jobs")
+                    low_cols.dataframe(ranked.head(5)[display_fields])
+                    high_cols.write("Highest margin jobs")
+                    high_cols.dataframe(ranked.tail(5).iloc[::-1][display_fields])
+                else:
+                    st.info("No margin data available to highlight outliers yet.")
 
-    st.subheader("Filtered jobs")
-    display_columns = [
-        col for col in [
-            "job_date",
-            "corridor_display",
-            "client_display",
-            "price_per_m3",
+        st.subheader("Filtered jobs")
+        display_columns = [
+            col for col in [
+                "job_date",
+                "corridor_display",
+                "client_display",
+                "price_per_m3",
+            ]
+            if col in filtered_df.columns
         ]
-        if col in filtered_df.columns
-    ]
-    remaining_columns = [
-        col for col in filtered_df.columns
-        if col not in display_columns
-    ]
-    st.dataframe(filtered_df[display_columns + remaining_columns])
+        remaining_columns = [
+            col for col in filtered_df.columns
+            if col not in display_columns
+        ]
+        st.dataframe(filtered_df[display_columns + remaining_columns])
 
-    csv_buffer = io.StringIO()
-    filtered_df.to_csv(csv_buffer, index=False)
-    st.download_button(
-        "Export filtered rows",
-        csv_buffer.getvalue(),
-        file_name="price_distribution_filtered.csv",
-        mime="text/csv",
-    )
+        csv_buffer = io.StringIO()
+        filtered_df.to_csv(csv_buffer, index=False)
+        st.download_button(
+            "Export filtered rows",
+            csv_buffer.getvalue(),
+            file_name="price_distribution_filtered.csv",
+            mime="text/csv",
+        )
+
+    with map_tab:
+        st.markdown("### Route visualisation")
+        required_columns = {"origin_lon", "origin_lat", "dest_lon", "dest_lat"}
+        if not required_columns.issubset(filtered_df.columns):
+            st.info("Mapping requires geocoded origin and destination coordinates.")
+        else:
+            map_df = filtered_df.dropna(subset=required_columns).copy()
+
+            if map_df.empty:
+                st.info("No geocoded jobs are available for the current filters.")
+            else:
+                def _profit_band(value: Optional[float]) -> str:
+                    if pd.isna(value):
+                        return "Unknown"
+                    if value < break_even_value:
+                        return "Below break-even"
+                    threshold = break_even_value * 0.1 if break_even_value else 0
+                    if value - break_even_value <= threshold:
+                        return "Near break-even"
+                    return "Above break-even"
+
+                if "price_per_m3" in map_df.columns:
+                    map_df["profit_band"] = map_df["price_per_m3"].apply(_profit_band)
+                else:
+                    map_df["profit_band"] = "Unknown"
+
+                colour_by_options = {"Profit band": "profit_band"}
+                if "client_display" in map_df.columns:
+                    colour_by_options["Client"] = "client_display"
+                if "corridor_display" in map_df.columns:
+                    colour_by_options["Corridor"] = "corridor_display"
+
+                colour_choice = st.selectbox(
+                    "Colour routes by",
+                    options=list(colour_by_options.keys()),
+                    help="Adjust route colouring to explore profitability or segment trends.",
+                )
+                colour_column = colour_by_options[colour_choice]
+
+                colour_series = map_df[colour_column].fillna("Unknown")
+                unique_colour_values = list(dict.fromkeys(colour_series))
+                palette = [
+                    [31, 119, 180],
+                    [255, 127, 14],
+                    [44, 160, 44],
+                    [214, 39, 40],
+                    [148, 103, 189],
+                    [140, 86, 75],
+                    [227, 119, 194],
+                    [127, 127, 127],
+                    [188, 189, 34],
+                    [23, 190, 207],
+                ]
+                colour_mapping = {
+                    value: palette[index % len(palette)]
+                    for index, value in enumerate(unique_colour_values)
+                }
+                map_df["map_colour"] = colour_series.map(colour_mapping)
+
+                latitudes = pd.concat([map_df["origin_lat"], map_df["dest_lat"]])
+                longitudes = pd.concat([map_df["origin_lon"], map_df["dest_lon"]])
+                view_state = pdk.ViewState(
+                    latitude=float(latitudes.mean()),
+                    longitude=float(longitudes.mean()),
+                    zoom=4,
+                    pitch=30,
+                )
+
+                route_layer = pdk.Layer(
+                    "GreatCircleLayer",
+                    data=map_df,
+                    get_source_position="[origin_lon, origin_lat]",
+                    get_target_position="[dest_lon, dest_lat]",
+                    get_source_color="map_colour",
+                    get_target_color="map_colour",
+                    get_width=5,
+                    width_scale=10,
+                    width_min_pixels=2,
+                    pickable=True,
+                )
+                origin_layer = pdk.Layer(
+                    "ScatterplotLayer",
+                    data=map_df,
+                    get_position="[origin_lon, origin_lat]",
+                    get_fill_color="map_colour",
+                    get_radius=40000,
+                    radius_min_pixels=3,
+                    pickable=True,
+                )
+                destination_layer = pdk.Layer(
+                    "ScatterplotLayer",
+                    data=map_df,
+                    get_position="[dest_lon, dest_lat]",
+                    get_fill_color="map_colour",
+                    get_radius=40000,
+                    radius_min_pixels=3,
+                    pickable=True,
+                )
+
+                deck = pdk.Deck(
+                    map_style="mapbox://styles/mapbox/light-v9",
+                    initial_view_state=view_state,
+                    layers=[route_layer, origin_layer, destination_layer],
+                    tooltip={
+                        "html": "<b>{client_display}</b><br/>{corridor_display}<br/>$ {price_per_m3} per m³",
+                        "style": {"color": "white"},
+                    },
+                )
+
+                st.pydeck_chart(deck)
+
+                legend_columns = st.columns(min(len(colour_mapping), 4) or 1)
+                legend_items = list(colour_mapping.items())
+                for index, (label, colour) in enumerate(legend_items):
+                    column = legend_columns[index % len(legend_columns)]
+                    column.markdown(
+                        f"<div style='display:flex;align-items:center;gap:0.5rem;'>"
+                        f"<span style='display:inline-block;width:1.5rem;height:1.5rem;border-radius:0.25rem;background-color: rgba({colour[0]}, {colour[1]}, {colour[2]}, 0.85);'></span>"
+                        f"<span>{label}</span>"
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
