@@ -18,4 +18,8 @@ corkysoft/
   requirements.txt
 
 
-Please also check ROADMAP.md
+Please also check ROADMAP.md and README.md
+
+Update these with any progress you make.
+
+Ensure tests are added along with features to prevent regressions.
