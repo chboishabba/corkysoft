@@ -4,9 +4,10 @@ from __future__ import annotations
 import io
 import math
 from datetime import date
-from typing import Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import pandas as pd
+import pydeck as pdk
 import streamlit as st
 
 from analytics.db import connection_scope
@@ -21,6 +22,16 @@ from analytics.price_distribution import (
     summarise_distribution,
     summarise_profitability,
     update_break_even,
+)
+from corkysoft.quote_service import (
+    COUNTRY_DEFAULT,
+    DEFAULT_MODIFIERS,
+    QuoteInput,
+    QuoteResult,
+    calculate_quote,
+    ensure_schema as ensure_quote_schema,
+    format_currency,
+    persist_quote,
 )
 
 st.set_page_config(
@@ -82,8 +93,86 @@ def render_summary(
         column.metric(label, _format_value(value, currency=as_currency, percentage=as_percentage))
 
 
+def _activate_quote_tab() -> None:
+    """Switch the interface to the quote builder tab."""
+
+    st.experimental_set_query_params(view="Quote builder")
+    st.experimental_rerun()
+
+
+def _first_non_empty(route: pd.Series, columns: Sequence[str]) -> Optional[str]:
+    for column in columns:
+        if column in route and isinstance(route[column], str):
+            value = route[column].strip()
+            if value:
+                return value
+    return None
+
+
+def _format_route_label(route: pd.Series) -> str:
+    origin = _first_non_empty(
+        route,
+        [
+            "corridor_display",
+            "origin",
+            "origin_city",
+            "origin_normalized",
+            "origin_raw",
+        ],
+    ) or "Origin"
+    destination = _first_non_empty(
+        route,
+        [
+            "destination",
+            "destination_city",
+            "destination_normalized",
+            "destination_raw",
+        ],
+    ) or "Destination"
+    distance_value: Optional[float] = None
+    for column in ("distance_km", "distance", "km", "kms"):
+        if column in route and pd.notna(route[column]):
+            try:
+                distance_value = float(route[column])
+            except (TypeError, ValueError):
+                continue
+            break
+    if distance_value is not None and not math.isnan(distance_value):
+        return f"{origin} → {destination} ({distance_value:.1f} km)"
+    return f"{origin} → {destination}"
+
+
+def _extract_route_date(route: pd.Series) -> Optional[date]:
+    for column in (
+        "job_date",
+        "move_date",
+        "delivery_date",
+        "created_at",
+        "updated_at",
+    ):
+        if column in route and pd.notna(route[column]):
+            try:
+                return pd.to_datetime(route[column]).date()
+            except Exception:  # pragma: no cover - defensive parsing
+                continue
+    return None
+
+
+def _extract_route_volume(route: pd.Series, candidates: Sequence[str]) -> Optional[float]:
+    for column in candidates:
+        if not column:
+            continue
+        if column in route and pd.notna(route[column]):
+            try:
+                return float(route[column])
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
 with connection_scope() as conn:
     break_even_value = ensure_break_even_parameter(conn)
+    ensure_quote_schema(conn)
 
     with st.sidebar:
         st.header("Filters")
@@ -148,7 +237,7 @@ with connection_scope() as conn:
             st.success(f"Break-even updated to ${new_break_even:,.2f}")
             break_even_value = new_break_even
 
-    filtered_df, _ = load_historical_jobs(
+    filtered_df, filtered_mapping = load_historical_jobs(
         conn,
         start_date=start_date,
         end_date=end_date,
@@ -165,19 +254,35 @@ with connection_scope() as conn:
     profitability_summary = summarise_profitability(filtered_df)
     render_summary(summary, break_even_value, profitability_summary)
 
-    histogram_tab, profitability_tab = st.tabs([
-        "Histogram",
-        "Profitability insights",
-    ])
+    st.button(
+        "Open quote builder",
+        on_click=_activate_quote_tab,
+        help="Jump to the quote builder tab to build a quick quote from a historical route.",
+    )
 
-    with histogram_tab:
+    tab_labels = ["Histogram", "Profitability insights", "Quote builder"]
+    params = st.experimental_get_query_params()
+    requested_tab = params.get("view", [tab_labels[0]])[0]
+    if requested_tab not in tab_labels:
+        requested_tab = tab_labels[0]
+    if requested_tab != tab_labels[0]:
+        ordered_labels = [requested_tab] + [label for label in tab_labels if label != requested_tab]
+    else:
+        ordered_labels = tab_labels
+
+    streamlit_tabs = st.tabs(ordered_labels)
+    tab_map: Dict[str, Any] = {
+        label: tab for label, tab in zip(ordered_labels, streamlit_tabs)
+    }
+
+    with tab_map["Histogram"]:
         histogram = create_histogram(filtered_df, break_even_value)
         st.plotly_chart(histogram, use_container_width=True)
         st.caption(
             "Histogram overlays include the normal distribution fit plus kurtosis and dispersion markers for context."
         )
 
-    with profitability_tab:
+    with tab_map["Profitability insights"]:
         st.markdown("### Profitability insights")
         view_options = {
             "m³ vs km profitability": create_m3_vs_km_figure,
@@ -188,15 +293,15 @@ with connection_scope() as conn:
             list(view_options.keys()),
             horizontal=True,
             help="Switch between per-kilometre earnings and quoted-versus-cost comparisons.",
+            key="profitability_view",
         )
         fig = view_options[selected_view](filtered_df)
         st.plotly_chart(fig, use_container_width=True)
 
         if "margin_per_m3" in filtered_df.columns:
             st.markdown("#### Margin outliers")
-            ranked = (
-                filtered_df.dropna(subset=["margin_per_m3"])
-                .sort_values("margin_per_m3")
+            ranked = filtered_df.dropna(subset=["margin_per_m3"]).sort_values(
+                "margin_per_m3"
             )
             if not ranked.empty:
                 low_cols, high_cols = st.columns(2)
@@ -219,6 +324,359 @@ with connection_scope() as conn:
                 high_cols.dataframe(ranked.tail(5).iloc[::-1][display_fields])
             else:
                 st.info("No margin data available to highlight outliers yet.")
+
+    with tab_map["Quote builder"]:
+        st.markdown("### Quote builder")
+        st.caption(
+            "Use a historical route to pre-fill the quick quote form, calculate pricing and optionally persist the result."
+        )
+        session_inputs: Optional[QuoteInput] = st.session_state.get(  # type: ignore[assignment]
+            "quote_inputs"
+        )
+        quote_result: Optional[QuoteResult] = st.session_state.get(  # type: ignore[assignment]
+            "quote_result"
+        )
+        manual_option = "Manual entry"
+        map_columns = {"origin_lon", "origin_lat", "dest_lon", "dest_lat"}
+        selected_route: Optional[pd.Series] = None
+
+        if map_columns.issubset(filtered_df.columns):
+            map_routes = filtered_df.dropna(subset=list(map_columns)).copy()
+            if not map_routes.empty:
+                map_routes = map_routes.reset_index(drop=True)
+                map_routes["route_label"] = map_routes.apply(_format_route_label, axis=1)
+                option_list = [manual_option] + map_routes["route_label"].tolist()
+                default_label = st.session_state.get("quote_selected_route", manual_option)
+                if default_label not in option_list:
+                    default_label = manual_option
+                selected_label = st.selectbox(
+                    "Prefill from historical route",
+                    options=option_list,
+                    index=option_list.index(default_label),
+                    key="quote_selected_route",
+                    help="Pick a historical job to pull its origin and destination into the form.",
+                )
+                if selected_label != manual_option:
+                    selected_route = map_routes.loc[
+                        map_routes["route_label"] == selected_label
+                    ].iloc[0]
+                    midpoint_lat = (
+                        float(selected_route["origin_lat"]) + float(selected_route["dest_lat"])
+                    ) / 2
+                    midpoint_lon = (
+                        float(selected_route["origin_lon"]) + float(selected_route["dest_lon"])
+                    ) / 2
+                    line_data = [
+                        {
+                            "from": [
+                                float(selected_route["origin_lon"]),
+                                float(selected_route["origin_lat"]),
+                            ],
+                            "to": [
+                                float(selected_route["dest_lon"]),
+                                float(selected_route["dest_lat"]),
+                            ],
+                        }
+                    ]
+                    scatter_data = [
+                        {
+                            "position": [
+                                float(selected_route["origin_lon"]),
+                                float(selected_route["origin_lat"]),
+                            ],
+                            "label": _first_non_empty(
+                                selected_route,
+                                ["origin", "origin_city", "origin_normalized", "origin_raw"],
+                            )
+                            or "Origin",
+                            "color": [33, 150, 243, 200],
+                        },
+                        {
+                            "position": [
+                                float(selected_route["dest_lon"]),
+                                float(selected_route["dest_lat"]),
+                            ],
+                            "label": _first_non_empty(
+                                selected_route,
+                                [
+                                    "destination",
+                                    "destination_city",
+                                    "destination_normalized",
+                                    "destination_raw",
+                                ],
+                            )
+                            or "Destination",
+                            "color": [239, 83, 80, 200],
+                        },
+                    ]
+                    deck = pdk.Deck(
+                        map_style="mapbox://styles/mapbox/light-v9",
+                        initial_view_state=pdk.ViewState(
+                            latitude=midpoint_lat,
+                            longitude=midpoint_lon,
+                            zoom=6,
+                        ),
+                        layers=[
+                            pdk.Layer(
+                                "LineLayer",
+                                line_data,
+                                get_source_position="from",
+                                get_target_position="to",
+                                get_width=4,
+                                get_color=[33, 150, 243, 160],
+                            ),
+                            pdk.Layer(
+                                "ScatterplotLayer",
+                                scatter_data,
+                                get_position="position",
+                                get_color="color",
+                                get_radius=8000,
+                                pickable=True,
+                            ),
+                        ],
+                        tooltip={"text": "{label}"},
+                    )
+                    st.pydeck_chart(deck)
+                    st.caption("Selected route visualised on the map.")
+            else:
+                st.info("No geocoded routes are available for the current filters yet.")
+        else:
+            st.info("Longitude/latitude columns are required to plot routes for quoting.")
+
+        base_candidates: List[str] = [
+            "cubic_m",
+            "volume_m3",
+            "volume_cbm",
+            "volume",
+            "cbm",
+        ]
+        for candidate in (
+            filtered_mapping.volume,
+            mapping.volume,
+        ):
+            if candidate and candidate not in base_candidates:
+                base_candidates.append(candidate)
+
+        default_origin = session_inputs.origin if session_inputs else ""
+        default_destination = session_inputs.destination if session_inputs else ""
+        default_volume = session_inputs.cubic_m if session_inputs else 30.0
+        default_date = session_inputs.quote_date if session_inputs else date.today()
+        default_modifiers = list(session_inputs.modifiers) if session_inputs else []
+        default_margin_percent = (
+            session_inputs.target_margin_percent if session_inputs else None
+        )
+        default_country = session_inputs.country if session_inputs else COUNTRY_DEFAULT
+
+        if selected_route is not None:
+            default_origin = _first_non_empty(
+                selected_route,
+                [
+                    "origin",
+                    "origin_normalized",
+                    "origin_city",
+                    "origin_raw",
+                ],
+            ) or default_origin
+            default_destination = _first_non_empty(
+                selected_route,
+                [
+                    "destination",
+                    "destination_normalized",
+                    "destination_city",
+                    "destination_raw",
+                ],
+            ) or default_destination
+            route_volume = _extract_route_volume(selected_route, base_candidates)
+            if route_volume is not None:
+                default_volume = route_volume
+            route_date = _extract_route_date(selected_route)
+            if route_date is not None:
+                default_date = route_date
+            route_country = _first_non_empty(
+                selected_route, ["origin_country", "destination_country"]
+            )
+            if route_country:
+                default_country = route_country
+
+        modifier_options = [mod.id for mod in DEFAULT_MODIFIERS]
+        modifier_labels: Dict[str, str] = {
+            mod.id: mod.label for mod in DEFAULT_MODIFIERS
+        }
+
+        with st.form("quote_builder_form"):
+            origin_value = st.text_input("Origin", value=default_origin)
+            destination_value = st.text_input(
+                "Destination", value=default_destination
+            )
+            country_value = st.text_input(
+                "Country", value=default_country or COUNTRY_DEFAULT
+            )
+            cubic_m_value = st.number_input(
+                "Volume (m³)",
+                min_value=1.0,
+                value=float(default_volume or 1.0),
+                step=1.0,
+            )
+            quote_date_value = st.date_input("Move date", value=default_date)
+            selected_modifier_ids = st.multiselect(
+                "Modifiers",
+                options=modifier_options,
+                default=[mid for mid in default_modifiers if mid in modifier_options],
+                format_func=lambda mod_id: modifier_labels.get(mod_id, mod_id),
+            )
+            margin_cols = st.columns(2)
+            apply_margin = margin_cols[0].checkbox(
+                "Apply margin",
+                value=default_margin_percent is not None,
+                help="Include a target margin percentage on top of calculated costs.",
+            )
+            margin_percent_value = margin_cols[1].number_input(
+                "Target margin %",
+                min_value=0.0,
+                max_value=100.0,
+                value=float(
+                    default_margin_percent if default_margin_percent is not None else 20.0
+                ),
+                step=1.0,
+                disabled=not apply_margin,
+            )
+            submitted = st.form_submit_button("Calculate quote")
+
+        stored_inputs = session_inputs
+
+        if submitted:
+            if not origin_value or not destination_value:
+                st.error("Origin and destination are required to calculate a quote.")
+            else:
+                margin_to_apply = (
+                    float(margin_percent_value) if apply_margin else None
+                )
+                quote_inputs = QuoteInput(
+                    origin=origin_value,
+                    destination=destination_value,
+                    cubic_m=float(cubic_m_value),
+                    quote_date=quote_date_value,
+                    modifiers=list(selected_modifier_ids),
+                    target_margin_percent=margin_to_apply,
+                    country=country_value or COUNTRY_DEFAULT,
+                )
+                try:
+                    result = calculate_quote(conn, quote_inputs)
+                except RuntimeError as exc:
+                    st.error(str(exc))
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.session_state["quote_inputs"] = quote_inputs
+                    st.session_state["quote_result"] = result
+                    st.experimental_set_query_params(view="Quote builder")
+                    st.success("Quote calculated. Review the breakdown below.")
+                    stored_inputs = quote_inputs
+                    quote_result = result
+
+        stored_inputs = st.session_state.get("quote_inputs")
+        quote_result = st.session_state.get("quote_result")
+
+        if quote_result and stored_inputs:
+            st.markdown("#### Quote output")
+            st.write(
+                f"**Route:** {quote_result.origin_resolved} → {quote_result.destination_resolved}"
+            )
+            st.write(
+                f"**Distance:** {quote_result.distance_km:.1f} km ({quote_result.duration_hr:.1f} h)"
+            )
+            metric_cols = st.columns(4)
+            metric_cols[0].metric(
+                "Final quote", format_currency(quote_result.final_quote)
+            )
+            metric_cols[1].metric(
+                "Total before margin",
+                format_currency(quote_result.total_before_margin),
+            )
+            metric_cols[2].metric(
+                "Base subtotal", format_currency(quote_result.base_subtotal)
+            )
+            metric_cols[3].metric(
+                "Distance (km)",
+                f"{quote_result.distance_km:.1f}",
+                f"{quote_result.duration_hr:.1f} h",
+            )
+            st.markdown(
+                f"**Seasonal adjustment:** {quote_result.seasonal_label} ×{quote_result.seasonal_multiplier:.2f}"
+            )
+            if quote_result.margin_percent is not None:
+                st.markdown(
+                    f"**Margin:** {quote_result.margin_percent:.1f}% applied."
+                )
+            else:
+                st.markdown("**Margin:** Not applied.")
+
+            with st.expander("Base calculation details"):
+                base_rows = [
+                    {
+                        "Component": "Base callout",
+                        "Amount": format_currency(
+                            quote_result.base_components.get("base_callout", 0.0)
+                        ),
+                    },
+                    {
+                        "Component": "Handling cost",
+                        "Amount": format_currency(
+                            quote_result.base_components.get("handling_cost", 0.0)
+                        ),
+                    },
+                    {
+                        "Component": "Linehaul cost",
+                        "Amount": format_currency(
+                            quote_result.base_components.get("linehaul_cost", 0.0)
+                        ),
+                    },
+                    {
+                        "Component": "Effective volume (m³)",
+                        "Amount": f"{quote_result.base_components.get('effective_m3', stored_inputs.cubic_m):.1f}",
+                    },
+                    {
+                        "Component": "Load factor",
+                        "Amount": f"{quote_result.base_components.get('load_factor', 1.0):.2f}",
+                    },
+                ]
+                st.table(pd.DataFrame(base_rows))
+
+            with st.expander("Modifiers applied"):
+                if quote_result.modifier_details:
+                    modifier_rows = [
+                        {
+                            "Modifier": item["label"],
+                            "Calculation": (
+                                format_currency(item["value"])
+                                if item["calc_type"] == "flat"
+                                else f"{item['value'] * 100:.0f}% of base"
+                            ),
+                            "Amount": format_currency(item["amount"]),
+                        }
+                        for item in quote_result.modifier_details
+                    ]
+                    st.table(pd.DataFrame(modifier_rows))
+                else:
+                    st.write("No modifiers applied.")
+
+            with st.expander("Copyable summary"):
+                st.code(quote_result.summary_text)
+
+            action_cols = st.columns(2)
+            if action_cols[0].button("Persist quote", type="primary"):
+                try:
+                    persist_quote(conn, stored_inputs, quote_result)
+                    rowid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                except Exception as exc:  # pragma: no cover - UI feedback path
+                    st.error(f"Failed to persist quote: {exc}")
+                else:
+                    st.success(f"Quote saved as record #{rowid}.")
+            if action_cols[1].button("Reset quote builder"):
+                st.session_state.pop("quote_result", None)
+                st.session_state.pop("quote_inputs", None)
+                st.experimental_set_query_params(view="Quote builder")
+                st.experimental_rerun()
 
     st.subheader("Filtered jobs")
     display_columns = [
