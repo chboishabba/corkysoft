@@ -311,6 +311,45 @@ def load_historical_jobs(
     return df, mapping
 
 
+def prepare_route_map_data(
+    df: pd.DataFrame,
+    colour_column: str,
+    *,
+    placeholder: str = "Unknown",
+) -> pd.DataFrame:
+    """Return map-ready rows ensuring coordinates exist and colour labels are set.
+
+    Parameters
+    ----------
+    df:
+        The dataframe containing the historical job data.
+    colour_column:
+        Name of the column used to colour the map traces.
+    placeholder:
+        Value used when ``colour_column`` has missing entries to keep the legend stable.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy of ``df`` filtered to rows containing coordinates with an extra
+        ``map_colour_value`` column suitable for categorical colouring.
+    """
+
+    if colour_column not in df.columns:
+        raise KeyError(f"'{colour_column}' column is required to colour the map")
+
+    required_columns = ["origin_lat", "origin_lon", "dest_lat", "dest_lon"]
+    missing_required = [col for col in required_columns if col not in df.columns]
+    if missing_required:
+        missing_str = ", ".join(missing_required)
+        raise KeyError(f"Dataframe is missing required coordinate columns: {missing_str}")
+
+    filtered = df.dropna(subset=required_columns).copy()
+    colour_series = filtered[colour_column].fillna(placeholder)
+    filtered["map_colour_value"] = colour_series.astype(str)
+    return filtered
+
+
 @dataclass
 class DistributionSummary:
     job_count: int

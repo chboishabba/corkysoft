@@ -72,6 +72,7 @@ Key visuals include:
 
 - A histogram with break-even bands, a fitted bell curve, and kurtosis/skewness call-outs for quick shape diagnostics.
 - Optional profitability tabs that compare $/m³ against $/km and contrast quoted vs cost-derived $/m³, including margin outlier tables.
+- An interactive Mapbox view showing each route with selectable colouring (job, client, origin city, or destination city) and toggles to focus on lines or points when clusters get dense.
 
 ```bash
 streamlit run streamlit_price_distribution.py
