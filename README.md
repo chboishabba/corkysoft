@@ -68,6 +68,11 @@ python routes_to_sqlite.py <command> [options]
 
 The Streamlit app visualises historical jobs by $ per m³ with configurable break-even bands and CSV export.
 
+Key visuals include:
+
+- A histogram with break-even bands, a fitted bell curve, and kurtosis/skewness call-outs for quick shape diagnostics.
+- Optional profitability tabs that compare $/m³ against $/km and contrast quoted vs cost-derived $/m³, including margin outlier tables.
+
 ```bash
 streamlit run streamlit_price_distribution.py
 ```
