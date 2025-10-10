@@ -57,6 +57,9 @@ def build_conn() -> sqlite3.Connection:
             revenue_total REAL,
             distance_km REAL,
             final_cost REAL
+            final_cost REAL,
+            FOREIGN KEY(origin_address_id) REFERENCES addresses(id),
+            FOREIGN KEY(destination_address_id) REFERENCES addresses(id)
         )
         """
     )
@@ -143,14 +146,13 @@ def build_conn() -> sqlite3.Connection:
         addresses,
     )
     jobs = [
-        (1, "2024-01-05", "Acme", "Brisbane", "Sydney", "4000", "2000", 50, 15000, 920.0, 11800),
-        (2, "2024-01-18", "Acme", "Brisbane", "Melbourne", "4000", "3000", 40, 9000, 1680.0, 7200),
-        (3, "2024-02-01", "Beta", "Cairns", "Sydney", "4870", "2000", 30, 6000, 2400.0, 5100),
-        (4, "2024-02-10", "Gamma", "Cairns", "Melbourne", "4870", "3000", 20, 3200, 2700.0, 3600),
+        (1, "2024-01-05", "Acme", 1, 2, 50, 15000, 920.0, 11800),
+        (2, "2024-01-18", "Acme", 1, 3, 40, 9000, 1680.0, 7200),
+        (3, "2024-02-01", "Beta", 4, 2, 30, 6000, 2400.0, 5100),
+        (4, "2024-02-10", "Gamma", 4, 3, 20, 3200, 2700.0, 3600),
     ]
     conn.executemany(
-        "INSERT INTO historical_jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-
+        "INSERT INTO historical_jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         jobs,
     )
     conn.commit()
@@ -210,6 +212,9 @@ def test_summarise_distribution_and_histogram():
         band_labels = {getattr(ann, "text", None) for ann in fig.layout.annotations}
         assert {"Break-even", "+10%", "-10%"}.issubset(band_labels)
         assert any("kurtosis" in getattr(ann, "text", "") for ann in fig.layout.annotations)
+        band_labels.discard(None)
+        assert {"Break-even", "+10%", "-10%"}.issubset(band_labels)
+        assert any("kurtosis" in (getattr(ann, "text", "") or "") for ann in fig.layout.annotations)
     finally:
         conn.close()
 
