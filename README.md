@@ -6,6 +6,9 @@ A tool for estimating and optimising costs.
 <img width="596" height="67" alt="image" src="https://github.com/user-attachments/assets/03b0a748-fa3c-410b-a78c-1274f04efe97" />
 <img width="2560" height="1337" alt="Screenshot_20251010_131404" src="https://github.com/user-attachments/assets/fe8af81e-d7e0-436c-8c62-9eb6ccef12c1" />
 <img width="2114" height="982" alt="image" src="https://github.com/user-attachments/assets/c686b7a6-baec-4ee9-853f-e1ac11cd76ae" />
+<img width="2153" height="637" alt="image" src="https://github.com/user-attachments/assets/0ccfb072-20a5-484e-971a-232b45aad957" />
+<img width="955" height="1138" alt="image" src="https://github.com/user-attachments/assets/bb1c7b1d-31c4-460c-a294-5ea43bb0eca8" />
+<img width="911" height="1033" alt="image" src="https://github.com/user-attachments/assets/bb7e6f1d-3776-477e-aa11-2bc84c635e71" />
 
 
 # Route Distance & Cost Calculator (OpenRouteService + SQLite)
