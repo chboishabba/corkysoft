@@ -68,9 +68,9 @@ This merges everything from:
 
 | Deliverable                            | Status | Description                                  |
 | -------------------------------------- | :----: | -------------------------------------------- |
-| **Airbnb-style $/m³ histogram**        |   🔜   | Jobs sorted left→right by $/m³; bar = count. |
-| **Break-even + margin bands**          |   🔜   | Visual overlay on histogram.                 |
-| **Loss-leader detection**              |   🔜   | Identify sub-margin jobs.                    |
+| **Airbnb-style $/m³ histogram**        |    ✅   | Jobs sorted left→right by $/m³; bar = count. |
+| **Break-even + margin bands**          |    ✅   | Visual overlay on histogram.                 |
+| **Loss-leader detection**              |    ✅   | Identify sub-margin jobs.                    |
 | **Regression / corridor model**        |   🔜   | Predict margins vs distance/season.          |
 | **Terrain & temperature factors**      |   🔜   | Weight costs for harsh routes.               |
 | **Driver / truck performance metrics** |   🔜   | Wear, reliability, fuel efficiency.          |

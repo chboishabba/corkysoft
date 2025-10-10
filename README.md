@@ -63,6 +63,16 @@ Run the script directly:
 python routes_to_sqlite.py <command> [options]
 ```
 
+### Streamlit price distribution dashboard
+
+The Streamlit app visualises historical jobs by $ per m³ with configurable break-even bands and CSV export.
+
+```bash
+streamlit run streamlit_price_distribution.py
+```
+
+By default it reads from `routes.db`. Set `CORKYSOFT_DB` or `ROUTES_DB` to point at a different SQLite database.
+
 ### Commands
 
 #### Add a job
@@ -143,5 +153,6 @@ ID    Origin             → Origin (resolved)             Destination         �
 * Add `--show-coords` to display lat/lon in `list`.
 * Add cost breakdown columns (time vs distance).
 * Optional export to CSV/Google Sheets.
+* Streamlit price distribution dashboard with break-even bands.
 
 ---
