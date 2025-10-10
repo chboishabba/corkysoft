@@ -614,33 +614,6 @@ with connection_scope() as conn:
 
     render_network_map(map_routes, truck_positions, active_routes)
 
-    histogram_tab, profitability_tab = st.tabs([
-        "Histogram",
-        "Profitability insights",
-    ])
-        histogram_tab, profitability_tab = st.tabs([
-            "Histogram",
-            "Profitability insights",
-        ])
-
-        with histogram_tab:
-            histogram = create_histogram(filtered_df, break_even_value)
-            st.plotly_chart(histogram, use_container_width=True)
-            st.caption(
-                "Histogram overlays include the normal distribution fit plus kurtosis and dispersion markers for context."
-            )
-
-        with profitability_tab:
-            st.markdown("### Profitability insights")
-            view_options = {
-                "m³ vs km profitability": create_m3_vs_km_figure,
-                "Quoted vs calculated $/m³": create_m3_margin_figure,
-            }
-            selected_view = st.radio(
-                "Choose a view",
-                list(view_options.keys()),
-                horizontal=True,
-                help="Switch between per-kilometre earnings and quoted-versus-cost comparisons.",
     st.button(
         "Open quote builder",
         on_click=_activate_quote_tab,
