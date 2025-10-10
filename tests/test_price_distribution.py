@@ -14,6 +14,7 @@ from analytics.price_distribution import (
     create_m3_margin_figure,
     create_m3_vs_km_figure,
     load_historical_jobs,
+    prepare_route_map_data,
     summarise_distribution,
     summarise_profitability,
 )
@@ -48,11 +49,14 @@ def build_conn() -> sqlite3.Connection:
             id INTEGER PRIMARY KEY,
             job_date TEXT,
             client TEXT,
-            origin_address_id INTEGER NOT NULL,
-            destination_address_id INTEGER NOT NULL,
+            origin TEXT,
+            destination TEXT,
+            origin_postcode TEXT,
+            destination_postcode TEXT,
             volume_m3 REAL,
             revenue_total REAL,
             distance_km REAL,
+            final_cost REAL
             final_cost REAL,
             FOREIGN KEY(origin_address_id) REFERENCES addresses(id),
             FOREIGN KEY(destination_address_id) REFERENCES addresses(id)
@@ -206,6 +210,8 @@ def test_summarise_distribution_and_histogram():
         assert fig.data[0].type == "histogram"
         assert any(trace.type == "scatter" for trace in fig.data[1:])
         band_labels = {getattr(ann, "text", None) for ann in fig.layout.annotations}
+        assert {"Break-even", "+10%", "-10%"}.issubset(band_labels)
+        assert any("kurtosis" in getattr(ann, "text", "") for ann in fig.layout.annotations)
         band_labels.discard(None)
         assert {"Break-even", "+10%", "-10%"}.issubset(band_labels)
         assert any("kurtosis" in (getattr(ann, "text", "") or "") for ann in fig.layout.annotations)
@@ -236,3 +242,30 @@ def test_profitability_summary_and_views():
         assert line_traces
     finally:
         conn.close()
+
+
+def test_prepare_route_map_data_filters_missing_coordinates():
+    df = pd.DataFrame(
+        {
+            "id": [1, 2],
+            "origin_lat": [-27.0, None],
+            "origin_lon": [153.0, 150.0],
+            "dest_lat": [-33.0, -35.0],
+            "dest_lon": [151.0, None],
+        }
+    )
+
+    result = prepare_route_map_data(df, "id")
+    assert len(result) == 1
+    assert result.iloc[0]["id"] == 1
+    assert result.iloc[0]["map_colour_value"] == "1"
+
+
+def test_prepare_route_map_data_missing_columns_raise():
+    df = pd.DataFrame({"id": [1]})
+
+    with pytest.raises(KeyError):
+        prepare_route_map_data(df, "missing")
+
+    with pytest.raises(KeyError):
+        prepare_route_map_data(df, "id")

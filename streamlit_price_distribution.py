@@ -7,6 +7,8 @@ from datetime import date
 from typing import Any, Dict, List, Optional, Sequence
 
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import pydeck as pdk
 import streamlit as st
 
@@ -24,6 +26,7 @@ from analytics.price_distribution import (
     summarise_distribution,
     summarise_profitability,
     update_break_even,
+    prepare_route_map_data,
 )
 from analytics.live_data import (
     TRUCK_STATUS_COLOURS,
@@ -99,6 +102,109 @@ def render_summary(
         column.metric(label, _format_value(value, currency=as_currency, percentage=as_percentage))
 
 
+def build_route_map(
+    df: pd.DataFrame,
+    colour_label: str,
+    *,
+    show_routes: bool,
+    show_points: bool,
+) -> go.Figure:
+    """Construct a Plotly Mapbox figure showing coloured routes and points."""
+
+    palette = px.colors.qualitative.Bold or ["#636EFA", "#EF553B", "#00CC96", "#AB63FA"]
+    colour_values = list(dict.fromkeys(df["map_colour_value"].tolist()))
+    if not palette:
+        palette = ["#636EFA"]
+    if len(colour_values) > len(palette):
+        repeats = (len(colour_values) // len(palette)) + 1
+        palette = (palette * repeats)[: len(colour_values)]
+    colour_map = {value: palette[idx % len(palette)] for idx, value in enumerate(colour_values)}
+
+    figure = go.Figure()
+
+    if show_routes:
+        for value in colour_values:
+            category_df = df[df["map_colour_value"] == value]
+            if category_df.empty:
+                continue
+            lat_values: list[float] = []
+            lon_values: list[float] = []
+            for _, row in category_df.iterrows():
+                lat_values.extend([row["origin_lat"], row["dest_lat"], None])
+                lon_values.extend([row["origin_lon"], row["dest_lon"], None])
+            figure.add_trace(
+                go.Scattermapbox(
+                    lat=lat_values,
+                    lon=lon_values,
+                    mode="lines",
+                    line={"width": 2, "color": colour_map[value]},
+                    name=value,
+                    legendgroup=value,
+                    showlegend=False,
+                    hoverinfo="skip",
+                )
+            )
+
+    if show_points:
+        for value in colour_values:
+            category_df = df[df["map_colour_value"] == value]
+            if category_df.empty:
+                continue
+            marker_lat: list[float] = []
+            marker_lon: list[float] = []
+            marker_text: list[str] = []
+            for _, row in category_df.iterrows():
+                job_id = row.get("id", "n/a")
+                origin_label = row.get("origin_city") or row.get("origin") or row.get("origin_raw") or "Origin"
+                destination_label = (
+                    row.get("destination_city")
+                    or row.get("destination")
+                    or row.get("destination_raw")
+                    or "Destination"
+                )
+                marker_lat.append(row["origin_lat"])
+                marker_lon.append(row["origin_lon"])
+                marker_text.append(
+                    f"{colour_label}: {value}<br>Origin: {origin_label}<br>Job ID: {job_id}"
+                )
+                marker_lat.append(row["dest_lat"])
+                marker_lon.append(row["dest_lon"])
+                marker_text.append(
+                    f"{colour_label}: {value}<br>Destination: {destination_label}<br>Job ID: {job_id}"
+                )
+
+            figure.add_trace(
+                go.Scattermapbox(
+                    lat=marker_lat,
+                    lon=marker_lon,
+                    mode="markers",
+                    marker={
+                        "size": 9,
+                        "color": colour_map[value],
+                        "opacity": 0.85,
+                    },
+                    text=marker_text,
+                    hovertemplate="%{text}<extra></extra>",
+                    name=value,
+                    legendgroup=value,
+                )
+            )
+
+    all_lat = pd.concat([df["origin_lat"], df["dest_lat"]])
+    all_lon = pd.concat([df["origin_lon"], df["dest_lon"]])
+    center_lat = float(all_lat.mean()) if not all_lat.empty else 0.0
+    center_lon = float(all_lon.mean()) if not all_lon.empty else 0.0
+
+    figure.update_layout(
+        mapbox={
+            "style": "carto-positron",
+            "center": {"lat": center_lat, "lon": center_lon},
+            "zoom": 3,
+        },
+        legend={"orientation": "h", "yanchor": "bottom", "y": 0.01},
+        margin={"l": 0, "r": 0, "t": 0, "b": 0},
+    )
+    return figure
 def _initial_view_state(df: pd.DataFrame) -> pdk.ViewState:
     if df.empty:
         return pdk.ViewState(latitude=-25.2744, longitude=133.7751, zoom=4.0)
@@ -396,6 +502,53 @@ with connection_scope() as conn:
         st.warning("No jobs match the selected filters.")
         st.stop()
 
+    st.markdown("### Route visualisation")
+    colour_dimensions = {
+        "Job ID": "id",
+        "Client": "client_display",
+        "Destination city": "destination_city",
+        "Origin city": "origin_city",
+    }
+    available_colour_dimensions = {
+        label: column
+        for label, column in colour_dimensions.items()
+        if column in filtered_df.columns
+    }
+
+    if not available_colour_dimensions:
+        st.info("No categorical columns available to colour the route map.")
+    else:
+        colour_label = st.selectbox(
+            "Colour routes by",
+            options=list(available_colour_dimensions.keys()),
+            help="Choose which attribute drives the route and point colouring.",
+        )
+        show_routes = st.checkbox("Show route lines", value=True)
+        show_points = st.checkbox("Show origin/destination points", value=True)
+
+        selected_column = available_colour_dimensions[colour_label]
+        try:
+            map_df = prepare_route_map_data(filtered_df, selected_column)
+        except KeyError as exc:
+            st.warning(str(exc))
+            map_df = None
+
+        if map_df is None or map_df.empty:
+            st.info("No routes with coordinates are available for the current filters.")
+        elif not show_routes and not show_points:
+            st.info("Enable at least one layer to view the route map.")
+        else:
+            route_map = build_route_map(
+                map_df,
+                colour_label,
+                show_routes=show_routes,
+                show_points=show_points,
+            )
+            st.plotly_chart(route_map, use_container_width=True)
+
+    summary = summarise_distribution(filtered_df, break_even_value)
+    profitability_summary = summarise_profitability(filtered_df)
+    render_summary(summary, break_even_value, profitability_summary)
     summary_tab, map_tab = st.tabs(["Profitability", "Map"])
 
     with summary_tab:
