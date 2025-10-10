@@ -149,7 +149,3 @@ This merges everything from:
 2. Implement lane / modifier tables.
 3. Build Streamlit dashboard with histogram + margin bands.
 4. Add audit media integration & privacy layer.
-
----
-
-Would you like me to generate a **Markdown progress tracker** (checkbox checklist) formatted for GitHub — ready to paste into a `ROADMAP.md` file so you can tick items off as they’re completed?
