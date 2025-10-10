@@ -5,7 +5,7 @@ import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Sequence
 
 DEFAULT_DB_PATH = os.environ.get("CORKYSOFT_DB", os.environ.get("ROUTES_DB", "routes.db"))
 
@@ -91,3 +91,70 @@ def bootstrap_parameters(
         current = get_parameter_value(conn, key)
         if current is None:
             set_parameter_value(conn, key, value, description)
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> Sequence[str]:
+    """Return the column names for *table* in the current connection."""
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return [row[1] for row in rows]
+
+
+def ensure_historical_job_routes_table(conn: sqlite3.Connection) -> None:
+    """Ensure the table storing historical job route GeoJSON exists."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS historical_job_routes (
+            historical_job_id INTEGER PRIMARY KEY,
+            geojson TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            FOREIGN KEY(historical_job_id) REFERENCES historical_jobs(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.commit()
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone()
+    return row is not None
+
+
+def migrate_geojson_to_routes(conn: sqlite3.Connection) -> None:
+    """Move embedded GeoJSON columns into the historical_job_routes table."""
+
+    if not _table_exists(conn, "historical_jobs"):
+        return
+
+    ensure_historical_job_routes_table(conn)
+
+    columns = _table_columns(conn, "historical_jobs")
+    geojson_column = next(
+        (name for name in ("route_geojson", "geojson") if name in columns),
+        None,
+    )
+    if not geojson_column:
+        return
+
+    timestamp_sources: list[str] = []
+    if "updated_at" in columns:
+        timestamp_sources.append("updated_at")
+    if "imported_at" in columns:
+        timestamp_sources.append("imported_at")
+    timestamp_sources.append("datetime('now')")
+    created_at_expr = f"COALESCE({', '.join(timestamp_sources)})"
+    updated_at_expr = "updated_at" if "updated_at" in columns else "NULL"
+
+    insert_sql = f"""
+        INSERT OR IGNORE INTO historical_job_routes (
+            historical_job_id, geojson, created_at, updated_at
+        )
+        SELECT id, {geojson_column}, {created_at_expr}, {updated_at_expr}
+        FROM historical_jobs
+        WHERE {geojson_column} IS NOT NULL AND TRIM({geojson_column}) != ''
+    """
+    conn.execute(insert_sql)
+    conn.execute(f"ALTER TABLE historical_jobs DROP COLUMN {geojson_column}")
+    conn.commit()
