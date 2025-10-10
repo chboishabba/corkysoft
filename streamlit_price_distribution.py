@@ -16,22 +16,23 @@ from analytics.db import connection_scope
 from analytics.price_distribution import (
     DistributionSummary,
     ProfitabilitySummary,
+    PROFITABILITY_COLOURS,
     create_histogram,
     create_m3_margin_figure,
     create_m3_vs_km_figure,
     ensure_break_even_parameter,
     load_historical_jobs,
+    prepare_profitability_route_data,
     prepare_route_map_data,
-    PROFITABILITY_COLOURS,
     summarise_distribution,
     summarise_profitability,
     update_break_even,
-    prepare_route_map_data,
 )
 from analytics.live_data import (
     TRUCK_STATUS_COLOURS,
     load_active_routes,
     load_truck_positions,
+)
 from corkysoft.quote_service import (
     COUNTRY_DEFAULT,
     DEFAULT_MODIFIERS,
@@ -558,7 +559,7 @@ with connection_scope() as conn:
 
     truck_positions = load_truck_positions(conn)
     active_routes = load_active_routes(conn)
-    map_routes = prepare_route_map_data(filtered_df, break_even_value)
+    map_routes = prepare_profitability_route_data(filtered_df, break_even_value)
 
     render_network_map(map_routes, truck_positions, active_routes)
 

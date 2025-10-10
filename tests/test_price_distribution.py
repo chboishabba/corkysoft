@@ -49,14 +49,11 @@ def build_conn() -> sqlite3.Connection:
             id INTEGER PRIMARY KEY,
             job_date TEXT,
             client TEXT,
-            origin TEXT,
-            destination TEXT,
-            origin_postcode TEXT,
-            destination_postcode TEXT,
+            origin_address_id INTEGER,
+            destination_address_id INTEGER,
             volume_m3 REAL,
             revenue_total REAL,
             distance_km REAL,
-            final_cost REAL
             final_cost REAL,
             FOREIGN KEY(origin_address_id) REFERENCES addresses(id),
             FOREIGN KEY(destination_address_id) REFERENCES addresses(id)
