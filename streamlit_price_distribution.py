@@ -7,6 +7,7 @@ from datetime import date
 from typing import Optional
 
 import pandas as pd
+import pydeck as pdk
 import streamlit as st
 
 from analytics.db import connection_scope
@@ -18,9 +19,16 @@ from analytics.price_distribution import (
     create_m3_vs_km_figure,
     ensure_break_even_parameter,
     load_historical_jobs,
+    prepare_route_map_data,
+    PROFITABILITY_COLOURS,
     summarise_distribution,
     summarise_profitability,
     update_break_even,
+)
+from analytics.live_data import (
+    TRUCK_STATUS_COLOURS,
+    load_active_routes,
+    load_truck_positions,
 )
 
 st.set_page_config(
@@ -81,6 +89,146 @@ def render_summary(
     for column, (label, value, as_currency, as_percentage) in zip(profitability_cols, profitability_metrics):
         column.metric(label, _format_value(value, currency=as_currency, percentage=as_percentage))
 
+
+def _initial_view_state(df: pd.DataFrame) -> pdk.ViewState:
+    if df.empty:
+        return pdk.ViewState(latitude=-25.2744, longitude=133.7751, zoom=4.0)
+    lat_column = "lat" if "lat" in df.columns else "origin_lat"
+    lon_column = "lon" if "lon" in df.columns else "origin_lon"
+    lat = pd.to_numeric(df[lat_column], errors="coerce").dropna()
+    lon = pd.to_numeric(df[lon_column], errors="coerce").dropna()
+    if lat.empty or lon.empty:
+        return pdk.ViewState(latitude=-25.2744, longitude=133.7751, zoom=4.0)
+    return pdk.ViewState(latitude=float(lat.mean()), longitude=float(lon.mean()), zoom=4.5)
+
+
+def render_network_map(
+    historical_routes: pd.DataFrame,
+    trucks: pd.DataFrame,
+    active_routes: pd.DataFrame,
+) -> None:
+    st.markdown("### Live network overview")
+
+    if historical_routes.empty and trucks.empty:
+        st.info("No geocoded historical jobs or live telemetry available to plot yet.")
+        return
+
+    truck_data = trucks.copy()
+    if not truck_data.empty:
+        truck_data["colour"] = truck_data["status"].map(TRUCK_STATUS_COLOURS)
+        truck_data["colour"] = truck_data["colour"].apply(
+            lambda value: value if isinstance(value, (list, tuple)) else [0, 122, 204]
+        )
+        truck_data["tooltip"] = truck_data.apply(
+            lambda row: f"{row['truck_id']} ({row['status']})", axis=1
+        )
+
+    layers: list[pdk.Layer] = []
+
+    if not historical_routes.empty:
+        base_layer = pdk.Layer(
+            "LineLayer",
+            data=historical_routes,
+            get_source_position="[origin_lon, origin_lat]",
+            get_target_position="[dest_lon, dest_lat]",
+            get_color="colour",
+            get_width="line_width",
+            pickable=True,
+            opacity=0.4,
+        )
+        layers.append(base_layer)
+
+    if not active_routes.empty:
+        if "job_id" in active_routes.columns and not historical_routes.empty:
+            enriched = active_routes.merge(
+                historical_routes[["id", "colour", "profit_band", "tooltip"]],
+                left_on="job_id",
+                right_on="id",
+                how="left",
+                suffixes=("", "_hist"),
+            )
+            if "colour" not in enriched.columns and "colour_hist" in enriched.columns:
+                enriched["colour"] = enriched["colour_hist"]
+            if "profit_band" not in enriched.columns and "profit_band_hist" in enriched.columns:
+                enriched["profit_band"] = enriched["profit_band_hist"]
+            if "tooltip" not in enriched.columns and "tooltip_hist" in enriched.columns:
+                enriched["tooltip"] = enriched["tooltip_hist"]
+        else:
+            enriched = active_routes.copy()
+            enriched["colour"] = [PROFITABILITY_COLOURS["Unknown"]] * len(enriched)
+            enriched["profit_band"] = "Unknown"
+            enriched["tooltip"] = "Active route"
+
+        enriched["colour"] = enriched["colour"].apply(
+            lambda value: value if isinstance(value, (list, tuple)) else [255, 255, 255]
+        )
+        enriched["tooltip"] = enriched.apply(
+            lambda row: f"Truck {row['truck_id']} ({row.get('profit_band', 'Unknown')})", axis=1
+        )
+
+        active_layer = pdk.Layer(
+            "LineLayer",
+            data=enriched,
+            get_source_position="[origin_lon, origin_lat]",
+            get_target_position="[dest_lon, dest_lat]",
+            get_color="colour",
+            get_width=250,
+            pickable=True,
+            opacity=0.9,
+        )
+        layers.append(active_layer)
+
+    if not truck_data.empty:
+        trucks_layer = pdk.Layer(
+            "ScatterplotLayer",
+            data=truck_data,
+            get_position="[lon, lat]",
+            get_fill_color="colour",
+            get_radius=800,
+            pickable=True,
+        )
+        layers.append(trucks_layer)
+
+        text_layer = pdk.Layer(
+            "TextLayer",
+            data=truck_data,
+            get_position="[lon, lat]",
+            get_text="truck_id",
+            get_color="colour",
+            get_size=12,
+            size_units="meters",
+            size_scale=16,
+            get_alignment_baseline="bottom",
+        )
+        layers.append(text_layer)
+
+    view_df_candidates: list[pd.DataFrame] = []
+    if not historical_routes.empty:
+        view_df_candidates.append(
+            historical_routes.rename(columns={"origin_lat": "lat", "origin_lon": "lon"})[["lat", "lon"]]
+        )
+    if not truck_data.empty:
+        view_df_candidates.append(truck_data[["lat", "lon"]])
+    view_df = pd.concat(view_df_candidates) if view_df_candidates else pd.DataFrame()
+
+    tooltip = {"html": "<b>{tooltip}</b>", "style": {"color": "white"}}
+
+    st.pydeck_chart(
+        pdk.Deck(
+            layers=layers,
+            initial_view_state=_initial_view_state(view_df),
+            tooltip=tooltip,
+            map_style="mapbox://styles/mapbox/light-v9",
+        )
+    )
+
+    legend_cols = st.columns(len(PROFITABILITY_COLOURS))
+    for (band, colour), column in zip(PROFITABILITY_COLOURS.items(), legend_cols):
+        colour_hex = "#" + "".join(f"{int(c):02x}" for c in colour)
+        column.markdown(
+            f"<div style='color:{colour_hex}; font-weight:bold'>{band}</div>",
+            unsafe_allow_html=True,
+        )
 
 with connection_scope() as conn:
     break_even_value = ensure_break_even_parameter(conn)
@@ -164,6 +312,12 @@ with connection_scope() as conn:
     summary = summarise_distribution(filtered_df, break_even_value)
     profitability_summary = summarise_profitability(filtered_df)
     render_summary(summary, break_even_value, profitability_summary)
+
+    truck_positions = load_truck_positions(conn)
+    active_routes = load_active_routes(conn)
+    map_routes = prepare_route_map_data(filtered_df, break_even_value)
+
+    render_network_map(map_routes, truck_positions, active_routes)
 
     histogram_tab, profitability_tab = st.tabs([
         "Histogram",
