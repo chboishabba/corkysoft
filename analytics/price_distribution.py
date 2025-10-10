@@ -10,7 +10,13 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-from .db import bootstrap_parameters, ensure_global_parameters_table, get_parameter_value, set_parameter_value
+from .db import (
+    bootstrap_parameters,
+    ensure_global_parameters_table,
+    get_parameter_value,
+    migrate_geojson_to_routes,
+    set_parameter_value,
+)
 
 BREAK_EVEN_KEY = "break_even_per_m3"
 DEFAULT_BREAK_EVEN_VALUE = 250.0
@@ -175,6 +181,7 @@ def load_historical_jobs(
 ) -> tuple[pd.DataFrame, ColumnMapping]:
     """Load historical job data applying the requested filters."""
     ensure_global_parameters_table(conn)
+    migrate_geojson_to_routes(conn)
 
     query = _historical_jobs_query()
     try:
