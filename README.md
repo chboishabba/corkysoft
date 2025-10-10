@@ -4,6 +4,7 @@ A tool for estimating and optimising costs.
 <img width="1580" height="1054" alt="image" src="https://github.com/user-attachments/assets/2e39742e-6cc2-472a-9304-11b98e2eb158" />
 <img width="1711" height="104" alt="image" src="https://github.com/user-attachments/assets/21426440-2cf8-454d-9aee-a0842c7d80dc" />
 <img width="596" height="67" alt="image" src="https://github.com/user-attachments/assets/03b0a748-fa3c-410b-a78c-1274f04efe97" />
+<img width="2560" height="1337" alt="Screenshot_20251010_131404" src="https://github.com/user-attachments/assets/fe8af81e-d7e0-436c-8c62-9eb6ccef12c1" />
 
 
 # Route Distance & Cost Calculator (OpenRouteService + SQLite)
@@ -134,7 +135,8 @@ ID    Origin             → Origin (resolved)             Destination         �
 
 ## 🗂 Database Schema
 
-* **jobs**: origin, destination, hourly/per-km rates, computed distance, duration, costs, resolved addresses, coordinates, timestamps.
+* **addresses**: normalised + geocoded address cache used by jobs and historical imports.
+* **jobs**: origin/destination foreign keys into `addresses`, hourly/per-km rates, computed distance, duration, costs, resolved coordinates, timestamps.
 * **geocode_cache**: cached lat/lon results keyed by `place,country`.
 * **lane_base_rates**: per-m³ and metro-hourly lane pricing keyed by corridor code.
 * **modifier_fees**: flat / per-m³ / percentage surcharges such as difficult access or piano handling.

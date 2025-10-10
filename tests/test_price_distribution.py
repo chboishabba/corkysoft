@@ -24,20 +24,122 @@ def build_conn() -> sqlite3.Connection:
     ensure_global_parameters_table(conn)
     conn.execute(
         """
+        CREATE TABLE addresses (
+            id INTEGER PRIMARY KEY,
+            raw_input TEXT NOT NULL,
+            normalized TEXT,
+            street_number TEXT,
+            street_name TEXT,
+            street_type TEXT,
+            unit_number TEXT,
+            city TEXT,
+            state TEXT,
+            postcode TEXT,
+            country TEXT,
+            lon REAL,
+            lat REAL,
+            UNIQUE(normalized, country)
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE historical_jobs (
             id INTEGER PRIMARY KEY,
             job_date TEXT,
             client TEXT,
-            origin TEXT,
-            destination TEXT,
-            origin_postcode TEXT,
-            destination_postcode TEXT,
+            origin_address_id INTEGER NOT NULL,
+            destination_address_id INTEGER NOT NULL,
             volume_m3 REAL,
             revenue_total REAL,
             distance_km REAL,
             final_cost REAL
+            FOREIGN KEY(origin_address_id) REFERENCES addresses(id),
+            FOREIGN KEY(destination_address_id) REFERENCES addresses(id)
         )
         """
+    )
+    addresses = [
+        (
+            1,
+            "Brisbane, QLD",
+            "BRISBANE QLD",
+            None,
+            None,
+            None,
+            None,
+            "Brisbane",
+            "QLD",
+            "4000",
+            "Australia",
+            153.0260,
+            -27.4705,
+        ),
+        (
+            2,
+            "Sydney, NSW",
+            "SYDNEY NSW",
+            None,
+            None,
+            None,
+            None,
+            "Sydney",
+            "NSW",
+            "2000",
+            "Australia",
+            151.2093,
+            -33.8688,
+        ),
+        (
+            3,
+            "Melbourne, VIC",
+            "MELBOURNE VIC",
+            None,
+            None,
+            None,
+            None,
+            "Melbourne",
+            "VIC",
+            "3000",
+            "Australia",
+            144.9631,
+            -37.8136,
+        ),
+        (
+            4,
+            "Cairns, QLD",
+            "CAIRNS QLD",
+            None,
+            None,
+            None,
+            None,
+            "Cairns",
+            "QLD",
+            "4870",
+            "Australia",
+            145.7700,
+            -16.9200,
+        ),
+    ]
+    conn.executemany(
+        """
+        INSERT INTO addresses (
+            id,
+            raw_input,
+            normalized,
+            street_number,
+            street_name,
+            street_type,
+            unit_number,
+            city,
+            state,
+            postcode,
+            country,
+            lon,
+            lat
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        addresses,
     )
     jobs = [
         (1, "2024-01-05", "Acme", "Brisbane", "Sydney", "4000", "2000", 50, 15000, 920.0, 11800),
@@ -47,6 +149,7 @@ def build_conn() -> sqlite3.Connection:
     ]
     conn.executemany(
         "INSERT INTO historical_jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+
         jobs,
     )
     conn.commit()
