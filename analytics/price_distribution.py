@@ -73,6 +73,27 @@ CORRIDOR_COLUMNS = [
     "lane",
     "lane_name",
 ]
+DISTANCE_COLUMNS = [
+    "distance_km",
+    "distance",
+    "km",
+    "kms",
+    "kilometers",
+    "kilometres",
+]
+FINAL_COST_COLUMNS = [
+    "final_cost",
+    "final_total",
+    "actual_cost",
+    "actual_total",
+    "final_sell",
+    "final_sell_total",
+    "actual_sell",
+    "cost_total",
+    "total_cost",
+    "final_price",
+    "final_amount",
+]
 
 
 @dataclass
@@ -85,6 +106,8 @@ class ColumnMapping:
     origin: Optional[str]
     destination: Optional[str]
     corridor: Optional[str]
+    distance: Optional[str]
+    final_cost: Optional[str]
 
 
 def _first_present(columns: Iterable[str], candidates: Sequence[str]) -> Optional[str]:
@@ -107,6 +130,8 @@ def infer_columns(df: pd.DataFrame) -> ColumnMapping:
         origin=_first_present(cols, ORIGIN_COLUMNS),
         destination=_first_present(cols, DESTINATION_COLUMNS),
         corridor=_first_present(cols, CORRIDOR_COLUMNS),
+        distance=_first_present(cols, DISTANCE_COLUMNS),
+        final_cost=_first_present(cols, FINAL_COST_COLUMNS),
     )
 
 
@@ -163,16 +188,52 @@ def load_historical_jobs(
 
     df = df.copy()
 
+    revenue_series: Optional[pd.Series] = None
+    volume_series: Optional[pd.Series] = None
+    distance_series: Optional[pd.Series] = None
+    final_cost_series: Optional[pd.Series] = None
+
+    if mapping.revenue and mapping.revenue in df.columns:
+        revenue_series = pd.to_numeric(df[mapping.revenue], errors="coerce")
+        df[mapping.revenue] = revenue_series
+    if mapping.volume and mapping.volume in df.columns:
+        volume_series = pd.to_numeric(df[mapping.volume], errors="coerce")
+        df[mapping.volume] = volume_series
+    if mapping.distance and mapping.distance in df.columns:
+        distance_series = pd.to_numeric(df[mapping.distance], errors="coerce")
+        df[mapping.distance] = distance_series
+        df["distance_km"] = distance_series
+    if mapping.final_cost and mapping.final_cost in df.columns:
+        final_cost_series = pd.to_numeric(df[mapping.final_cost], errors="coerce")
+        df[mapping.final_cost] = final_cost_series
+
     if mapping.price and mapping.price in df.columns:
         df["price_per_m3"] = pd.to_numeric(df[mapping.price], errors="coerce")
     else:
-        if not (mapping.revenue and mapping.volume):
+        if revenue_series is None or volume_series is None:
             raise RuntimeError(
                 "historical_jobs must contain a per-m³ price column or both revenue and volume columns"
             )
-        revenue_series = pd.to_numeric(df[mapping.revenue], errors="coerce")
-        volume_series = pd.to_numeric(df[mapping.volume], errors="coerce")
         df["price_per_m3"] = revenue_series / volume_series.replace({0: np.nan})
+
+    if revenue_series is not None and distance_series is not None:
+        df["revenue_per_km"] = revenue_series / distance_series.replace({0: np.nan})
+
+    if final_cost_series is not None:
+        df["final_cost_total"] = final_cost_series
+        safe_cost = final_cost_series.replace({0: np.nan})
+        if revenue_series is not None:
+            margin_total = revenue_series - final_cost_series
+            df["margin_total"] = margin_total
+            df["margin_total_pct"] = margin_total / safe_cost
+        if volume_series is not None:
+            safe_volume = volume_series.replace({0: np.nan})
+            cost_per_m3 = final_cost_series / safe_volume
+            df["final_cost_per_m3"] = cost_per_m3
+            margin_per_m3 = df["price_per_m3"] - cost_per_m3
+            df["margin_per_m3"] = margin_per_m3
+            safe_cost_per_m3 = cost_per_m3.replace({0: np.nan})
+            df["margin_per_m3_pct"] = margin_per_m3 / safe_cost_per_m3
 
     if mapping.corridor and mapping.corridor in df.columns:
         df["corridor_display"] = df[mapping.corridor]
@@ -198,7 +259,11 @@ def load_historical_jobs(
     if mapping.date:
         df["job_date"] = df[mapping.date]
 
-    numeric_cols = [c for c in [mapping.revenue, mapping.volume] if c]
+    numeric_cols = [
+        c
+        for c in [mapping.revenue, mapping.volume, mapping.distance, mapping.final_cost]
+        if c
+    ]
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -214,6 +279,10 @@ class DistributionSummary:
     percentile_75: Optional[float]
     below_break_even_count: int
     below_break_even_ratio: float
+    mean: Optional[float]
+    std_dev: Optional[float]
+    kurtosis: Optional[float]
+    skewness: Optional[float]
 
 
 def summarise_distribution(df: pd.DataFrame, break_even: float) -> DistributionSummary:
@@ -227,10 +296,15 @@ def summarise_distribution(df: pd.DataFrame, break_even: float) -> DistributionS
         percentile_75 = float(priced.quantile(0.75))
         below_break_even_count = int((priced < break_even).sum())
         below_break_even_ratio = below_break_even_count / priced_job_count
+        mean = float(priced.mean())
+        std_dev = float(priced.std(ddof=1)) if priced_job_count > 1 else math.nan
+        kurtosis = float(priced.kurtosis()) if priced_job_count > 3 else math.nan
+        skewness = float(priced.skew()) if priced_job_count > 2 else math.nan
     else:
         median = percentile_25 = percentile_75 = math.nan
         below_break_even_count = 0
         below_break_even_ratio = 0.0
+        mean = std_dev = kurtosis = skewness = math.nan
 
     return DistributionSummary(
         job_count=job_count,
@@ -240,6 +314,67 @@ def summarise_distribution(df: pd.DataFrame, break_even: float) -> DistributionS
         percentile_75=percentile_75,
         below_break_even_count=below_break_even_count,
         below_break_even_ratio=below_break_even_ratio,
+        mean=mean,
+        std_dev=std_dev,
+        kurtosis=kurtosis,
+        skewness=skewness,
+    )
+
+
+@dataclass
+class ProfitabilitySummary:
+    revenue_per_km_median: Optional[float]
+    revenue_per_km_mean: Optional[float]
+    margin_per_m3_median: Optional[float]
+    margin_per_m3_pct_median: Optional[float]
+    margin_total_median: Optional[float]
+    margin_total_pct_median: Optional[float]
+
+
+def summarise_profitability(df: pd.DataFrame) -> ProfitabilitySummary:
+    """Calculate profitability KPIs used by the optional views."""
+
+    def _median(series: pd.Series) -> Optional[float]:
+        series = series.dropna()
+        if series.empty:
+            return math.nan
+        return float(series.median())
+
+    def _mean(series: pd.Series) -> Optional[float]:
+        series = series.dropna()
+        if series.empty:
+            return math.nan
+        return float(series.mean())
+
+    revenue_per_km_median = revenue_per_km_mean = math.nan
+    if "revenue_per_km" in df:
+        revenue_per_km_series = pd.to_numeric(df["revenue_per_km"], errors="coerce")
+        revenue_per_km_median = _median(revenue_per_km_series)
+        revenue_per_km_mean = _mean(revenue_per_km_series)
+
+    margin_per_m3_median = margin_per_m3_pct_median = math.nan
+    if "margin_per_m3" in df:
+        margin_per_m3_series = pd.to_numeric(df["margin_per_m3"], errors="coerce")
+        margin_per_m3_median = _median(margin_per_m3_series)
+    if "margin_per_m3_pct" in df:
+        margin_per_m3_pct_series = pd.to_numeric(df["margin_per_m3_pct"], errors="coerce")
+        margin_per_m3_pct_median = _median(margin_per_m3_pct_series)
+
+    margin_total_median = margin_total_pct_median = math.nan
+    if "margin_total" in df:
+        margin_total_series = pd.to_numeric(df["margin_total"], errors="coerce")
+        margin_total_median = _median(margin_total_series)
+    if "margin_total_pct" in df:
+        margin_total_pct_series = pd.to_numeric(df["margin_total_pct"], errors="coerce")
+        margin_total_pct_median = _median(margin_total_pct_series)
+
+    return ProfitabilitySummary(
+        revenue_per_km_median=revenue_per_km_median,
+        revenue_per_km_mean=revenue_per_km_mean,
+        margin_per_m3_median=margin_per_m3_median,
+        margin_per_m3_pct_median=margin_per_m3_pct_median,
+        margin_total_median=margin_total_median,
+        margin_total_pct_median=margin_total_pct_median,
     )
 
 
@@ -291,7 +426,55 @@ def create_histogram(df: pd.DataFrame, break_even: float, bins: Optional[int] = 
             line_color=color,
             annotation_text=label,
             annotation_position="top",
-            annotation_font_color=color,
+            annotation_font_color="#111",
+            annotation_bgcolor="rgba(255, 255, 255, 0.85)",
+            annotation_bordercolor=color,
+        )
+
+    priced_values = priced["price_per_m3"].dropna()
+    mean_val = float(priced_values.mean()) if not priced_values.empty else math.nan
+    std_val = float(priced_values.std(ddof=1)) if len(priced_values) > 1 else math.nan
+    kurtosis_val = float(priced_values.kurtosis()) if len(priced_values) > 3 else math.nan
+
+    if len(priced_values) > 1 and std_val and not math.isnan(std_val) and std_val > 0:
+        _, bin_edges = np.histogram(priced_values, bins=bins)
+        if len(bin_edges) > 1:
+            bin_width = float(np.mean(np.diff(bin_edges)))
+        else:
+            bin_width = 0.0
+        if bin_width > 0:
+            x_vals = np.linspace(bin_edges[0], bin_edges[-1], 200)
+            pdf = (1.0 / (std_val * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x_vals - mean_val) / std_val) ** 2)
+            y_vals = pdf * len(priced_values) * bin_width
+            fig.add_trace(
+                go.Scatter(
+                    x=x_vals,
+                    y=y_vals,
+                    mode="lines",
+                    name="Normal fit",
+                    line=dict(color="rgba(17, 17, 17, 0.85)", width=2),
+                )
+            )
+
+    stats_bits = []
+    if not math.isnan(mean_val):
+        stats_bits.append(f"μ={mean_val:,.2f}")
+    if not math.isnan(std_val):
+        stats_bits.append(f"σ={std_val:,.2f}")
+    if not math.isnan(kurtosis_val):
+        stats_bits.append(f"kurtosis={kurtosis_val:,.2f}")
+    if stats_bits:
+        fig.add_annotation(
+            text=" | ".join(stats_bits),
+            xref="paper",
+            yref="paper",
+            x=0.99,
+            y=0.98,
+            showarrow=False,
+            align="right",
+            bgcolor="rgba(255, 255, 255, 0.85)",
+            bordercolor="rgba(17, 17, 17, 0.2)",
+            font=dict(color="#111", size=12),
         )
 
     fig.update_layout(
@@ -299,8 +482,151 @@ def create_histogram(df: pd.DataFrame, break_even: float, bins: Optional[int] = 
         xaxis_title="$ per m³",
         yaxis_title="Job count",
         showlegend=False,
+        hovermode="x unified",
     )
 
+    return fig
+
+
+def _empty_figure(title: str, x_title: str, y_title: str, message: str) -> go.Figure:
+    fig = go.Figure()
+    fig.update_layout(title=title, xaxis_title=x_title, yaxis_title=y_title)
+    fig.add_annotation(
+        text=message,
+        xref="paper",
+        yref="paper",
+        x=0.5,
+        y=0.5,
+        showarrow=False,
+        font=dict(color="#555", size=13),
+    )
+    return fig
+
+
+def create_m3_vs_km_figure(df: pd.DataFrame) -> go.Figure:
+    """Visualise $/m³ profitability relative to $/km earnings."""
+
+    if "price_per_m3" not in df.columns or "revenue_per_km" not in df.columns:
+        return _empty_figure(
+            title="m³ vs km profitability",
+            x_title="$ per m³",
+            y_title="$ per km",
+            message="No revenue or distance data available.",
+        )
+
+    subset = df.dropna(subset=["price_per_m3", "revenue_per_km"])
+    if subset.empty:
+        return _empty_figure(
+            title="m³ vs km profitability",
+            x_title="$ per m³",
+            y_title="$ per km",
+            message="Add jobs with both revenue and distance to unlock this view.",
+        )
+
+    hover_data: dict[str, object] = {}
+    for column, fmt in [
+        ("client_display", True),
+        ("corridor_display", True),
+        ("volume_m3", ":.1f"),
+        ("volume", ":.1f"),
+        ("distance_km", ":.1f"),
+        ("margin_total", ":.0f"),
+        ("margin_total_pct", ":.1%"),
+    ]:
+        if column in subset.columns:
+            hover_data[column] = fmt
+
+    color_col = "corridor_display" if "corridor_display" in subset.columns else None
+
+    fig = px.scatter(
+        subset,
+        x="price_per_m3",
+        y="revenue_per_km",
+        color=color_col,
+        hover_data=hover_data,
+        labels={"price_per_m3": "$ per m³", "revenue_per_km": "$ per km"},
+        title="m³ vs km profitability",
+    )
+    fig.update_traces(marker=dict(size=10, opacity=0.8))
+    fig.update_layout(
+        xaxis=dict(zeroline=False),
+        yaxis=dict(zeroline=False),
+        legend_title_text="Corridor" if color_col else None,
+    )
+    return fig
+
+
+def create_m3_margin_figure(df: pd.DataFrame) -> go.Figure:
+    """Compare quoted $/m³ to cost-derived $/m³ and highlight margin deltas."""
+
+    required_cols = {"price_per_m3", "final_cost_per_m3"}
+    if not required_cols.issubset(df.columns):
+        return _empty_figure(
+            title="Quoted vs calculated $/m³",
+            x_title="Cost-derived $ per m³",
+            y_title="Quoted $ per m³",
+            message="Final cost data is unavailable.",
+        )
+
+    subset = df.dropna(subset=list(required_cols))
+    if subset.empty:
+        return _empty_figure(
+            title="Quoted vs calculated $/m³",
+            x_title="Cost-derived $ per m³",
+            y_title="Quoted $ per m³",
+            message="No jobs contain both quoted and calculated $/m³ values.",
+        )
+
+    hover_data: dict[str, object] = {}
+    for column, fmt in [
+        ("client_display", True),
+        ("corridor_display", True),
+        ("margin_per_m3", ":.2f"),
+        ("margin_per_m3_pct", ":.1%"),
+        ("margin_total", ":.0f"),
+        ("margin_total_pct", ":.1%"),
+        ("volume_m3", ":.1f"),
+        ("distance_km", ":.1f"),
+    ]:
+        if column in subset.columns:
+            hover_data[column] = fmt
+
+    color_col = "margin_per_m3_pct" if "margin_per_m3_pct" in subset.columns else None
+    color_args = {}
+    if color_col:
+        color_args = {
+            "color": subset[color_col],
+            "color_continuous_scale": "RdYlGn",
+        }
+
+    fig = px.scatter(
+        subset,
+        x="final_cost_per_m3",
+        y="price_per_m3",
+        hover_data=hover_data,
+        labels={
+            "final_cost_per_m3": "Cost-derived $ per m³",
+            "price_per_m3": "Quoted $ per m³",
+        },
+        title="Quoted vs calculated $/m³",
+        **color_args,
+    )
+    fig.update_traces(marker=dict(size=10, opacity=0.8))
+
+    min_val = float(subset[["final_cost_per_m3", "price_per_m3"]].min().min())
+    max_val = float(subset[["final_cost_per_m3", "price_per_m3"]].max().max())
+    if max_val > min_val:
+        parity_line = go.Scatter(
+            x=[min_val, max_val],
+            y=[min_val, max_val],
+            mode="lines",
+            line=dict(color="rgba(17, 17, 17, 0.6)", dash="dash"),
+            name="Parity",
+            showlegend=False,
+        )
+        fig.add_trace(parity_line)
+
+    fig.update_layout(coloraxis_colorbar=dict(title="Margin %"), legend_title_text=None)
     return fig
 
 

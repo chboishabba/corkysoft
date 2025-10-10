@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import math
 from datetime import date
 from typing import Optional
 
@@ -11,10 +12,14 @@ import streamlit as st
 from analytics.db import connection_scope
 from analytics.price_distribution import (
     DistributionSummary,
+    ProfitabilitySummary,
     create_histogram,
+    create_m3_margin_figure,
+    create_m3_vs_km_figure,
     ensure_break_even_parameter,
     load_historical_jobs,
     summarise_distribution,
+    summarise_profitability,
     update_break_even,
 )
 
@@ -27,7 +32,11 @@ st.title("Price distribution (Airbnb-style)")
 st.caption("Visualise $ per m³ by corridor and client, with break-even bands to spot loss-leaders.")
 
 
-def render_summary(summary: DistributionSummary, break_even: float) -> None:
+def render_summary(
+    summary: DistributionSummary,
+    break_even: float,
+    profitability_summary: ProfitabilitySummary,
+) -> None:
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Jobs in filter", summary.job_count)
     valid_label = f"Valid $/m³ ({summary.priced_job_count})"
@@ -40,6 +49,37 @@ def render_summary(summary: DistributionSummary, break_even: float) -> None:
         f"{below_pct:.1f}%",
         help=f"Break-even: ${break_even:,.2f} per m³",
     )
+
+    def _format_value(value: Optional[float], *, currency: bool = False, percentage: bool = False) -> str:
+        if value is None:
+            return "n/a"
+        if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+            return "n/a"
+        if currency:
+            return f"${value:,.2f}"
+        if percentage:
+            return f"{value * 100:.1f}%"
+        return f"{value:,.2f}"
+
+    stats_cols = st.columns(4)
+    stats = [
+        ("Mean $/m³", summary.mean, True, False),
+        ("Std dev $/m³", summary.std_dev, True, False),
+        ("Kurtosis", summary.kurtosis, False, False),
+        ("Skewness", summary.skewness, False, False),
+    ]
+    for column, (label, value, as_currency, as_percentage) in zip(stats_cols, stats):
+        column.metric(label, _format_value(value, currency=as_currency, percentage=as_percentage))
+
+    profitability_cols = st.columns(4)
+    profitability_metrics = [
+        ("Median $/km", profitability_summary.revenue_per_km_median, True, False),
+        ("Average $/km", profitability_summary.revenue_per_km_mean, True, False),
+        ("Median margin $/m³", profitability_summary.margin_per_m3_median, True, False),
+        ("Median margin %", profitability_summary.margin_per_m3_pct_median, False, True),
+    ]
+    for column, (label, value, as_currency, as_percentage) in zip(profitability_cols, profitability_metrics):
+        column.metric(label, _format_value(value, currency=as_currency, percentage=as_percentage))
 
 
 with connection_scope() as conn:
@@ -122,10 +162,63 @@ with connection_scope() as conn:
         st.stop()
 
     summary = summarise_distribution(filtered_df, break_even_value)
-    render_summary(summary, break_even_value)
+    profitability_summary = summarise_profitability(filtered_df)
+    render_summary(summary, break_even_value, profitability_summary)
 
-    histogram = create_histogram(filtered_df, break_even_value)
-    st.plotly_chart(histogram, use_container_width=True)
+    histogram_tab, profitability_tab = st.tabs([
+        "Histogram",
+        "Profitability insights",
+    ])
+
+    with histogram_tab:
+        histogram = create_histogram(filtered_df, break_even_value)
+        st.plotly_chart(histogram, use_container_width=True)
+        st.caption(
+            "Histogram overlays include the normal distribution fit plus kurtosis and dispersion markers for context."
+        )
+
+    with profitability_tab:
+        st.markdown("### Profitability insights")
+        view_options = {
+            "m³ vs km profitability": create_m3_vs_km_figure,
+            "Quoted vs calculated $/m³": create_m3_margin_figure,
+        }
+        selected_view = st.radio(
+            "Choose a view",
+            list(view_options.keys()),
+            horizontal=True,
+            help="Switch between per-kilometre earnings and quoted-versus-cost comparisons.",
+        )
+        fig = view_options[selected_view](filtered_df)
+        st.plotly_chart(fig, use_container_width=True)
+
+        if "margin_per_m3" in filtered_df.columns:
+            st.markdown("#### Margin outliers")
+            ranked = (
+                filtered_df.dropna(subset=["margin_per_m3"])
+                .sort_values("margin_per_m3")
+            )
+            if not ranked.empty:
+                low_cols, high_cols = st.columns(2)
+                display_fields = [
+                    col
+                    for col in [
+                        "job_date",
+                        "client_display",
+                        "corridor_display",
+                        "price_per_m3",
+                        "final_cost_per_m3",
+                        "margin_per_m3",
+                        "margin_per_m3_pct",
+                    ]
+                    if col in ranked.columns
+                ]
+                low_cols.write("Lowest margin jobs")
+                low_cols.dataframe(ranked.head(5)[display_fields])
+                high_cols.write("Highest margin jobs")
+                high_cols.dataframe(ranked.tail(5).iloc[::-1][display_fields])
+            else:
+                st.info("No margin data available to highlight outliers yet.")
 
     st.subheader("Filtered jobs")
     display_columns = [
