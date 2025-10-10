@@ -603,11 +603,6 @@ with connection_scope() as conn:
     profitability_summary = summarise_profitability(filtered_df)
     render_summary(summary, break_even_value, profitability_summary)
 
-    with summary_tab:
-        summary = summarise_distribution(filtered_df, break_even_value)
-        profitability_summary = summarise_profitability(filtered_df)
-        render_summary(summary, break_even_value, profitability_summary)
-
     truck_positions = load_truck_positions(conn)
     active_routes = load_active_routes(conn)
     map_routes = prepare_profitability_route_data(filtered_df, break_even_value)
