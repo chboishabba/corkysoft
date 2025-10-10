@@ -8,7 +8,7 @@ from analytics.live_data import MockTelemetryIngestor, load_active_routes, load_
 from analytics.price_distribution import (
     PROFITABILITY_COLOURS,
     classify_profit_band,
-    prepare_route_map_data,
+    prepare_profitability_route_data,
 )
 from corkysoft.schema import ensure_schema
 
@@ -88,7 +88,7 @@ def test_mock_ingestor_populates_live_tables():
         base_df["id"] = base_df["job_id"]
         base_df["price_per_m3"] = 300.0
         base_df["corridor_display"] = "Test Corridor"
-        mapped = prepare_route_map_data(base_df, break_even=250.0)
+        mapped = prepare_profitability_route_data(base_df, break_even=250.0)
 
         assert "colour" in mapped.columns
         assert all(isinstance(colour, list) for colour in mapped["colour"])

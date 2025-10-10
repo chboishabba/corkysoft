@@ -22,6 +22,8 @@ from analytics.price_distribution import (
     create_m3_vs_km_figure,
     ensure_break_even_parameter,
     load_historical_jobs,
+    prepare_profitability_route_data,
+    prepare_route_map_data,
     prepare_route_map_data as prepare_profitability_map_data,
     summarise_distribution,
     summarise_profitability,
@@ -601,6 +603,44 @@ with connection_scope() as conn:
     profitability_summary = summarise_profitability(filtered_df)
     render_summary(summary, break_even_value, profitability_summary)
 
+    with summary_tab:
+        summary = summarise_distribution(filtered_df, break_even_value)
+        profitability_summary = summarise_profitability(filtered_df)
+        render_summary(summary, break_even_value, profitability_summary)
+
+    truck_positions = load_truck_positions(conn)
+    active_routes = load_active_routes(conn)
+    map_routes = prepare_profitability_route_data(filtered_df, break_even_value)
+
+    render_network_map(map_routes, truck_positions, active_routes)
+
+    histogram_tab, profitability_tab = st.tabs([
+        "Histogram",
+        "Profitability insights",
+    ])
+        histogram_tab, profitability_tab = st.tabs([
+            "Histogram",
+            "Profitability insights",
+        ])
+
+        with histogram_tab:
+            histogram = create_histogram(filtered_df, break_even_value)
+            st.plotly_chart(histogram, use_container_width=True)
+            st.caption(
+                "Histogram overlays include the normal distribution fit plus kurtosis and dispersion markers for context."
+            )
+
+        with profitability_tab:
+            st.markdown("### Profitability insights")
+            view_options = {
+                "m³ vs km profitability": create_m3_vs_km_figure,
+                "Quoted vs calculated $/m³": create_m3_margin_figure,
+            }
+            selected_view = st.radio(
+                "Choose a view",
+                list(view_options.keys()),
+                horizontal=True,
+                help="Switch between per-kilometre earnings and quoted-versus-cost comparisons.",
     st.button(
         "Open quote builder",
         on_click=_activate_quote_tab,

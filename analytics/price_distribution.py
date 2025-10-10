@@ -502,11 +502,11 @@ def classify_profit_band(value: Optional[float], break_even: float) -> str:
     return "Unknown"
 
 
-def prepare_route_map_data(
+def prepare_profitability_route_data(
     df: pd.DataFrame,
     break_even: float,
 ) -> pd.DataFrame:
-    """Prepare per-job map records containing profitability bands and colours."""
+    """Prepare per-job profitability records for the telemetry map."""
 
     required_columns = {
         "origin_lat",
