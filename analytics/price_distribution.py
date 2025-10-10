@@ -110,6 +110,36 @@ def infer_columns(df: pd.DataFrame) -> ColumnMapping:
     )
 
 
+def _historical_jobs_query() -> str:
+    """Return the default query joining address metadata for historical jobs."""
+
+    return """
+        SELECT
+            hj.*,
+            COALESCE(o.city, o.normalized, o.raw_input) AS origin,
+            COALESCE(d.city, d.normalized, d.raw_input) AS destination,
+            o.raw_input AS origin_raw,
+            o.normalized AS origin_normalized,
+            o.city AS origin_city,
+            o.state AS origin_state,
+            o.postcode AS origin_postcode,
+            o.country AS origin_country,
+            o.lon AS origin_lon,
+            o.lat AS origin_lat,
+            d.raw_input AS destination_raw,
+            d.normalized AS destination_normalized,
+            d.city AS destination_city,
+            d.state AS destination_state,
+            d.postcode AS destination_postcode,
+            d.country AS destination_country,
+            d.lon AS dest_lon,
+            d.lat AS dest_lat
+        FROM historical_jobs AS hj
+        LEFT JOIN addresses AS o ON hj.origin_address_id = o.id
+        LEFT JOIN addresses AS d ON hj.destination_address_id = d.id
+    """
+
+
 def load_historical_jobs(
     conn,
     start_date: Optional[pd.Timestamp] = None,
@@ -121,10 +151,14 @@ def load_historical_jobs(
     """Load historical job data applying the requested filters."""
     ensure_global_parameters_table(conn)
 
+    query = _historical_jobs_query()
     try:
-        df = pd.read_sql_query("SELECT * FROM historical_jobs", conn)
-    except Exception as exc:  # pragma: no cover - surfaces friendly error in UI
-        raise RuntimeError("historical_jobs table is required for this view") from exc
+        df = pd.read_sql_query(query, conn)
+    except Exception:  # pragma: no cover - fall back for legacy schemas
+        try:
+            df = pd.read_sql_query("SELECT * FROM historical_jobs", conn)
+        except Exception as exc:  # pragma: no cover - surfaces friendly error in UI
+            raise RuntimeError("historical_jobs table is required for this view") from exc
 
     if df.empty:
         mapping = infer_columns(df)

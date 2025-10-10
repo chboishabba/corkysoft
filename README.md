@@ -129,7 +129,8 @@ ID    Origin             → Origin (resolved)             Destination         �
 
 ## 🗂 Database Schema
 
-* **jobs**: origin, destination, hourly/per-km rates, computed distance, duration, costs, resolved addresses, coordinates, timestamps.
+* **addresses**: normalised + geocoded address cache used by jobs and historical imports.
+* **jobs**: origin/destination foreign keys into `addresses`, hourly/per-km rates, computed distance, duration, costs, resolved coordinates, timestamps.
 * **geocode_cache**: cached lat/lon results keyed by `place,country`.
 * **lane_base_rates**: per-m³ and metro-hourly lane pricing keyed by corridor code.
 * **modifier_fees**: flat / per-m³ / percentage surcharges such as difficult access or piano handling.
