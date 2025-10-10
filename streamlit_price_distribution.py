@@ -434,8 +434,8 @@ def render_network_map(
 def _activate_quote_tab() -> None:
     """Switch the interface to the quote builder tab."""
 
-    st.experimental_set_query_params(view="Quote builder")
-    st.experimental_rerun()
+    _set_query_params(view="Quote builder")
+    _rerun_app()
 
 
 def _first_non_empty(route: pd.Series, columns: Sequence[str]) -> Optional[str]:
@@ -653,7 +653,7 @@ with connection_scope() as conn:
         "Route maps",
         "Quote builder",
     ]
-    params = st.experimental_get_query_params()
+    params = _get_query_params()
     requested_tab = params.get("view", [tab_labels[0]])[0]
     if requested_tab not in tab_labels:
         requested_tab = tab_labels[0]
@@ -1017,7 +1017,7 @@ with connection_scope() as conn:
                 else:
                     st.session_state["quote_inputs"] = quote_inputs
                     st.session_state["quote_result"] = result
-                    st.experimental_set_query_params(view="Quote builder")
+                    _set_query_params(view="Quote builder")
                     st.success("Quote calculated. Review the breakdown below.")
                     stored_inputs = quote_inputs
                     quote_result = result
@@ -1123,8 +1123,8 @@ with connection_scope() as conn:
             if action_cols[1].button("Reset quote builder"):
                 st.session_state.pop("quote_result", None)
                 st.session_state.pop("quote_inputs", None)
-                st.experimental_set_query_params(view="Quote builder")
-                st.experimental_rerun()
+                _set_query_params(view="Quote builder")
+                _rerun_app()
 
     st.subheader("Filtered jobs")
     display_columns = [
@@ -1150,3 +1150,34 @@ with connection_scope() as conn:
         file_name="price_distribution_filtered.csv",
         mime="text/csv",
     )
+
+
+def _set_query_params(**params: str) -> None:
+    """Set Streamlit query parameters using the stable API when available."""
+
+    query_params = getattr(st, "query_params", None)
+    if query_params is not None:
+        query_params.from_dict(params)
+        return
+    # Fallback for older Streamlit versions.
+    st.experimental_set_query_params(**params)
+
+
+def _get_query_params() -> Dict[str, List[str]]:
+    """Return query parameters as a dictionary of lists."""
+
+    query_params = getattr(st, "query_params", None)
+    if query_params is not None:
+        return {key: query_params.get_all(key) for key in query_params.keys()}
+    return st.experimental_get_query_params()
+
+
+def _rerun_app() -> None:
+    """Trigger a Streamlit rerun using the available API."""
+
+    rerun = getattr(st, "rerun", None)
+    if rerun is not None:
+        rerun()
+        return
+    st.experimental_rerun()
+
