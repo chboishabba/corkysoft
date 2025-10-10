@@ -18,6 +18,7 @@ from .db import (
     set_parameter_value,
 )
 
+
 PROFITABILITY_BANDS: Sequence[tuple[float, float, str]] = (
     (-float("inf"), 0.0, "Below break-even"),
     (0.0, 50.0, "0-50 above break-even"),
@@ -40,6 +41,7 @@ PROFITABILITY_WIDTHS = {
     "100+ above break-even": 80,
     "Unknown": 80,
 }
+
 
 BREAK_EVEN_KEY = "break_even_per_m3"
 DEFAULT_BREAK_EVEN_VALUE = 250.0
