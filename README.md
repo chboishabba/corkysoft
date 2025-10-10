@@ -121,6 +121,11 @@ ID    Origin             → Origin (resolved)             Destination         �
 
 * **jobs**: origin, destination, hourly/per-km rates, computed distance, duration, costs, resolved addresses, coordinates, timestamps.
 * **geocode_cache**: cached lat/lon results keyed by `place,country`.
+* **lane_base_rates**: per-m³ and metro-hourly lane pricing keyed by corridor code.
+* **modifier_fees**: flat / per-m³ / percentage surcharges such as difficult access or piano handling.
+* **packing_rate_tiers**: tiered packing & unpacking rates by cubic metres.
+* **seasonal_uplifts**: date-range percentage uplifts (e.g. Oct–Dec peak season).
+* **depot_metro_zones**: depot centroids + radius used for the metro vs regional rule.
 
 ---
 
