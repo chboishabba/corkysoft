@@ -49,6 +49,29 @@ DEFAULT_BREAK_EVEN_VALUE = 250.0
 DEFAULT_BREAK_EVEN_DESCRIPTION = "Baseline break-even $/m³ across the network"
 METRO_DISTANCE_THRESHOLD_KM = 100.0
 
+FUEL_COST_KEY = "base_cost.fuel_per_km"
+DEFAULT_FUEL_COST_PER_KM = 0.95
+
+DRIVER_COST_KEY = "base_cost.driver_per_km"
+DEFAULT_DRIVER_COST_PER_KM = 6.5
+
+MAINTENANCE_COST_KEY = "base_cost.maintenance_per_km"
+DEFAULT_MAINTENANCE_COST_PER_KM = 1.1
+
+OVERHEAD_COST_KEY = "base_cost.overhead_per_job"
+DEFAULT_OVERHEAD_COST_PER_JOB = 3200.0
+
+BASE_COST_DEFAULTS: Sequence[tuple[str, float, str]] = (
+    (FUEL_COST_KEY, DEFAULT_FUEL_COST_PER_KM, "Fuel cost per kilometre (AUD)"),
+    (DRIVER_COST_KEY, DEFAULT_DRIVER_COST_PER_KM, "Driver labour cost per kilometre (AUD)"),
+    (
+        MAINTENANCE_COST_KEY,
+        DEFAULT_MAINTENANCE_COST_PER_KM,
+        "Maintenance and tyre cost per kilometre (AUD)",
+    ),
+    (OVERHEAD_COST_KEY, DEFAULT_OVERHEAD_COST_PER_JOB, "Fixed overhead per job (AUD)"),
+)
+
 HEATMAP_WEIGHTING_CANDIDATES: Sequence[tuple[str, Optional[str]]] = (
     ("Job count", None),
     ("Volume (m³)", "volume_m3"),
@@ -152,6 +175,18 @@ class ColumnMapping:
     final_cost: Optional[str]
 
 
+@dataclass(frozen=True)
+class BaseCostConfig:
+    fuel_per_km: float
+    driver_per_km: float
+    maintenance_per_km: float
+    overhead_per_job: float
+
+    @property
+    def per_km_total(self) -> float:
+        return self.fuel_per_km + self.driver_per_km + self.maintenance_per_km
+
+
 def _first_present(columns: Iterable[str], candidates: Sequence[str]) -> Optional[str]:
     columns_lower = {c.lower(): c for c in columns}
     for candidate in candidates:
@@ -175,6 +210,45 @@ def infer_columns(df: pd.DataFrame) -> ColumnMapping:
         distance=_first_present(cols, DISTANCE_COLUMNS),
         final_cost=_first_present(cols, FINAL_COST_COLUMNS),
     )
+
+
+def ensure_base_cost_parameters(conn) -> BaseCostConfig:
+    """Ensure operating cost parameters exist and return their values."""
+
+    bootstrap_parameters(conn, BASE_COST_DEFAULTS)
+    fuel = get_parameter_value(conn, FUEL_COST_KEY, DEFAULT_FUEL_COST_PER_KM)
+    driver = get_parameter_value(conn, DRIVER_COST_KEY, DEFAULT_DRIVER_COST_PER_KM)
+    maintenance = get_parameter_value(
+        conn, MAINTENANCE_COST_KEY, DEFAULT_MAINTENANCE_COST_PER_KM
+    )
+    overhead = get_parameter_value(conn, OVERHEAD_COST_KEY, DEFAULT_OVERHEAD_COST_PER_JOB)
+    assert fuel is not None
+    assert driver is not None
+    assert maintenance is not None
+    assert overhead is not None
+    return BaseCostConfig(
+        fuel_per_km=float(fuel),
+        driver_per_km=float(driver),
+        maintenance_per_km=float(maintenance),
+        overhead_per_job=float(overhead),
+    )
+
+
+def compute_break_even_series(
+    distance_km: pd.Series, volume_m3: pd.Series, base_costs: BaseCostConfig
+) -> tuple[pd.Series, pd.Series]:
+    """Return total and per-m³ break-even costs for each job."""
+
+    per_km_cost = base_costs.per_km_total
+    distance_values = pd.to_numeric(distance_km, errors="coerce")
+    volume_values = pd.to_numeric(volume_m3, errors="coerce")
+    total_cost = distance_values * per_km_cost + base_costs.overhead_per_job
+    safe_volume = volume_values.replace({0: np.nan})
+    per_m3_cost = total_cost / safe_volume
+    mask = distance_values.isna() | safe_volume.isna()
+    total_cost = total_cost.where(~mask, np.nan)
+    per_m3_cost = per_m3_cost.where(~mask, np.nan)
+    return total_cost.astype(float), per_m3_cost.astype(float)
 
 
 def _historical_jobs_query() -> str:
@@ -218,6 +292,7 @@ def load_historical_jobs(
     """Load historical job data applying the requested filters."""
     ensure_global_parameters_table(conn)
     migrate_geojson_to_routes(conn)
+    base_costs = ensure_base_cost_parameters(conn)
 
     query = _historical_jobs_query()
     try:
@@ -343,6 +418,17 @@ def load_historical_jobs(
     ]
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    if volume_series is not None and distance_series is not None:
+        break_even_total, break_even_per_m3 = compute_break_even_series(
+            distance_series,
+            volume_series,
+            base_costs,
+        )
+        df["break_even_total"] = break_even_total
+        df["break_even_per_m3"] = break_even_per_m3
+        if "price_per_m3" in df.columns:
+            df["margin_vs_break_even"] = df["price_per_m3"] - break_even_per_m3
 
     return df, mapping
 
@@ -490,14 +576,26 @@ class DistributionSummary:
 
 def summarise_distribution(df: pd.DataFrame, break_even: float) -> DistributionSummary:
     """Return KPI statistics for the filtered dataset."""
-    priced = df["price_per_m3"].dropna()
+
+    if "price_per_m3" not in df.columns:
+        raise KeyError("'price_per_m3' column is required for distribution summaries")
+
+    price_series = pd.to_numeric(df["price_per_m3"], errors="coerce")
+    priced = price_series.dropna()
     job_count = len(df)
     priced_job_count = len(priced)
     if priced_job_count:
         median = float(priced.median())
         percentile_25 = float(priced.quantile(0.25))
         percentile_75 = float(priced.quantile(0.75))
-        below_break_even_count = int((priced < break_even).sum())
+        if "break_even_per_m3" in df.columns:
+            break_even_series = pd.to_numeric(
+                df.loc[priced.index, "break_even_per_m3"], errors="coerce"
+            ).fillna(break_even)
+            comparison_target = break_even_series
+        else:
+            comparison_target = pd.Series(break_even, index=priced.index)
+        below_break_even_count = int((priced < comparison_target).sum())
         below_break_even_ratio = below_break_even_count / priced_job_count
         mean = float(priced.mean())
         std_dev = float(priced.std(ddof=1)) if priced_job_count > 1 else math.nan
@@ -632,7 +730,17 @@ def prepare_profitability_route_data(
     if map_df.empty:
         return map_df
 
-    map_df["profit_band"] = map_df["price_per_m3"].apply(lambda value: classify_profit_band(value, break_even))
+    if "break_even_per_m3" in map_df.columns:
+        break_even_series = pd.to_numeric(map_df["break_even_per_m3"], errors="coerce").fillna(break_even)
+        price_series = pd.to_numeric(map_df["price_per_m3"], errors="coerce")
+        map_df["profit_band"] = [
+            classify_profit_band(price, be)
+            for price, be in zip(price_series, break_even_series)
+        ]
+    else:
+        map_df["profit_band"] = map_df["price_per_m3"].apply(
+            lambda value: classify_profit_band(value, break_even)
+        )
     map_df["colour"] = map_df["profit_band"].map(PROFITABILITY_COLOURS)
     map_df["colour"] = map_df["colour"].apply(
         lambda value: value if isinstance(value, (list, tuple)) else [128, 128, 128]

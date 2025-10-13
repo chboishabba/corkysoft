@@ -10,6 +10,10 @@ pd = pytest.importorskip("pandas")
 from analytics.db import ensure_global_parameters_table, set_parameter_value
 from analytics.price_distribution import (
     BREAK_EVEN_KEY,
+    DRIVER_COST_KEY,
+    FUEL_COST_KEY,
+    MAINTENANCE_COST_KEY,
+    OVERHEAD_COST_KEY,
     build_heatmap_source,
     create_histogram,
     create_metro_profitability_figure,
@@ -156,6 +160,10 @@ def build_conn() -> sqlite3.Connection:
         jobs,
     )
     conn.commit()
+    set_parameter_value(conn, FUEL_COST_KEY, 1.0, "Test fuel per km")
+    set_parameter_value(conn, DRIVER_COST_KEY, 4.0, "Test driver per km")
+    set_parameter_value(conn, MAINTENANCE_COST_KEY, 0.5, "Test maintenance per km")
+    set_parameter_value(conn, OVERHEAD_COST_KEY, 2000.0, "Test overhead per job")
     set_parameter_value(conn, BREAK_EVEN_KEY, 250.0, "Test break-even")
     return conn
 
@@ -198,6 +206,11 @@ def test_load_historical_jobs_filters_by_client_and_corridor():
         assert "final_cost_per_m3" in df.columns
         assert np.isclose(df["final_cost_per_m3"].iloc[0], 11800 / 50)
         assert np.isclose(df["margin_per_m3"].iloc[0], 300.0 - (11800 / 50))
+
+        assert np.isclose(df["break_even_total"].iloc[0], 7060.0)
+        assert np.isclose(df["break_even_per_m3"].iloc[0], 141.2)
+        assert np.isclose(df["margin_vs_break_even"].iloc[0], 158.8)
+        assert (df["margin_vs_break_even"].iloc[1]) < 0
 
         corridor = df["corridor_display"].iloc[0]
         df_filtered, _ = load_historical_jobs(

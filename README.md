@@ -78,6 +78,7 @@ Key visuals include:
 - Optional profitability tabs that compare $/m³ against $/km and contrast quoted vs cost-derived $/m³, including margin outlier tables.
 - An interactive Mapbox view showing each route with selectable colouring (job, client, origin city, or destination city) and toggles to focus on lines or points when clusters get dense.
 - A live network map that blends historical job filters with real-time truck telemetry, colouring corridors by profitability band and highlighting active trucks/routes.
+- A dynamic break-even engine that recalculates per-job cost floors using network-wide fuel, driver, maintenance and overhead settings stored in `global_parameters`.
 
 ```bash
 streamlit run streamlit_price_distribution.py
@@ -174,6 +175,7 @@ python routes_to_sqlite.py import-history historical_jobs.csv --geocode --route
 * **packing_rate_tiers**: tiered packing & unpacking rates by cubic metres.
 * **seasonal_uplifts**: date-range percentage uplifts (e.g. Oct–Dec peak season).
 * **depot_metro_zones**: depot centroids + radius used for the metro vs regional rule.
+* **global_parameters**: key/value store for network break-even baselines (per-m³ bands) and underlying operating costs (fuel, driver, maintenance, overhead).
 
 ---
 
