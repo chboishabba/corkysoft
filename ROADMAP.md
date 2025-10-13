@@ -60,7 +60,7 @@ This merges everything from:
 | **Packing / bad-access fees**                            |   🔜   | Add fixed-fee modifiers.               |
 | **Seasonal margin uplift (20–80 %)**                     |   🔜   | Add seasonal coefficient.              |
 | **Backhaul / container sharing**                         |   🔜   | Handle under-/over-utilisation.        |
-| **Truck / driver cost baselines**                        |   🔜   | Cost model by vehicle efficiency.      |
+| **Truck / driver cost baselines**                        |    ✅   | Base fuel/driver/maintenance + overhead parameters drive break-even engine. |
 
 ---
 
