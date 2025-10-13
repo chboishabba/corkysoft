@@ -27,6 +27,9 @@ PROFITABILITY_BANDS: Sequence[tuple[float, float, str]] = (
     (100.0, float("inf"), "100+ above break-even"),
 )
 
+DEFAULT_BREAK_EVEN_ABS_TOLERANCE = 5.0
+DEFAULT_BREAK_EVEN_REL_TOLERANCE = 0.02
+
 PROFITABILITY_COLOURS = {
     "Below break-even": [217, 83, 79],
     "0-50 above break-even": [240, 173, 78],
@@ -898,6 +901,50 @@ def classify_profit_band(value: Optional[float], break_even: float) -> str:
     return "Unknown"
 
 
+def classify_profitability_status(
+    value: Optional[float],
+    break_even: float,
+    *,
+    abs_tolerance: float = DEFAULT_BREAK_EVEN_ABS_TOLERANCE,
+    rel_tolerance: float = DEFAULT_BREAK_EVEN_REL_TOLERANCE,
+) -> str:
+    """Classify a price-per-m³ value as profitable, break-even or loss-leading.
+
+    Parameters
+    ----------
+    value:
+        Observed price-per-m³ for a job or lane. ``None`` and non-numeric values
+        are treated as ``"Unknown"``.
+    break_even:
+        Baseline break-even price-per-m³ used as the reference value.
+    abs_tolerance:
+        Absolute tolerance (in $/m³) when considering whether a value is within
+        the break-even band.  This defaults to ``5`` which equates to ±$5/m³.
+    rel_tolerance:
+        Relative tolerance expressed as a fraction of the break-even value.  The
+        effective tolerance is the larger of ``abs_tolerance`` and
+        ``break_even * rel_tolerance`` so the comparison remains stable across
+        different break-even baselines.
+    """
+
+    if value is None:
+        return "Unknown"
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return "Unknown"
+    if math.isnan(numeric_value):
+        return "Unknown"
+
+    diff = numeric_value - break_even
+    tolerance = max(abs_tolerance, abs(break_even) * rel_tolerance)
+    if abs(diff) <= tolerance:
+        return "Break-even"
+    if diff > 0:
+        return "Profitable"
+    return "Loss-leading"
+
+
 def prepare_profitability_route_data(
     df: pd.DataFrame,
     break_even: float,
@@ -921,6 +968,7 @@ def prepare_profitability_route_data(
                 "dest_lon",
                 "price_per_m3",
                 "profit_band",
+                "profitability_status",
                 "colour",
                 "tooltip",
             ]
@@ -931,6 +979,9 @@ def prepare_profitability_route_data(
         return map_df
 
     map_df["profit_band"] = map_df["price_per_m3"].apply(lambda value: classify_profit_band(value, break_even))
+    map_df["profitability_status"] = map_df["price_per_m3"].apply(
+        lambda value: classify_profitability_status(value, break_even)
+    )
     map_df["colour"] = map_df["profit_band"].map(PROFITABILITY_COLOURS)
     map_df["colour"] = map_df["colour"].apply(
         lambda value: value if isinstance(value, (list, tuple)) else [128, 128, 128]
@@ -941,7 +992,13 @@ def prepare_profitability_route_data(
         corridor = row.get("corridor_display", "Corridor")
         price = row.get("price_per_m3")
         price_text = "n/a" if pd.isna(price) else f"${price:,.0f} per m³"
-        return f"{corridor}: {row['profit_band']} ({price_text})"
+        status = row.get("profitability_status") or row.get("profit_band", "Unknown")
+        band = row.get("profit_band")
+        if band and band not in {"Unknown", status}:
+            descriptor = f"{status} – {band}"
+        else:
+            descriptor = status
+        return f"{corridor}: {descriptor} ({price_text})"
 
     map_df["tooltip"] = map_df.apply(_format_tooltip, axis=1)
     return map_df

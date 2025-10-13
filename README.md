@@ -225,7 +225,7 @@ python routes_to_sqlite.py import-history historical_jobs.csv --geocode --route
 * **geocode_cache**: cached lat/lon results keyed by `place,country`.
 * **historical_jobs**: imported quotes with optional normalised addresses, postcodes, distance/duration enrichments and audit timestamps.
 * **truck_positions**: latest lat/lon, status, heading and speed for each active truck.
-* **active_routes**: in-flight jobs mapped to trucks with origin/destination coordinates, progress, ETA and profit-band overlays.
+* **active_routes**: in-flight jobs mapped to trucks with origin/destination coordinates, progress, ETA, profit-band overlays and profitability status tags.
 * **lane_base_rates**: per-m³ and metro-hourly lane pricing keyed by corridor code.
 * **modifier_fees**: flat / per-m³ / percentage surcharges such as difficult access or piano handling.
 * **packing_rate_tiers**: tiered packing & unpacking rates by cubic metres.

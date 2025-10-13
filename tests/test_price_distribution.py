@@ -18,6 +18,7 @@ from analytics.price_distribution import (
     create_m3_vs_km_figure,
     filter_metro_jobs,
     load_historical_jobs,
+    prepare_profitability_route_data,
     prepare_route_map_data,
     summarise_distribution,
     summarise_profitability,
@@ -290,6 +291,31 @@ def test_create_metro_profitability_figure_has_multiple_traces(metro_profitabili
     assert len(fig.data) >= 2
     assert any(trace.type == "scatter" for trace in fig.data)
     assert any(trace.type == "histogram" for trace in fig.data)
+
+
+def test_prepare_profitability_route_data_tags_profitability():
+    df = pd.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "origin_lat": [-27.4705, -27.4705, -27.4705],
+            "origin_lon": [153.0260, 153.0260, 153.0260],
+            "dest_lat": [-33.8688, -33.8688, -33.8688],
+            "dest_lon": [151.2093, 151.2093, 151.2093],
+            "price_per_m3": [240.0, 252.0, 310.0],
+            "corridor_display": ["BNE-SYD", "BNE-SYD", "BNE-SYD"],
+        }
+    )
+
+    result = prepare_profitability_route_data(df, break_even=250.0)
+    statuses = result.set_index("id")["profitability_status"].to_dict()
+
+    assert statuses[1] == "Loss-leading"
+    assert statuses[2] == "Break-even"
+    assert statuses[3] == "Profitable"
+    assert all(
+        any(keyword in tooltip for keyword in ("Break-even", "Loss-leading", "Profitable"))
+        for tooltip in result["tooltip"]
+    )
 
 
 def test_prepare_route_map_data_filters_missing_coordinates():
