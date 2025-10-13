@@ -168,6 +168,12 @@ class GeocodeResult:
     suggestions: List[str] = field(default_factory=list)
     query_used: Optional[str] = None
 
+    def __iter__(self):
+        """Allow tuple unpacking compatibility (lon, lat, label)."""
+        yield self.lon
+        yield self.lat
+        yield self.label
+
 
 def _collect_autocorrect_suggestions(features: Sequence[dict]) -> List[str]:
     seen: set[str] = set()
