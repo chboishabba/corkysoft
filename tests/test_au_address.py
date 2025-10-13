@@ -63,3 +63,20 @@ def test_geocode_with_normalization_surfaces_suggestions() -> None:
     assert fake_client.calls, "Expected the Pelias client to be called"
     first_call = fake_client.calls[0]
     assert first_call["layers"] == ["address", "street", "locality"]
+
+
+def test_geocode_with_normalization_normalises_string_parameters() -> None:
+    fake_client = FakePeliasClient({})
+
+    geocode_with_normalization(
+        fake_client,
+        "1 queen st",
+        "Australia",
+        strict_layers="address , street ,locality ",
+        strict_sources="osm, wof",
+    )
+
+    assert fake_client.calls, "Expected the Pelias client to be called"
+    first_call = fake_client.calls[0]
+    assert first_call["layers"] == ["address", "street", "locality"]
+    assert first_call["sources"] == ["osm", "wof"]
