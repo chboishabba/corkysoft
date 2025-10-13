@@ -151,6 +151,14 @@ ID    Origin             → Origin (resolved)             Destination         �
 1     Melbourne          Melbourne VIC, Australia        Sydney              Sydney NSW, Australia             869.4    9.33   2,561.35     2025-10-02T14:41:10+00:00
 ```
 
+#### Import historical jobs
+
+```bash
+python routes_to_sqlite.py import-history historical_jobs.csv --geocode --route
+```
+
+`historical_jobs.csv` requires headers `date,origin,destination,m3,quoted_price,client`. The importer normalises whitespace and Australian postcodes, optionally geocodes/resolves addresses, and (with `--route`) enriches rows with travel distance/duration using OpenRouteService.
+
 ---
 
 ## 🗂 Database Schema
@@ -158,6 +166,7 @@ ID    Origin             → Origin (resolved)             Destination         �
 * **addresses**: normalised + geocoded address cache used by jobs and historical imports.
 * **jobs**: origin/destination foreign keys into `addresses`, hourly/per-km rates, computed distance, duration, costs, resolved coordinates, timestamps.
 * **geocode_cache**: cached lat/lon results keyed by `place,country`.
+* **historical_jobs**: imported quotes with optional normalised addresses, postcodes, distance/duration enrichments and audit timestamps.
 * **truck_positions**: latest lat/lon, status, heading and speed for each active truck.
 * **active_routes**: in-flight jobs mapped to trucks with origin/destination coordinates, progress, ETA and profit-band overlays.
 * **lane_base_rates**: per-m³ and metro-hourly lane pricing keyed by corridor code.

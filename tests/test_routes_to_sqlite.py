@@ -1,4 +1,5 @@
 import importlib
+import sqlite3
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -65,3 +66,20 @@ def test_pelias_geocode_uses_iterable_filters(monkeypatch: pytest.MonkeyPatch):
     assert lon == 153.0
     assert lat == -27.0
     assert label == "Test Address"
+
+
+def test_ensure_schema_creates_historical_jobs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    module = _import_routes_to_sqlite(monkeypatch)
+
+    db_path = tmp_path / "routes.db"
+    conn = sqlite3.connect(db_path)
+    module.ensure_schema(conn)
+
+    tables = {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+
+    conn.close()
+
+    assert "historical_jobs" in tables
