@@ -319,7 +319,7 @@ def build_route_map(
                 lat_values.extend([row["origin_lat"], row["dest_lat"], None])
                 lon_values.extend([row["origin_lon"], row["dest_lon"], None])
             figure.add_trace(
-                go.Scattermapbox(
+                go.Scattermap(
                     lat=lat_values,
                     lon=lon_values,
                     mode="lines",
@@ -365,7 +365,7 @@ def build_route_map(
                 )
 
             figure.add_trace(
-                go.Scattermapbox(
+                go.Scattermap(
                     lat=marker_lat,
                     lon=marker_lon,
                     mode="markers",
