@@ -91,6 +91,10 @@ def normalize_au_address(s: str) -> str:
     return t
 
 # ---------- Geocoding helpers ----------
+STRICT_PELIAS_LAYERS = ["address", "street", "locality"]
+STRICT_PELIAS_SOURCES = ["osm", "wof"]
+
+
 def pelias_geocode(place: str, country: str):
     """
     Try a stricter AU-focused search first (address/street/locality layers),
@@ -100,8 +104,8 @@ def pelias_geocode(place: str, country: str):
     # Strict attempt
     res = client.pelias_search(
         text=f"{norm}, {country}",
-        layers="address,street,locality",
-        sources="osm,wof",
+        layers=STRICT_PELIAS_LAYERS,
+        sources=STRICT_PELIAS_SOURCES,
         size=1
     )
     feats = res.get("features") or []
