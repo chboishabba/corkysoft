@@ -7,10 +7,12 @@ import re
 import argparse
 import csv
 import sys
-from typing import Optional
+from typing import Optional, Tuple
 
 import openrouteservice as ors
 from datetime import datetime, timezone
+
+from corkysoft.au_address import GeocodeResult, geocode_with_normalization
 
 DB_PATH = os.environ.get("ROUTES_DB", "routes.db")
 ORS_KEY = os.environ.get("ORS_API_KEY")  # export ORS_API_KEY=xxxx
@@ -135,89 +137,52 @@ def parse_date(value: str) -> datetime.date:
         raise ValueError(f"Unrecognised date format: {value!r}") from exc
 
 
-# ---------- Address normalization (AU-focused) ----------
-ABBREV = {
-    " cr ": " Circuit ",
-    " crt ": " Court ",
-    " ct ": " Court ",
-    " ave ": " Avenue ",
-    " av ": " Avenue ",
-    " rd ": " Road ",
-    " st ": " Street ",
-    " hwy ": " Highway ",
-    " pde ": " Parade ",
-    " dr ": " Drive ",
-    " wy ": " Way ",
-}
-
-def normalize_au_address(s: str) -> str:
-    if not s:
-        return s
-    t = f" {s.strip()} ".lower()
-    for k, v in ABBREV.items():
-        t = t.replace(k, v.lower())
-    t = " ".join(t.split())  # collapse spaces
-    # Capitalize words
-    t = " ".join(w.capitalize() for w in t.split())
-    # If there’s a postcode but no explicit state, default to QLD (common case you showed)
-    if " qld " not in (" " + t.lower() + " ") and any(ch.isdigit() for ch in t[-5:]):
-        t = t + ", QLD"
-    return t
-
 # ---------- Geocoding helpers ----------
-def pelias_geocode(place: str, country: str):
+def pelias_geocode(place: str, country: str) -> GeocodeResult:
     """
     Try a stricter AU-focused search first (address/street/locality layers),
-    then fall back to a looser text search. Returns (lon, lat, label).
+    then fall back to a looser text search. Returns a :class:`GeocodeResult`.
     """
-    norm = normalize_au_address(place)
-    # Strict attempt (valid kwargs for the ORS client)
-    res = client.pelias_search(
-        text=f"{norm}, {country}",
-        layers="address,street,locality",
-        sources="osm,wof",
-        size=1
-    )
-    feats = res.get("features") or []
-    if not feats:
-        # Fallback: looser search
-        res = client.pelias_search(text=f"{place}, {country}", size=1)
-        feats = res.get("features") or []
-        if not feats:
-            raise ValueError(f"No geocode found for: {place}, {country}")
+    return geocode_with_normalization(client, place, country)
 
-    f = feats[0]
-    lon, lat = f["geometry"]["coordinates"]
-    label = f["properties"].get("label") or f["properties"].get("name") or norm
-    return float(lon), float(lat), label
-
-def geocode_cached(conn: sqlite3.Connection, place: str, country: str):
-    """
-    Return (lon, lat, label?). Uses cache for coords; label is only returned when we geocode fresh.
-    """
+def geocode_cached(conn: sqlite3.Connection, place: str, country: str) -> GeocodeResult:
+    """Return geocode results with suggestions, consulting the cache when possible."""
     row = conn.execute(
         "SELECT lon, lat FROM geocode_cache WHERE place = ?",
         (f"{place}, {country}",)
     ).fetchone()
     if row:
-        return (row[0], row[1], None)
+        return GeocodeResult(
+            lon=float(row[0]),
+            lat=float(row[1]),
+            label=None,
+            normalization=None,
+            search_candidates=[place],
+        )
 
-    lon, lat, label = pelias_geocode(place, country)
+    result = pelias_geocode(place, country)
     conn.execute(
         "INSERT OR REPLACE INTO geocode_cache(place, lon, lat, ts) VALUES (?,?,?,?)",
-        (f"{place}, {country}", lon, lat, datetime.now(timezone.utc).isoformat())
+        (
+            f"{place}, {country}",
+            result.lon,
+            result.lat,
+            datetime.now(timezone.utc).isoformat(),
+        )
     )
     conn.commit()
     time.sleep(GEOCODE_BACKOFF)
-    return (lon, lat, label)
+    return result
 
 # ---------- Routing / Costs ----------
-def route_km_hours(conn: sqlite3.Connection, origin: str, destination: str, country: str):
-    o_lon, o_lat, o_label = geocode_cached(conn, origin, country)
-    d_lon, d_lat, d_label = geocode_cached(conn, destination, country)
+def route_km_hours(
+    conn: sqlite3.Connection, origin: str, destination: str, country: str
+) -> Tuple[float, float, GeocodeResult, GeocodeResult]:
+    origin_geo = geocode_cached(conn, origin, country)
+    dest_geo = geocode_cached(conn, destination, country)
 
     route = client.directions(
-        coordinates=[[o_lon, o_lat], [d_lon, d_lat]],
+        coordinates=[[origin_geo.lon, origin_geo.lat], [dest_geo.lon, dest_geo.lat]],
         profile="driving-car",
         format="json"
     )
@@ -225,7 +190,7 @@ def route_km_hours(conn: sqlite3.Connection, origin: str, destination: str, coun
     meters = float(summary["distance"])
     seconds = float(summary["duration"])
     time.sleep(ROUTE_BACKOFF)
-    return (meters / 1000.0, seconds / 3600.0, o_label, d_label, o_lon, o_lat, d_lon, d_lat)
+    return meters / 1000.0, seconds / 3600.0, origin_geo, dest_geo
 
 def cost_breakdown(distance_km: float, duration_hr: float, hourly_rate: float, per_km_rate: float):
     cost_time = duration_hr * hourly_rate
@@ -296,15 +261,33 @@ def import_historical_jobs(
 
                 if geocode and origin_norm:
                     try:
-                        origin_lon, origin_lat, origin_label = geocode_cached(conn, origin_norm, country)
-                        origin_norm = origin_label or origin_norm
+                        origin_geo = geocode_cached(conn, origin_norm, country)
+                        origin_lon, origin_lat = origin_geo.lon, origin_geo.lat
+                        if origin_geo.label:
+                            origin_norm = origin_geo.label
+                        elif origin_geo.normalization and origin_geo.normalization.canonical:
+                            origin_norm = origin_geo.normalization.canonical
+                        if origin_geo.normalization and origin_geo.normalization.autocorrections:
+                            print(
+                                f"    Origin suggestions: {', '.join(origin_geo.normalization.autocorrections)}",
+                                file=sys.stderr,
+                            )
                     except Exception as exc:
                         print(f"[WARN] Line {idx}: failed to geocode origin {origin!r}: {exc}", file=sys.stderr)
 
                 if geocode and dest_norm:
                     try:
-                        dest_lon, dest_lat, dest_label = geocode_cached(conn, dest_norm, country)
-                        dest_norm = dest_label or dest_norm
+                        dest_geo = geocode_cached(conn, dest_norm, country)
+                        dest_lon, dest_lat = dest_geo.lon, dest_geo.lat
+                        if dest_geo.label:
+                            dest_norm = dest_geo.label
+                        elif dest_geo.normalization and dest_geo.normalization.canonical:
+                            dest_norm = dest_geo.normalization.canonical
+                        if dest_geo.normalization and dest_geo.normalization.autocorrections:
+                            print(
+                                f"    Destination suggestions: {', '.join(dest_geo.normalization.autocorrections)}",
+                                file=sys.stderr,
+                            )
                     except Exception as exc:
                         print(f"[WARN] Line {idx}: failed to geocode destination {destination!r}: {exc}", file=sys.stderr)
 
@@ -406,9 +389,22 @@ def process_pending(conn: sqlite3.Connection, limit: int = 1000):
     for (jid, origin, dest, hourly_rate, per_km_rate, country) in rows:
         try:
             country = country or COUNTRY_DEFAULT
-            (distance_km, duration_hr,
-             o_label, d_label,
-             o_lon, o_lat, d_lon, d_lat) = route_km_hours(conn, origin, dest, country)
+            (
+                distance_km,
+                duration_hr,
+                origin_geo,
+                dest_geo,
+            ) = route_km_hours(conn, origin, dest, country)
+
+            def resolved_label(geo: GeocodeResult, fallback: str) -> str:
+                if geo.label:
+                    return geo.label
+                if geo.normalization and geo.normalization.canonical:
+                    return geo.normalization.canonical
+                return fallback
+
+            o_label = resolved_label(origin_geo, origin)
+            d_label = resolved_label(dest_geo, dest)
 
             cost_time, cost_dist, cost_total = cost_breakdown(distance_km, duration_hr, hourly_rate, per_km_rate)
             conn.execute(
@@ -421,12 +417,42 @@ def process_pending(conn: sqlite3.Connection, limit: int = 1000):
                     updated_at=?
                 WHERE id=?
                 """,
-                (distance_km, duration_hr, cost_time, cost_dist, cost_total,
-                 o_label, d_label, o_lon, o_lat, d_lon, d_lat,
-                 datetime.now(timezone.utc).isoformat(), jid)
+                (
+                    distance_km,
+                    duration_hr,
+                    cost_time,
+                    cost_dist,
+                    cost_total,
+                    o_label,
+                    d_label,
+                    origin_geo.lon,
+                    origin_geo.lat,
+                    dest_geo.lon,
+                    dest_geo.lat,
+                    datetime.now(timezone.utc).isoformat(),
+                    jid,
+                )
             )
             conn.commit()
             print(f"[OK] #{jid} {origin} → {dest} | {distance_km:.1f} km | {duration_hr:.2f} h | ${cost_total:,.2f}")
+            if origin_geo.normalization:
+                if origin_geo.normalization.alternatives:
+                    print(
+                        f"    Origin candidates: {', '.join(origin_geo.normalization.candidates)}"
+                    )
+                if origin_geo.normalization.autocorrections:
+                    print(
+                        f"    Origin suggestions: {', '.join(origin_geo.normalization.autocorrections)}"
+                    )
+            if dest_geo.normalization:
+                if dest_geo.normalization.alternatives:
+                    print(
+                        f"    Destination candidates: {', '.join(dest_geo.normalization.candidates)}"
+                    )
+                if dest_geo.normalization.autocorrections:
+                    print(
+                        f"    Destination suggestions: {', '.join(dest_geo.normalization.autocorrections)}"
+                    )
         except Exception as e:
             print(f"[ERR] #{jid} {origin} → {dest}: {e}")
 

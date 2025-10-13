@@ -1033,6 +1033,66 @@ with connection_scope() as conn:
             st.write(
                 f"**Distance:** {quote_result.distance_km:.1f} km ({quote_result.duration_hr:.1f} h)"
             )
+
+            suggestion_cols = st.columns(2)
+
+            def _render_address_feedback(
+                col: "st.delta_generator.DeltaGenerator",
+                label: str,
+                candidates: Optional[List[str]],
+                suggestions: Optional[List[str]],
+                ambiguities: Optional[Dict[str, Sequence[str]]],
+            ) -> None:
+                clean_candidates = [c for c in candidates or [] if c]
+                clean_suggestions = [s for s in suggestions or [] if s]
+                clean_ambiguities = {
+                    abbr: list(options)
+                    for abbr, options in (ambiguities or {}).items()
+                    if options
+                }
+                if not (
+                    clean_candidates
+                    or clean_suggestions
+                    or clean_ambiguities
+                ):
+                    col.caption(f"No {label.lower()} corrections suggested.")
+                    return
+
+                col.markdown(f"**{label} corrections & suggestions**")
+                if clean_candidates:
+                    col.caption("Candidates considered during normalization:")
+                    col.markdown(
+                        "\n".join(f"- {candidate}" for candidate in clean_candidates)
+                    )
+                if clean_suggestions:
+                    col.caption("Autocorrected place names from geocoding:")
+                    col.markdown(
+                        "\n".join(f"- {suggestion}" for suggestion in clean_suggestions)
+                    )
+                if clean_ambiguities:
+                    col.caption("Ambiguous abbreviations detected:")
+                    col.markdown(
+                        "\n".join(
+                            f"- **{abbr}** → {', '.join(options)}"
+                            for abbr, options in clean_ambiguities.items()
+                        )
+                    )
+
+            _render_address_feedback(
+                suggestion_cols[0],
+                "Origin",
+                quote_result.origin_candidates,
+                quote_result.origin_suggestions,
+                quote_result.origin_ambiguities,
+            )
+            _render_address_feedback(
+                suggestion_cols[1],
+                "Destination",
+                quote_result.destination_candidates,
+                quote_result.destination_suggestions,
+                quote_result.destination_ambiguities,
+            )
+
             metric_cols = st.columns(4)
             metric_cols[0].metric(
                 "Final quote", format_currency(quote_result.final_quote)
