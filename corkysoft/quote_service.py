@@ -5,11 +5,13 @@ import json
 import os
 import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import openrouteservice as ors
+
+from corkysoft.au_address import GeocodeResult, geocode_with_normalization
 
 COUNTRY_DEFAULT = os.environ.get("ORS_COUNTRY", "Australia")
 GEOCODE_BACKOFF = 0.2
@@ -195,21 +197,9 @@ PRICING_MODELS: Sequence[PricingModel] = (
 
 def pelias_geocode(
     place: str, country: str, *, client: Optional[ors.Client] = None
-) -> Tuple[float, float, str]:
-    query = f"{place}, {country}"
+) -> GeocodeResult:
     resolved_client = get_ors_client(client)
-    res = resolved_client.pelias_search(text=query, size=1)
-    feats = res.get("features") or []
-    if not feats:
-        raise ValueError(f"No geocode found for: {query}")
-    feat = feats[0]
-    lon, lat = feat["geometry"]["coordinates"]
-    label = (
-        feat["properties"].get("label")
-        or feat["properties"].get("name")
-        or normalize_place(place)
-    )
-    return float(lon), float(lat), label
+    return geocode_with_normalization(resolved_client, place, country)
 
 
 def geocode_cached(
@@ -218,7 +208,7 @@ def geocode_cached(
     country: str,
     *,
     client: Optional[ors.Client] = None,
-) -> Tuple[float, float, Optional[str]]:
+) -> GeocodeResult:
     norm = normalize_place(place)
     cache_key = f"{norm}, {country}"
     row = conn.execute(
@@ -226,16 +216,27 @@ def geocode_cached(
         (cache_key,),
     ).fetchone()
     if row:
-        return float(row[0]), float(row[1]), None
+        return GeocodeResult(
+            lon=float(row[0]),
+            lat=float(row[1]),
+            label=None,
+            normalization=None,
+            search_candidates=[norm],
+        )
 
-    lon, lat, label = pelias_geocode(norm, country, client=client)
+    result = pelias_geocode(norm, country, client=client)
     conn.execute(
         "INSERT OR REPLACE INTO geocode_cache(place, lon, lat, ts) VALUES (?,?,?,?)",
-        (cache_key, lon, lat, datetime.now(timezone.utc).isoformat()),
+        (
+            cache_key,
+            result.lon,
+            result.lat,
+            datetime.now(timezone.utc).isoformat(),
+        ),
     )
     conn.commit()
     time.sleep(GEOCODE_BACKOFF)
-    return lon, lat, label
+    return result
 
 
 def route_distance(
@@ -245,17 +246,17 @@ def route_distance(
     country: str,
     *,
     client: Optional[ors.Client] = None,
-) -> Tuple[float, float, str, str, float, float, float, float]:
+) -> Tuple[float, float, GeocodeResult, GeocodeResult]:
     resolved_client = get_ors_client(client)
-    o_lon, o_lat, o_label = geocode_cached(
+    origin_geo = geocode_cached(
         conn, origin, country, client=resolved_client
     )
-    d_lon, d_lat, d_label = geocode_cached(
+    dest_geo = geocode_cached(
         conn, destination, country, client=resolved_client
     )
 
     route = resolved_client.directions(
-        coordinates=[[o_lon, o_lat], [d_lon, d_lat]],
+        coordinates=[[origin_geo.lon, origin_geo.lat], [dest_geo.lon, dest_geo.lat]],
         profile="driving-car",
         format="json",
     )
@@ -263,16 +264,7 @@ def route_distance(
     meters = float(summary["distance"])
     seconds = float(summary["duration"])
     time.sleep(ROUTE_BACKOFF)
-    return (
-        meters / 1000.0,
-        seconds / 3600.0,
-        o_label,
-        d_label,
-        o_lon,
-        o_lat,
-        d_lon,
-        d_lat,
-    )
+    return meters / 1000.0, seconds / 3600.0, origin_geo, dest_geo
 
 
 def choose_pricing_model(distance_km: float) -> PricingModel:
@@ -370,7 +362,13 @@ class QuoteResult:
     origin_lat: float
     dest_lon: float
     dest_lat: float
-    summary_text: str
+    summary_text: str = ""
+    origin_candidates: List[str] = field(default_factory=list)
+    destination_candidates: List[str] = field(default_factory=list)
+    origin_suggestions: List[str] = field(default_factory=list)
+    destination_suggestions: List[str] = field(default_factory=list)
+    origin_ambiguities: Dict[str, Sequence[str]] = field(default_factory=dict)
+    destination_ambiguities: Dict[str, Sequence[str]] = field(default_factory=dict)
 
 
 def format_currency(amount: float) -> str:
@@ -424,21 +422,60 @@ def calculate_quote(
     *,
     client: Optional[ors.Client] = None,
 ) -> QuoteResult:
-    (
-        distance_km,
-        duration_hr,
-        origin_resolved,
-        destination_resolved,
-        o_lon,
-        o_lat,
-        d_lon,
-        d_lat,
-    ) = route_distance(
+    distance_km, duration_hr, origin_geo, dest_geo = route_distance(
         conn,
         inputs.origin,
         inputs.destination,
         inputs.country,
         client=client,
+    )
+
+    def resolved_label(geo: GeocodeResult, fallback: str) -> str:
+        if geo.label:
+            return geo.label
+        if geo.normalization and geo.normalization.canonical:
+            return geo.normalization.canonical
+        return fallback
+
+    origin_resolved = resolved_label(origin_geo, normalize_place(inputs.origin))
+    destination_resolved = resolved_label(
+        dest_geo, normalize_place(inputs.destination)
+    )
+
+    o_lon, o_lat = origin_geo.lon, origin_geo.lat
+    d_lon, d_lat = dest_geo.lon, dest_geo.lat
+
+    origin_candidates = (
+        origin_geo.normalization.candidates
+        if origin_geo.normalization
+        else origin_geo.search_candidates
+    )
+    destination_candidates = (
+        dest_geo.normalization.candidates
+        if dest_geo.normalization
+        else dest_geo.search_candidates
+    )
+
+    origin_suggestions = (
+        origin_geo.normalization.autocorrections
+        if origin_geo.normalization
+        else origin_geo.suggestions
+    )
+    destination_suggestions = (
+        dest_geo.normalization.autocorrections
+        if dest_geo.normalization
+        else dest_geo.suggestions
+    )
+
+    origin_ambiguities = (
+        dict(origin_geo.normalization.ambiguous_tokens)
+        if origin_geo.normalization
+        else {}
+    )
+    destination_ambiguities = (
+        dict(dest_geo.normalization.ambiguous_tokens)
+        if dest_geo.normalization
+        else {}
     )
 
     model = choose_pricing_model(distance_km)
@@ -480,6 +517,12 @@ def calculate_quote(
         dest_lon=d_lon,
         dest_lat=d_lat,
         summary_text="",
+        origin_candidates=list(origin_candidates or []),
+        destination_candidates=list(destination_candidates or []),
+        origin_suggestions=list(origin_suggestions or []),
+        destination_suggestions=list(destination_suggestions or []),
+        origin_ambiguities=origin_ambiguities,
+        destination_ambiguities=destination_ambiguities,
     )
     result.summary_text = build_summary(inputs, result)
     return result
