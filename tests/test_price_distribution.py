@@ -10,6 +10,7 @@ pd = pytest.importorskip("pandas")
 from analytics.db import ensure_global_parameters_table, set_parameter_value
 from analytics.price_distribution import (
     BREAK_EVEN_KEY,
+    build_heatmap_source,
     create_histogram,
     create_m3_margin_figure,
     create_m3_vs_km_figure,
@@ -256,6 +257,54 @@ def test_prepare_route_map_data_filters_missing_coordinates():
     assert len(result) == 1
     assert result.iloc[0]["id"] == 1
     assert result.iloc[0]["map_colour_value"] == "1"
+
+
+def test_build_heatmap_source_counts_and_weights():
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705, -16.92],
+            "origin_lon": [153.026, 145.77],
+            "dest_lat": [-33.8688, -37.8136],
+            "dest_lon": [151.2093, 144.9631],
+            "distance_km": [50.0, 240.0],
+            "volume_m3": [12.5, 20.0],
+            "margin_total": [2500.0, -500.0],
+        }
+    )
+
+    result = build_heatmap_source(df)
+    assert set(result.columns) == {"lat", "lon", "weight"}
+    assert len(result) == 4
+    assert result["weight"].eq(1.0).all()
+
+    margin_result = build_heatmap_source(df, weight_column="margin_total")
+    assert len(margin_result) == 4
+    assert set(margin_result["weight"].round(2)) == {2500.0, -500.0}
+
+
+def test_build_heatmap_source_metro_and_volume_weighting():
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705, -16.92, -34.9285],
+            "origin_lon": [153.026, 145.77, 138.6007],
+            "dest_lat": [-33.8688, -37.8136, -31.9535],
+            "dest_lon": [151.2093, 144.9631, 115.857],
+            "distance_km": [85.0, 150.0, 95.0],
+            "volume_m3": [10.0, 30.0, 5.0],
+        }
+    )
+
+    volume_result = build_heatmap_source(df, weight_column="volume_m3", metro_only=True)
+    assert len(volume_result) == 4
+    assert set(volume_result["weight"].round(2)) == {10.0, 5.0}
+    assert volume_result["lat"].isin([-27.4705, -33.8688, -34.9285, -31.9535]).all()
+
+    with pytest.raises(KeyError):
+        build_heatmap_source(df, weight_column="unknown_metric")
+
+    df_no_distance = df.drop(columns=["distance_km"])
+    with pytest.raises(KeyError):
+        build_heatmap_source(df_no_distance, metro_only=True)
 
 
 def test_prepare_route_map_data_missing_columns_raise():

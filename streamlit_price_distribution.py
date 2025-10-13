@@ -17,10 +17,13 @@ from analytics.price_distribution import (
     DistributionSummary,
     ProfitabilitySummary,
     PROFITABILITY_COLOURS,
+    available_heatmap_weightings,
+    build_heatmap_source,
     create_histogram,
     create_m3_margin_figure,
     create_m3_vs_km_figure,
     ensure_break_even_parameter,
+    filter_jobs_by_distance,
     load_historical_jobs,
     prepare_profitability_map_data,
     prepare_profitability_route_data,
@@ -719,53 +722,159 @@ with connection_scope() as conn:
 
     truck_positions = load_truck_positions(conn)
     active_routes = load_active_routes(conn)
-    network_routes = prepare_profitability_map_data(filtered_df, break_even_value)
 
     with tab_map["Route maps"]:
         st.markdown("### Corridor visualisation")
-        colour_dimensions = {
-            "Job ID": "id",
-            "Client": "client_display",
-            "Destination city": "destination_city",
-            "Origin city": "origin_city",
-        }
-        available_colour_dimensions = {
-            label: column
-            for label, column in colour_dimensions.items()
-            if column in filtered_df.columns
-        }
+        map_mode = st.radio(
+            "Visualisation mode",
+            ("Routes/points", "Heatmap"),
+            horizontal=True,
+            help="Switch between individual routes/points and an aggregate density heatmap.",
+        )
+        metro_only = st.checkbox(
+            "Limit to metro jobs (≤100 km)",
+            value=False,
+            help="Apply a distance filter using distance_km ≤ 100 to focus on metro corridors.",
+        )
 
-        if not available_colour_dimensions:
-            st.info("No categorical columns available to colour the route map.")
-        else:
-            colour_label = st.selectbox(
-                "Colour routes by",
-                options=list(available_colour_dimensions.keys()),
-                help="Choose which attribute drives the route and point colouring.",
-            )
-            show_routes = st.checkbox("Show route lines", value=True)
-            show_points = st.checkbox("Show origin/destination points", value=True)
-
-            selected_column = available_colour_dimensions[colour_label]
+        scoped_df = filtered_df
+        if metro_only:
             try:
-                plotly_map_df = _prepare_plotly_map_data(filtered_df, selected_column)
-            except KeyError as exc:
-                st.warning(str(exc))
-                plotly_map_df = pd.DataFrame()
-
-            if plotly_map_df.empty:
-                st.info("No routes with coordinates are available for the current filters.")
-            elif not show_routes and not show_points:
-                st.info("Enable at least one layer to view the route map.")
-            else:
-                route_map = build_route_map(
-                    plotly_map_df,
-                    colour_label,
-                    show_routes=show_routes,
-                    show_points=show_points,
+                scoped_df = filter_jobs_by_distance(filtered_df, metro_only=True)
+            except KeyError:
+                st.warning(
+                    "Distance data is unavailable, showing all jobs instead of applying the metro filter."
                 )
-                st.plotly_chart(route_map, use_container_width=True)
+                scoped_df = filtered_df
 
+        if map_mode == "Routes/points":
+            colour_dimensions = {
+                "Job ID": "id",
+                "Client": "client_display",
+                "Destination city": "destination_city",
+                "Origin city": "origin_city",
+            }
+            available_colour_dimensions = {
+                label: column
+                for label, column in colour_dimensions.items()
+                if column in scoped_df.columns
+            }
+
+            if not available_colour_dimensions:
+                st.info("No categorical columns available to colour the route map.")
+            elif scoped_df.empty:
+                st.info("No jobs match the metro filter for the current selection.")
+            else:
+                colour_label = st.selectbox(
+                    "Colour routes by",
+                    options=list(available_colour_dimensions.keys()),
+                    help="Choose which attribute drives the route and point colouring.",
+                )
+                show_routes = st.checkbox("Show route lines", value=True)
+                show_points = st.checkbox("Show origin/destination points", value=True)
+
+                selected_column = available_colour_dimensions[colour_label]
+                try:
+                    plotly_map_df = _prepare_plotly_map_data(scoped_df, selected_column)
+                except KeyError as exc:
+                    st.warning(str(exc))
+                    plotly_map_df = pd.DataFrame()
+
+                if plotly_map_df.empty:
+                    st.info(
+                        "No routes with coordinates are available for the current filters."
+                    )
+                elif not show_routes and not show_points:
+                    st.info("Enable at least one layer to view the route map.")
+                else:
+                    route_map = build_route_map(
+                        plotly_map_df,
+                        colour_label,
+                        show_routes=show_routes,
+                        show_points=show_points,
+                    )
+                    st.plotly_chart(route_map, use_container_width=True)
+        else:
+            weight_options = available_heatmap_weightings(filtered_df)
+            weight_label = st.selectbox(
+                "Heatmap weighting",
+                options=list(weight_options.keys()),
+                help="Choose which metric influences the heatmap intensity.",
+            )
+            weight_column = weight_options[weight_label]
+
+            if scoped_df.empty:
+                st.info("No jobs match the metro filter for the current selection.")
+            else:
+                try:
+                    heatmap_source = build_heatmap_source(
+                        scoped_df,
+                        weight_column=weight_column,
+                    )
+                except KeyError as exc:
+                    st.warning(str(exc))
+                    heatmap_source = pd.DataFrame(columns=["lat", "lon", "weight"])
+
+                if heatmap_source.empty:
+                    st.info("No geocoded points are available for the current filters.")
+                else:
+                    centre = {
+                        "lat": float(heatmap_source["lat"].mean()),
+                        "lon": float(heatmap_source["lon"].mean()),
+                    }
+                    colour_scales = {
+                        None: px.colors.sequential.YlOrRd,
+                        "volume_m3": px.colors.sequential.Blues,
+                        "margin_total": px.colors.diverging.RdYlGn,
+                        "margin_per_m3": px.colors.sequential.Magma,
+                        "margin_total_pct": px.colors.diverging.BrBG,
+                        "margin_per_m3_pct": px.colors.diverging.BrBG,
+                    }
+                    midpoint_columns = {
+                        "margin_total",
+                        "margin_per_m3",
+                        "margin_total_pct",
+                        "margin_per_m3_pct",
+                    }
+                    midpoint = 0.0 if weight_column in midpoint_columns else None
+                    heatmap_fig = px.density_mapbox(
+                        heatmap_source,
+                        lat="lat",
+                        lon="lon",
+                        z="weight",
+                        radius=45,
+                        opacity=0.8,
+                        color_continuous_scale=colour_scales.get(
+                            weight_column, px.colors.sequential.YlOrRd
+                        ),
+                        color_continuous_midpoint=midpoint,
+                    )
+                    hover_templates = {
+                        None: f"{weight_label}: %{{z:.0f}} jobs<extra></extra>",
+                        "volume_m3": f"{weight_label}: %{{z:.1f}} m³<extra></extra>",
+                        "margin_total": f"{weight_label}: $%{{z:,.0f}}<extra></extra>",
+                        "margin_per_m3": f"{weight_label}: $%{{z:,.0f}}/m³<extra></extra>",
+                        "margin_total_pct": f"{weight_label}: %{{z:.1%}}<extra></extra>",
+                        "margin_per_m3_pct": f"{weight_label}: %{{z:.1%}}<extra></extra>",
+                    }
+                    hover_template = hover_templates.get(
+                        weight_column, f"{weight_label}: %{{z:.2f}}<extra></extra>"
+                    )
+                    for trace in heatmap_fig.data:
+                        trace.hovertemplate = hover_template
+
+                    heatmap_fig.update_layout(
+                        mapbox={
+                            "style": "carto-positron",
+                            "center": centre,
+                            "zoom": 4,
+                        },
+                        margin={"l": 0, "r": 0, "t": 0, "b": 0},
+                        coloraxis_colorbar={"title": weight_label},
+                    )
+                    st.plotly_chart(heatmap_fig, use_container_width=True)
+
+        network_routes = prepare_profitability_map_data(scoped_df, break_even_value)
         render_network_map(network_routes, truck_positions, active_routes)
 
     with tab_map["Quote builder"]:

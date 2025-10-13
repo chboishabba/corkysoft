@@ -46,6 +46,16 @@ PROFITABILITY_WIDTHS = {
 BREAK_EVEN_KEY = "break_even_per_m3"
 DEFAULT_BREAK_EVEN_VALUE = 250.0
 DEFAULT_BREAK_EVEN_DESCRIPTION = "Baseline break-even $/m³ across the network"
+METRO_DISTANCE_THRESHOLD_KM = 100.0
+
+HEATMAP_WEIGHTING_CANDIDATES: Sequence[tuple[str, Optional[str]]] = (
+    ("Job count", None),
+    ("Volume (m³)", "volume_m3"),
+    ("Margin ($)", "margin_total"),
+    ("Margin per m³", "margin_per_m3"),
+    ("Margin %", "margin_total_pct"),
+    ("Margin per m³ %", "margin_per_m3_pct"),
+)
 
 # Candidate column names used in legacy exports.
 DATE_COLUMNS = [
@@ -373,6 +383,93 @@ def prepare_route_map_data(
     colour_series = filtered[colour_column].fillna(placeholder)
     filtered["map_colour_value"] = colour_series.astype(str)
     return filtered
+
+
+def filter_jobs_by_distance(
+    df: pd.DataFrame,
+    *,
+    metro_only: bool = False,
+    threshold_km: float = METRO_DISTANCE_THRESHOLD_KM,
+) -> pd.DataFrame:
+    """Filter jobs by ``distance_km`` when metro-only mode is requested."""
+
+    if not metro_only:
+        return df.copy()
+    if "distance_km" not in df.columns:
+        raise KeyError("'distance_km' column is required to apply the metro filter")
+
+    distances = pd.to_numeric(df["distance_km"], errors="coerce")
+    mask = distances <= threshold_km
+    filtered = df.loc[mask].copy()
+    return filtered
+
+
+def available_heatmap_weightings(df: pd.DataFrame) -> dict[str, Optional[str]]:
+    """Return the heatmap weighting options available for the dataframe."""
+
+    options: dict[str, Optional[str]] = {}
+    for label, column in HEATMAP_WEIGHTING_CANDIDATES:
+        if column is None or column in df.columns:
+            options[label] = column
+    return options
+
+
+def build_heatmap_source(
+    df: pd.DataFrame,
+    weight_column: Optional[str] = None,
+    *,
+    metro_only: bool = False,
+    threshold_km: float = METRO_DISTANCE_THRESHOLD_KM,
+) -> pd.DataFrame:
+    """Build a point-based dataframe suitable for density heatmaps."""
+
+    if df.empty:
+        return pd.DataFrame(columns=["lat", "lon", "weight"])
+
+    scoped = filter_jobs_by_distance(
+        df,
+        metro_only=metro_only,
+        threshold_km=threshold_km,
+    )
+    if scoped.empty:
+        return pd.DataFrame(columns=["lat", "lon", "weight"])
+
+    if weight_column is None:
+        weights = pd.Series(1.0, index=scoped.index, dtype=float)
+    else:
+        if weight_column not in scoped.columns:
+            raise KeyError(
+                f"'{weight_column}' column is required for heatmap weighting"
+            )
+        weights = pd.to_numeric(scoped[weight_column], errors="coerce")
+
+    coordinate_pairs = [
+        ("origin_lat", "origin_lon"),
+        ("dest_lat", "dest_lon"),
+    ]
+
+    frames: list[pd.DataFrame] = []
+    for lat_column, lon_column in coordinate_pairs:
+        if lat_column not in scoped.columns or lon_column not in scoped.columns:
+            continue
+        coords = scoped[[lat_column, lon_column]].copy()
+        coords = coords.rename(columns={lat_column: "lat", lon_column: "lon"})
+        coords["weight"] = weights
+        coords = coords.dropna(subset=["lat", "lon"])
+        coords["weight"] = pd.to_numeric(coords["weight"], errors="coerce")
+        coords = coords.dropna(subset=["weight"])
+        if not coords.empty:
+            frames.append(coords)
+
+    if not frames:
+        return pd.DataFrame(columns=["lat", "lon", "weight"])
+
+    result = pd.concat(frames, ignore_index=True)
+    result["lat"] = pd.to_numeric(result["lat"], errors="coerce")
+    result["lon"] = pd.to_numeric(result["lon"], errors="coerce")
+    result = result.dropna(subset=["lat", "lon", "weight"])
+    result["weight"] = result["weight"].astype(float)
+    return result.reset_index(drop=True)
 
 
 @dataclass
