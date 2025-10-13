@@ -78,6 +78,7 @@ Key visuals include:
 - Optional profitability tabs that compare $/m³ against $/km and contrast quoted vs cost-derived $/m³, including margin outlier tables.
 - An interactive Mapbox view showing each route with selectable colouring (job, client, origin city, or destination city) and toggles to focus on lines or points when clusters get dense.
 - A live network map that blends historical job filters with real-time truck telemetry, colouring corridors by profitability band and highlighting active trucks/routes.
+- Corridor insights summarising job counts, weighted $/m³ and below break-even ratios aggregated into bidirectional lanes for systemic diagnostics.
 - A non-technical optimizer tab that recommends corridor price uplifts from the filtered data and offers a CSV export for action lists.
 
 ```bash
@@ -85,6 +86,30 @@ streamlit run streamlit_price_distribution.py
 ```
 
 By default it reads from `routes.db`. Set `CORKYSOFT_DB` or `ROUTES_DB` to point at a different SQLite database.
+
+### Corridor analytics
+
+Use `aggregate_corridor_performance` to collapse the filtered dataset into bidirectional lanes and surface systemic KPIs:
+
+```python
+from analytics.price_distribution import aggregate_corridor_performance, load_historical_jobs
+from analytics.db import connection_scope
+
+with connection_scope() as conn:
+    df, _ = load_historical_jobs(conn)
+
+corridor_summary = aggregate_corridor_performance(df, break_even=250.0)
+print(
+    corridor_summary[
+        [
+            "corridor_pair",
+            "job_count",
+            "weighted_price_per_m3",
+            "below_break_even_ratio",
+        ]
+    ].head()
+)
+```
 
 #### Mock telemetry ingestion
 
