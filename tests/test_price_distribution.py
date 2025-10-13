@@ -10,6 +10,7 @@ pd = pytest.importorskip("pandas")
 from analytics.db import ensure_global_parameters_table, set_parameter_value
 from analytics.price_distribution import (
     BREAK_EVEN_KEY,
+    aggregate_corridor_performance,
     build_heatmap_source,
     create_histogram,
     create_metro_profitability_figure,
@@ -364,3 +365,71 @@ def test_prepare_route_map_data_missing_columns_raise():
 
     with pytest.raises(KeyError):
         prepare_route_map_data(df, "id")
+
+
+def test_aggregate_corridor_performance_combines_bidirectional_lanes():
+    df = pd.DataFrame(
+        {
+            "origin": ["Brisbane", "Melbourne", "Brisbane"],
+            "destination": ["Melbourne", "Brisbane", "Sydney"],
+            "price_per_m3": [300.0, 280.0, 240.0],
+            "volume_m3": [20.0, 10.0, 12.0],
+            "revenue_total": [6000.0, 2800.0, 2880.0],
+            "distance_km": [1700.0, 1700.0, 900.0],
+            "margin_per_m3": [50.0, 30.0, 10.0],
+            "margin_total": [1000.0, 300.0, 120.0],
+            "margin_total_pct": [0.20, 0.12, 0.05],
+            "revenue_per_km": [3.53, 1.65, 3.20],
+        }
+    )
+
+    aggregated = aggregate_corridor_performance(df, break_even=250.0)
+    assert set(aggregated["corridor_pair"]) == {
+        "Brisbane ↔ Melbourne",
+        "Brisbane ↔ Sydney",
+    }
+
+    bne_mel = aggregated.loc[
+        aggregated["corridor_pair"] == "Brisbane ↔ Melbourne"
+    ].iloc[0]
+    assert bne_mel["job_count"] == 2
+    assert pytest.approx(bne_mel["share_of_jobs"], rel=1e-6) == 2 / 3
+    assert pytest.approx(bne_mel["weighted_price_per_m3"], rel=1e-6) == (
+        6000.0 + 2800.0
+    ) / (20.0 + 10.0)
+    assert pytest.approx(bne_mel["below_break_even_ratio"], rel=1e-6) == 0.0
+    assert pytest.approx(bne_mel["median_price_per_m3"], rel=1e-6) == 290.0
+    assert pytest.approx(bne_mel["share_of_volume"], rel=1e-6) == (20.0 + 10.0) / (
+        20.0 + 10.0 + 12.0
+    )
+    assert pytest.approx(bne_mel["margin_per_m3_median"], rel=1e-6) == 40.0
+    assert pytest.approx(bne_mel["margin_total_sum"], rel=1e-6) == 1300.0
+    assert pytest.approx(bne_mel["margin_total_pct_median"], rel=1e-6) == 0.16
+    assert bne_mel["revenue_per_km_median"] == pytest.approx(
+        (3.53 + 1.65) / 2,
+        rel=1e-6,
+    )
+
+    bne_syd = aggregated.loc[
+        aggregated["corridor_pair"] == "Brisbane ↔ Sydney"
+    ].iloc[0]
+    assert bne_syd["job_count"] == 1
+    assert pytest.approx(bne_syd["below_break_even_ratio"], rel=1e-6) == 1.0
+    assert pytest.approx(bne_syd["weighted_price_per_m3"], rel=1e-6) == 240.0
+
+
+def test_aggregate_corridor_performance_handles_missing_columns():
+    df = pd.DataFrame(
+        {
+            "corridor_display": ["BNE → MEL", "MEL → BNE", "BNE-SYD"],
+            "price_per_m3": [250.0, 260.0, 240.0],
+        }
+    )
+
+    aggregated = aggregate_corridor_performance(df, break_even=255.0)
+    assert set(aggregated["corridor_pair"]) == {"BNE ↔ MEL", "BNE ↔ SYD"}
+
+    bne_mel = aggregated.loc[aggregated["corridor_pair"] == "BNE ↔ MEL"].iloc[0]
+    assert bne_mel["job_count"] == 2
+    assert pytest.approx(bne_mel["share_of_jobs"], rel=1e-6) == 2 / 3
+    assert pytest.approx(bne_mel["below_break_even_ratio"], rel=1e-6) == 0.5
