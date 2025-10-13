@@ -62,4 +62,4 @@ def test_geocode_with_normalization_surfaces_suggestions() -> None:
     assert any("Kangaroo" in suggestion for suggestion in result.suggestions)
     assert fake_client.calls, "Expected the Pelias client to be called"
     first_call = fake_client.calls[0]
-    assert first_call["layers"] == "address,street,locality"
+    assert first_call["layers"] == ["address", "street", "locality"]
