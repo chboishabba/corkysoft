@@ -79,12 +79,38 @@ Key visuals include:
 - An interactive Mapbox view showing each route with selectable colouring (job, client, origin city, or destination city) and toggles to focus on lines or points when clusters get dense.
 - A live network map that blends historical job filters with real-time truck telemetry, colouring corridors by profitability band and highlighting active trucks/routes.
 - A dynamic break-even engine that recalculates per-job cost floors using network-wide fuel, driver, maintenance and overhead settings stored in `global_parameters`.
+- Corridor insights summarising job counts, weighted $/m³ and below break-even ratios aggregated into bidirectional lanes for systemic diagnostics.
+- A non-technical optimizer tab that recommends corridor price uplifts from the filtered data and offers a CSV export for action lists.
 
 ```bash
 streamlit run streamlit_price_distribution.py
 ```
 
 By default it reads from `routes.db`. Set `CORKYSOFT_DB` or `ROUTES_DB` to point at a different SQLite database.
+
+### Corridor analytics
+
+Use `aggregate_corridor_performance` to collapse the filtered dataset into bidirectional lanes and surface systemic KPIs:
+
+```python
+from analytics.price_distribution import aggregate_corridor_performance, load_historical_jobs
+from analytics.db import connection_scope
+
+with connection_scope() as conn:
+    df, _ = load_historical_jobs(conn)
+
+corridor_summary = aggregate_corridor_performance(df, break_even=250.0)
+print(
+    corridor_summary[
+        [
+            "corridor_pair",
+            "job_count",
+            "weighted_price_per_m3",
+            "below_break_even_ratio",
+        ]
+    ].head()
+)
+```
 
 #### Mock telemetry ingestion
 
@@ -99,6 +125,37 @@ python -m analytics.ingest_live_data --interval 5 --iterations 0
 - `--trucks` lets you specify custom truck IDs.
 
 The script reuses historical jobs with geocoded origins/destinations and gracefully falls back to seeded depots so the map always has routes to display.
+
+### Simplex profit optimiser
+
+Use the :mod:`profit_optimizer` module to evaluate the most profitable mix of jobs or lanes when capacity is limited. Decision
+variables represent candidate jobs and the coefficients in each constraint model business limits such as available truck hours,
+packing teams, or market demand caps.
+
+```python
+from profit_optimizer import ProfitOptimizer
+
+optimizer = ProfitOptimizer()
+optimizer.add_variable("local_move", profit_per_unit=300.0, upper_bound=40)
+optimizer.add_variable("interstate_move", profit_per_unit=500.0)
+optimizer.add_constraint(
+    "crew_hours",
+    coefficients={"local_move": 2.0, "interstate_move": 3.0},
+    rhs=120.0,
+)
+optimizer.add_constraint(
+    "truck_days",
+    coefficients={"local_move": 1.0, "interstate_move": 2.0},
+    rhs=80.0,
+)
+
+result = optimizer.solve()
+print(result.variable_values)  # -> {'local_move': 0.0, 'interstate_move': 40.0}
+print(result.binding_constraints)  # -> ['crew_hours', 'truck_days']
+```
+
+Slack values and reduced costs in :class:`profit_optimizer.OptimizationResult` can be used for quick scenario planning, e.g. to
+see how much spare capacity remains or whether adding new jobs would increase or decrease total profit.
 
 ### Commands
 
@@ -169,7 +226,7 @@ python routes_to_sqlite.py import-history historical_jobs.csv --geocode --route
 * **geocode_cache**: cached lat/lon results keyed by `place,country`.
 * **historical_jobs**: imported quotes with optional normalised addresses, postcodes, distance/duration enrichments and audit timestamps.
 * **truck_positions**: latest lat/lon, status, heading and speed for each active truck.
-* **active_routes**: in-flight jobs mapped to trucks with origin/destination coordinates, progress, ETA and profit-band overlays.
+* **active_routes**: in-flight jobs mapped to trucks with origin/destination coordinates, progress, ETA, profit-band overlays and profitability status tags.
 * **lane_base_rates**: per-m³ and metro-hourly lane pricing keyed by corridor code.
 * **modifier_fees**: flat / per-m³ / percentage surcharges such as difficult access or piano handling.
 * **packing_rate_tiers**: tiered packing & unpacking rates by cubic metres.

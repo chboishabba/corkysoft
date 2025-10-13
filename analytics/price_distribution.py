@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Iterable, Optional, Sequence
+from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -26,6 +26,9 @@ PROFITABILITY_BANDS: Sequence[tuple[float, float, str]] = (
     (50.0, 100.0, "50-100 above break-even"),
     (100.0, float("inf"), "100+ above break-even"),
 )
+
+DEFAULT_BREAK_EVEN_ABS_TOLERANCE = 5.0
+DEFAULT_BREAK_EVEN_REL_TOLERANCE = 0.02
 
 PROFITABILITY_COLOURS = {
     "Below break-even": [217, 83, 79],
@@ -559,6 +562,304 @@ def build_heatmap_source(
     return result.reset_index(drop=True)
 
 
+def _clean_location(value: Any) -> str:
+    """Return a normalised string representation for origin/destination labels."""
+
+    if pd.isna(value):
+        return "Unknown"
+    text = str(value).strip()
+    return text or "Unknown"
+
+
+def format_bidirectional_corridor(origin: Any, destination: Any) -> str:
+    """Return a canonical bidirectional corridor label.
+
+    Parameters
+    ----------
+    origin, destination:
+        Raw origin and destination labels which may include mixed casing or
+        missing values. The function ensures labels are cleaned and sorted so
+        ``Brisbane → Melbourne`` and ``Melbourne → Brisbane`` collapse into the
+        shared label ``Brisbane ↔ Melbourne``.
+    """
+
+    cleaned_origin = _clean_location(origin)
+    cleaned_destination = _clean_location(destination)
+    if cleaned_origin == cleaned_destination:
+        return cleaned_origin
+    ordered = sorted([cleaned_origin, cleaned_destination], key=str.lower)
+    return f"{ordered[0]} ↔ {ordered[1]}"
+
+
+def _split_corridor_label(value: Any) -> tuple[str, str]:
+    """Best-effort parsing for corridor labels lacking explicit endpoints."""
+
+    if pd.isna(value):
+        return "Unknown", "Unknown"
+    text = str(value).strip()
+    if not text:
+        return "Unknown", "Unknown"
+    for delimiter in ("↔", "→", "<->", "-", "—", " to ", "/", "|"):
+        if delimiter in text:
+            parts = [part.strip() for part in text.split(delimiter) if part.strip()]
+            if len(parts) >= 2:
+                return parts[0], parts[-1]
+    return text, "Unknown"
+
+
+def _resolve_corridor_pairs(df: pd.DataFrame) -> pd.Series:
+    """Return a Series of bidirectional corridor labels for ``df`` rows."""
+
+    origin_column = _first_present(df.columns, ORIGIN_COLUMNS)
+    destination_column = _first_present(df.columns, DESTINATION_COLUMNS)
+
+    if origin_column and destination_column:
+        origins = df[origin_column]
+        destinations = df[destination_column]
+    else:
+        corridor_column = None
+        for candidate in ("corridor_display", *CORRIDOR_COLUMNS):
+            if candidate in df.columns:
+                corridor_column = candidate
+                break
+        if corridor_column:
+            pairs = df[corridor_column].apply(_split_corridor_label)
+            origins = pairs.str[0]
+            destinations = pairs.str[1]
+        else:
+            origins = pd.Series(["Unknown"] * len(df), index=df.index)
+            destinations = pd.Series(["Unknown"] * len(df), index=df.index)
+
+    labels = [
+        format_bidirectional_corridor(origin, destination)
+        for origin, destination in zip(origins, destinations)
+    ]
+    return pd.Series(labels, index=df.index)
+
+
+def aggregate_corridor_performance(
+    df: pd.DataFrame,
+    break_even: float,
+    *,
+    volume_column: Optional[str] = None,
+    revenue_column: Optional[str] = None,
+) -> pd.DataFrame:
+    """Aggregate systemic performance metrics by bidirectional corridor.
+
+    Parameters
+    ----------
+    df:
+        Historical job records, typically produced by
+        :func:`load_historical_jobs`.
+    break_even:
+        Break-even price per cubic metre used to classify loss-making lanes.
+    volume_column, revenue_column:
+        Optional overrides for the volume and revenue column names. When
+        omitted, the function searches for known volume/revenue aliases.
+    """
+
+    columns = [
+        "corridor_pair",
+        "job_count",
+        "share_of_jobs",
+        "priced_job_count",
+        "priced_job_ratio",
+        "median_price_per_m3",
+        "mean_price_per_m3",
+        "price_per_m3_p25",
+        "price_per_m3_p75",
+        "weighted_price_per_m3",
+        "below_break_even_ratio",
+        "total_volume_m3",
+        "share_of_volume",
+        "total_revenue",
+        "margin_per_m3_median",
+        "margin_total_sum",
+        "share_of_margin",
+        "margin_total_pct_median",
+        "revenue_per_km_median",
+        "median_distance_km",
+    ]
+
+    if df.empty:
+        return pd.DataFrame(columns=columns)
+
+    working = df.copy()
+    working["corridor_pair"] = _resolve_corridor_pairs(working)
+
+    if "price_per_m3" in working:
+        working["_price_per_m3"] = pd.to_numeric(working["price_per_m3"], errors="coerce")
+    else:
+        working["_price_per_m3"] = np.nan
+
+    if volume_column is None:
+        volume_column = _first_present(working.columns, VOLUME_COLUMNS)
+    if volume_column and volume_column in working:
+        working["_volume_numeric"] = pd.to_numeric(working[volume_column], errors="coerce")
+    else:
+        working["_volume_numeric"] = np.nan
+
+    if revenue_column is None:
+        revenue_column = _first_present(working.columns, REVENUE_COLUMNS)
+    if revenue_column and revenue_column in working:
+        working["_revenue_numeric"] = pd.to_numeric(working[revenue_column], errors="coerce")
+    else:
+        working["_revenue_numeric"] = np.nan
+
+    if "margin_per_m3" in working:
+        working["_margin_per_m3_numeric"] = pd.to_numeric(
+            working["margin_per_m3"], errors="coerce"
+        )
+    else:
+        working["_margin_per_m3_numeric"] = np.nan
+
+    if "margin_total" in working:
+        working["_margin_total_numeric"] = pd.to_numeric(
+            working["margin_total"], errors="coerce"
+        )
+    else:
+        working["_margin_total_numeric"] = np.nan
+
+    if "margin_total_pct" in working:
+        working["_margin_total_pct_numeric"] = pd.to_numeric(
+            working["margin_total_pct"], errors="coerce"
+        )
+    else:
+        working["_margin_total_pct_numeric"] = np.nan
+
+    if "revenue_per_km" in working:
+        working["_revenue_per_km_numeric"] = pd.to_numeric(
+            working["revenue_per_km"], errors="coerce"
+        )
+    else:
+        working["_revenue_per_km_numeric"] = np.nan
+
+    distance_column = "distance_km" if "distance_km" in working else _first_present(
+        working.columns, DISTANCE_COLUMNS
+    )
+    if distance_column and distance_column in working:
+        working["_distance_numeric"] = pd.to_numeric(
+            working[distance_column], errors="coerce"
+        )
+    else:
+        working["_distance_numeric"] = np.nan
+
+    total_jobs = len(working)
+    total_volume = working["_volume_numeric"].sum(min_count=1)
+    total_volume = float(total_volume) if pd.notna(total_volume) else math.nan
+    total_margin = working["_margin_total_numeric"].sum(min_count=1)
+    total_margin = float(total_margin) if pd.notna(total_margin) else math.nan
+
+    rows: list[dict[str, Any]] = []
+    grouped = working.groupby("corridor_pair", dropna=False)
+    for corridor, group in grouped:
+        job_count = int(len(group))
+        share_of_jobs = job_count / total_jobs if total_jobs else 0.0
+
+        priced = group["_price_per_m3"].dropna()
+        priced_job_count = int(len(priced))
+        priced_job_ratio = priced_job_count / job_count if job_count else 0.0
+        if priced_job_count:
+            median_price = float(priced.median())
+            mean_price = float(priced.mean())
+            percentile_25 = float(priced.quantile(0.25))
+            percentile_75 = float(priced.quantile(0.75))
+            below_break_even_ratio = float((priced < break_even).sum() / priced_job_count)
+        else:
+            median_price = mean_price = percentile_25 = percentile_75 = math.nan
+            below_break_even_ratio = 0.0
+
+        volume_total = group["_volume_numeric"].sum(min_count=1)
+        volume_total = float(volume_total) if pd.notna(volume_total) else math.nan
+        revenue_total = group["_revenue_numeric"].sum(min_count=1)
+        revenue_total = float(revenue_total) if pd.notna(revenue_total) else math.nan
+        weighted_price = (
+            revenue_total / volume_total
+            if not math.isnan(revenue_total)
+            and not math.isnan(volume_total)
+            and volume_total != 0
+            else math.nan
+        )
+
+        share_of_volume = (
+            volume_total / total_volume
+            if not math.isnan(volume_total)
+            and not math.isnan(total_volume)
+            and total_volume != 0
+            else math.nan
+        )
+
+        margin_per_m3_series = group["_margin_per_m3_numeric"].dropna()
+        margin_per_m3_median = (
+            float(margin_per_m3_series.median())
+            if not margin_per_m3_series.empty
+            else math.nan
+        )
+
+        margin_total_sum = group["_margin_total_numeric"].sum(min_count=1)
+        margin_total_sum = float(margin_total_sum) if pd.notna(margin_total_sum) else math.nan
+        share_of_margin = (
+            margin_total_sum / total_margin
+            if not math.isnan(margin_total_sum)
+            and not math.isnan(total_margin)
+            and total_margin != 0
+            else math.nan
+        )
+
+        margin_total_pct_series = group["_margin_total_pct_numeric"].dropna()
+        margin_total_pct_median = (
+            float(margin_total_pct_series.median())
+            if not margin_total_pct_series.empty
+            else math.nan
+        )
+
+        revenue_per_km_series = group["_revenue_per_km_numeric"].dropna()
+        revenue_per_km_median = (
+            float(revenue_per_km_series.median())
+            if not revenue_per_km_series.empty
+            else math.nan
+        )
+
+        distance_series = group["_distance_numeric"].dropna()
+        median_distance = (
+            float(distance_series.median()) if not distance_series.empty else math.nan
+        )
+
+        rows.append(
+            {
+                "corridor_pair": corridor,
+                "job_count": job_count,
+                "share_of_jobs": share_of_jobs,
+                "priced_job_count": priced_job_count,
+                "priced_job_ratio": priced_job_ratio,
+                "median_price_per_m3": median_price,
+                "mean_price_per_m3": mean_price,
+                "price_per_m3_p25": percentile_25,
+                "price_per_m3_p75": percentile_75,
+                "weighted_price_per_m3": weighted_price,
+                "below_break_even_ratio": below_break_even_ratio,
+                "total_volume_m3": volume_total,
+                "share_of_volume": share_of_volume,
+                "total_revenue": revenue_total,
+                "margin_per_m3_median": margin_per_m3_median,
+                "margin_total_sum": margin_total_sum,
+                "share_of_margin": share_of_margin,
+                "margin_total_pct_median": margin_total_pct_median,
+                "revenue_per_km_median": revenue_per_km_median,
+                "median_distance_km": median_distance,
+            }
+        )
+
+    result = pd.DataFrame(rows, columns=columns)
+    if not result.empty:
+        result = result.sort_values(
+            by=["margin_total_sum", "total_revenue", "job_count"],
+            ascending=[False, False, False],
+        )
+        result = result.reset_index(drop=True)
+    return result
+
+
 @dataclass
 class DistributionSummary:
     job_count: int
@@ -698,6 +999,50 @@ def classify_profit_band(value: Optional[float], break_even: float) -> str:
     return "Unknown"
 
 
+def classify_profitability_status(
+    value: Optional[float],
+    break_even: float,
+    *,
+    abs_tolerance: float = DEFAULT_BREAK_EVEN_ABS_TOLERANCE,
+    rel_tolerance: float = DEFAULT_BREAK_EVEN_REL_TOLERANCE,
+) -> str:
+    """Classify a price-per-m³ value as profitable, break-even or loss-leading.
+
+    Parameters
+    ----------
+    value:
+        Observed price-per-m³ for a job or lane. ``None`` and non-numeric values
+        are treated as ``"Unknown"``.
+    break_even:
+        Baseline break-even price-per-m³ used as the reference value.
+    abs_tolerance:
+        Absolute tolerance (in $/m³) when considering whether a value is within
+        the break-even band.  This defaults to ``5`` which equates to ±$5/m³.
+    rel_tolerance:
+        Relative tolerance expressed as a fraction of the break-even value.  The
+        effective tolerance is the larger of ``abs_tolerance`` and
+        ``break_even * rel_tolerance`` so the comparison remains stable across
+        different break-even baselines.
+    """
+
+    if value is None:
+        return "Unknown"
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return "Unknown"
+    if math.isnan(numeric_value):
+        return "Unknown"
+
+    diff = numeric_value - break_even
+    tolerance = max(abs_tolerance, abs(break_even) * rel_tolerance)
+    if abs(diff) <= tolerance:
+        return "Break-even"
+    if diff > 0:
+        return "Profitable"
+    return "Loss-leading"
+
+
 def prepare_profitability_route_data(
     df: pd.DataFrame,
     break_even: float,
@@ -721,6 +1066,7 @@ def prepare_profitability_route_data(
                 "dest_lon",
                 "price_per_m3",
                 "profit_band",
+                "profitability_status",
                 "colour",
                 "tooltip",
             ]
@@ -741,6 +1087,10 @@ def prepare_profitability_route_data(
         map_df["profit_band"] = map_df["price_per_m3"].apply(
             lambda value: classify_profit_band(value, break_even)
         )
+    map_df["profit_band"] = map_df["price_per_m3"].apply(lambda value: classify_profit_band(value, break_even))
+    map_df["profitability_status"] = map_df["price_per_m3"].apply(
+        lambda value: classify_profitability_status(value, break_even)
+    )
     map_df["colour"] = map_df["profit_band"].map(PROFITABILITY_COLOURS)
     map_df["colour"] = map_df["colour"].apply(
         lambda value: value if isinstance(value, (list, tuple)) else [128, 128, 128]
@@ -751,7 +1101,13 @@ def prepare_profitability_route_data(
         corridor = row.get("corridor_display", "Corridor")
         price = row.get("price_per_m3")
         price_text = "n/a" if pd.isna(price) else f"${price:,.0f} per m³"
-        return f"{corridor}: {row['profit_band']} ({price_text})"
+        status = row.get("profitability_status") or row.get("profit_band", "Unknown")
+        band = row.get("profit_band")
+        if band and band not in {"Unknown", status}:
+            descriptor = f"{status} – {band}"
+        else:
+            descriptor = status
+        return f"{corridor}: {descriptor} ({price_text})"
 
     map_df["tooltip"] = map_df.apply(_format_tooltip, axis=1)
     return map_df
