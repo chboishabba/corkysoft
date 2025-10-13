@@ -46,7 +46,7 @@ def test_pelias_geocode_uses_iterable_filters(monkeypatch: pytest.MonkeyPatch):
         },
     ]
 
-    lon, lat, label = module.pelias_geocode("123 Test St", "Australia")
+    result = module.pelias_geocode("123 Test St", "Australia")
 
     assert mock_client.pelias_search.call_count == 2
 
@@ -63,9 +63,9 @@ def test_pelias_geocode_uses_iterable_filters(monkeypatch: pytest.MonkeyPatch):
     assert "layers" not in fallback_kwargs
     assert "sources" not in fallback_kwargs
 
-    assert lon == 153.0
-    assert lat == -27.0
-    assert label == "Test Address"
+    assert result.lon == 153.0
+    assert result.lat == -27.0
+    assert result.label == "Test Address"
 
 
 def test_ensure_schema_creates_historical_jobs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

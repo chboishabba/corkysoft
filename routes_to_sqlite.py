@@ -170,7 +170,13 @@ def pelias_geocode(place: str, country: str):
     Try a stricter AU-focused search first (address/street/locality layers),
     then fall back to a looser text search. Returns a :class:`GeocodeResult`.
     """
-    return geocode_with_normalization(client, place, country)
+    return geocode_with_normalization(
+        client,
+        place,
+        country,
+        strict_layers=STRICT_PELIAS_LAYERS,
+        strict_sources=STRICT_PELIAS_SOURCES,
+    )
 
 def geocode_cached(conn: sqlite3.Connection, place: str, country: str) -> GeocodeResult:
     """Return geocode results with normalization metadata, using the on-disk cache."""

@@ -168,6 +168,12 @@ class GeocodeResult:
     suggestions: List[str] = field(default_factory=list)
     query_used: Optional[str] = None
 
+    def __iter__(self):
+        """Allow tuple unpacking compatibility (lon, lat, label)."""
+        yield self.lon
+        yield self.lat
+        yield self.label
+
 
 def _collect_autocorrect_suggestions(features: Sequence[dict]) -> List[str]:
     seen: set[str] = set()
@@ -185,14 +191,32 @@ def _collect_autocorrect_suggestions(features: Sequence[dict]) -> List[str]:
     return collected
 
 
+def _coerce_pelias_param(value: Optional[Sequence[str] | str]) -> Optional[List[str]]:
+    """Return a list of values accepted by the Pelias client.
+
+    The upstream openrouteservice client expects ``layers`` and ``sources``
+    parameters to be sequences.  Historically this code passed comma-separated
+    strings which caused a runtime ``TypeError`` with the message
+    ``"Expected a list or tuple, but got str"`` when calling the service.
+    Accept either a pre-existing sequence or a comma separated string and
+    normalise it into a list of values with surrounding whitespace removed.
+    """
+
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return [item for item in (part.strip() for part in value.split(",")) if item]
+    return list(value)
+
+
 def geocode_with_normalization(
     client,
     place: str,
     country: str,
     *,
     size: int = 5,
-    strict_layers: str = "address,street,locality",
-    strict_sources: str = "osm,wof",
+    strict_layers: str | Sequence[str] | None = "address,street,locality",
+    strict_sources: str | Sequence[str] | None = "osm,wof",
 ) -> GeocodeResult:
     """Geocode *place* and return coordinates together with suggestions."""
 
@@ -213,12 +237,15 @@ def geocode_with_normalization(
 
     features: Sequence[dict] = []
     chosen_query: Optional[str] = None
+    layers = _coerce_pelias_param(strict_layers)
+    sources = _coerce_pelias_param(strict_sources)
+
     for candidate in candidates:
         query = f"{candidate}, {country}".strip()
         res = client.pelias_search(
             text=query,
-            layers=strict_layers,
-            sources=strict_sources,
+            layers=layers,
+            sources=sources,
             size=size,
         )
         feats = res.get("features") or []

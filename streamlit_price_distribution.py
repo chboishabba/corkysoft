@@ -20,10 +20,10 @@ from analytics.price_distribution import (
     available_heatmap_weightings,
     build_heatmap_source,
     create_histogram,
+    create_metro_profitability_figure,
     create_m3_margin_figure,
     create_m3_vs_km_figure,
     ensure_break_even_parameter,
-    filter_jobs_by_distance,
     load_historical_jobs,
     prepare_profitability_map_data,
     prepare_profitability_route_data,
@@ -47,6 +47,39 @@ from corkysoft.quote_service import (
     persist_quote,
 )
 
+# -----------------------------------------------------------------------------
+# Compatibility shim for metro-distance filtering across branches/modules
+# -----------------------------------------------------------------------------
+# Prefer the newer `filter_jobs_by_distance(df, metro_only=True/False, max_distance_km=...)`.
+# If unavailable, fall back to `filter_metro_jobs(df, max_distance_km=...)`.
+try:
+    from analytics.price_distribution import (  # type: ignore
+        filter_jobs_by_distance as _filter_by_distance,
+    )
+except Exception:
+    try:
+        from analytics.price_distribution import (  # type: ignore
+            filter_metro_jobs as _filter_metro_jobs,
+        )
+
+        def _filter_by_distance(
+            df: pd.DataFrame,
+            *,
+            metro_only: bool = False,
+            max_distance_km: float = 100.0,
+        ) -> pd.DataFrame:
+            return _filter_metro_jobs(df, max_distance_km=max_distance_km) if metro_only else df
+
+    except Exception:
+        # Graceful no-op fallback if neither helper exists; show all rows.
+        def _filter_by_distance(
+            df: pd.DataFrame,
+            *,
+            metro_only: bool = False,
+            max_distance_km: float = 100.0,
+        ) -> pd.DataFrame:
+            return df
+
 
 st.set_page_config(
     page_title="Price distribution by corridor",
@@ -66,7 +99,6 @@ def _prepare_plotly_map_data(
     placeholder: str = "Unknown",
 ) -> pd.DataFrame:
     """Return a dataframe suitable for categorical colouring on a Plotly map."""
-
     required_columns = ["origin_lat", "origin_lon", "dest_lat", "dest_lon"]
     missing = [column for column in required_columns if column not in df.columns]
     if missing:
@@ -92,6 +124,10 @@ def render_summary(
     summary: DistributionSummary,
     break_even: float,
     profitability_summary: ProfitabilitySummary,
+    *,
+    metro_summary: Optional[DistributionSummary] = None,
+    metro_profitability: Optional[ProfitabilitySummary] = None,
+    metro_distance_km: float = 100.0,
 ) -> None:
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Jobs in filter", summary.job_count)
@@ -166,6 +202,55 @@ def render_summary(
             _format_value(value, currency=as_currency, percentage=as_percentage),
         )
 
+    if metro_summary and metro_profitability:
+        st.markdown(
+            f"**Metro subset (≤{metro_distance_km:,.0f} km)**"
+        )
+        share = 0.0
+        if summary.job_count:
+            share = metro_summary.job_count / summary.job_count
+        st.caption(
+            f"{metro_summary.job_count} jobs in metro scope "
+            f"({share:.1%} of filtered jobs)."
+        )
+
+        metro_metrics = [
+            ("Median $/km", "revenue_per_km_median", True, False),
+            ("Average $/km", "revenue_per_km_mean", True, False),
+            ("Median margin $/m³", "margin_per_m3_median", True, False),
+            ("Median margin %", "margin_per_m3_pct_median", False, True),
+        ]
+        metro_cols = st.columns(len(metro_metrics))
+        for column, (label, attr, as_currency, as_percentage) in zip(
+            metro_cols, metro_metrics
+        ):
+            metro_value = getattr(metro_profitability, attr)
+            overall_value = getattr(profitability_summary, attr)
+            delta = None
+            if (
+                metro_value is not None
+                and overall_value is not None
+                and not any(
+                    isinstance(val, float)
+                    and (math.isnan(val) or math.isinf(val))
+                    for val in (metro_value, overall_value)
+                )
+            ):
+                diff = metro_value - overall_value
+                if as_currency:
+                    delta = f"{diff:+,.2f}"
+                elif as_percentage:
+                    delta = f"{diff * 100:+.1f}%"
+                else:
+                    delta = f"{diff:+.2f}"
+            column.metric(
+                label,
+                _format_value(
+                    metro_value, currency=as_currency, percentage=as_percentage
+                ),
+                delta=delta,
+            )
+
 
 def build_route_map(
     df: pd.DataFrame,
@@ -175,7 +260,6 @@ def build_route_map(
     show_points: bool,
 ) -> go.Figure:
     """Construct a Plotly Mapbox figure showing coloured routes and points."""
-
     palette = px.colors.qualitative.Bold or [
         "#636EFA",
         "#EF553B",
@@ -303,9 +387,17 @@ def render_network_map(
 ) -> None:
     st.markdown("### Live network overview")
 
+    show_live_overlay = st.toggle(
+        "Show live network overlay",
+        value=True,
+        help=(
+            "Toggle the live overlay of active routes and truck telemetry without "
+            "hiding the base map."
+        ),
+    )
+
     if historical_routes.empty and trucks.empty and active_routes.empty:
         st.info("No geocoded historical jobs or live telemetry available to plot yet.")
-        return
 
     truck_data = trucks.copy()
     if not truck_data.empty:
@@ -317,10 +409,19 @@ def render_network_map(
             lambda row: f"{row['truck_id']} ({row['status']})", axis=1
         )
 
-    layers: list[pdk.Layer] = []
+    base_map_layer = pdk.Layer(
+        "TileLayer",
+        data="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        min_zoom=0,
+        max_zoom=19,
+        tile_size=256,
+        attribution="© OpenStreetMap contributors",
+    )
 
-    if not historical_routes.empty:
-        base_layer = pdk.Layer(
+    overlay_layers: list[pdk.Layer] = []
+
+    if show_live_overlay and not historical_routes.empty:
+        history_layer = pdk.Layer(
             "LineLayer",
             data=historical_routes,
             get_source_position="[origin_lon, origin_lat]",
@@ -330,9 +431,9 @@ def render_network_map(
             pickable=True,
             opacity=0.4,
         )
-        layers.append(base_layer)
+        overlay_layers.append(history_layer)
 
-    if not active_routes.empty:
+    if show_live_overlay and not active_routes.empty:
         if "job_id" in active_routes.columns and not historical_routes.empty:
             enriched = active_routes.merge(
                 historical_routes[["id", "colour", "profit_band", "tooltip"]],
@@ -370,9 +471,9 @@ def render_network_map(
             pickable=True,
             opacity=0.9,
         )
-        layers.append(active_layer)
+        overlay_layers.append(active_layer)
 
-    if not truck_data.empty:
+    if show_live_overlay and not truck_data.empty:
         trucks_layer = pdk.Layer(
             "ScatterplotLayer",
             data=truck_data,
@@ -381,7 +482,7 @@ def render_network_map(
             get_radius=800,
             pickable=True,
         )
-        layers.append(trucks_layer)
+        overlay_layers.append(trucks_layer)
 
         text_layer = pdk.Layer(
             "TextLayer",
@@ -394,7 +495,7 @@ def render_network_map(
             size_scale=16,
             get_alignment_baseline="bottom",
         )
-        layers.append(text_layer)
+        overlay_layers.append(text_layer)
 
     view_df_candidates: list[pd.DataFrame] = []
     if not historical_routes.empty:
@@ -413,29 +514,31 @@ def render_network_map(
         )
     view_df = pd.concat(view_df_candidates) if view_df_candidates else pd.DataFrame()
 
-    tooltip = {"html": "<b>{tooltip}</b>", "style": {"color": "white"}}
+    tooltip = None
+    if show_live_overlay and overlay_layers:
+        tooltip = {"html": "<b>{tooltip}</b>", "style": {"color": "white"}}
 
     st.pydeck_chart(
         pdk.Deck(
-            layers=layers,
+            layers=[base_map_layer, *overlay_layers],
             initial_view_state=_initial_view_state(view_df),
             tooltip=tooltip,
-            map_style="mapbox://styles/mapbox/light-v9",
+            map_style=None,
         )
     )
 
-    legend_cols = st.columns(len(PROFITABILITY_COLOURS))
-    for (band, colour), column in zip(PROFITABILITY_COLOURS.items(), legend_cols):
-        colour_hex = "#" + "".join(f"{int(c):02x}" for c in colour)
-        column.markdown(
-            f"<div style='color:{colour_hex}; font-weight:bold'>{band}</div>",
-            unsafe_allow_html=True,
-        )
+    if show_live_overlay and overlay_layers:
+        legend_cols = st.columns(len(PROFITABILITY_COLOURS))
+        for (band, colour), column in zip(PROFITABILITY_COLOURS.items(), legend_cols):
+            colour_hex = "#" + "".join(f"{int(c):02x}" for c in colour)
+            column.markdown(
+                f"<div style='color:{colour_hex}; font-weight:bold'>{band}</div>",
+                unsafe_allow_html=True,
+            )
 
 
 def _set_query_params(**params: str) -> None:
     """Set Streamlit query parameters using the stable API when available."""
-
     query_params = getattr(st, "query_params", None)
     if query_params is not None:
         query_params.from_dict(params)
@@ -446,7 +549,6 @@ def _set_query_params(**params: str) -> None:
 
 def _get_query_params() -> Dict[str, List[str]]:
     """Return query parameters as a dictionary of lists."""
-
     query_params = getattr(st, "query_params", None)
     if query_params is not None:
         return {key: query_params.get_all(key) for key in query_params.keys()}
@@ -455,7 +557,6 @@ def _get_query_params() -> Dict[str, List[str]]:
 
 def _rerun_app() -> None:
     """Trigger a Streamlit rerun using the available API."""
-
     rerun = getattr(st, "rerun", None)
     if rerun is not None:
         rerun()
@@ -465,7 +566,6 @@ def _rerun_app() -> None:
 
 def _activate_quote_tab() -> None:
     """Switch the interface to the quote builder tab."""
-
     _set_query_params(view="Quote builder")
     _rerun_app()
 
@@ -523,7 +623,7 @@ def _extract_route_date(route: pd.Series) -> Optional[date]:
         if column in route and pd.notna(route[column]):
             try:
                 return pd.to_datetime(route[column]).date()
-            except Exception:  # pragma: no cover - defensive parsing
+            except Exception:
                 continue
     return None
 
@@ -633,7 +733,26 @@ with connection_scope() as conn:
 
     summary = summarise_distribution(filtered_df, break_even_value)
     profitability_summary = summarise_profitability(filtered_df)
-    render_summary(summary, break_even_value, profitability_summary)
+
+    metro_distance_km = 100.0
+    metro_df = _filter_by_distance(filtered_df, metro_only=True, max_distance_km=metro_distance_km)
+    metro_summary = (
+        summarise_distribution(metro_df, break_even_value)
+        if not metro_df.empty
+        else None
+    )
+    metro_profitability = (
+        summarise_profitability(metro_df) if not metro_df.empty else None
+    )
+
+    render_summary(
+        summary,
+        break_even_value,
+        profitability_summary,
+        metro_summary=metro_summary,
+        metro_profitability=metro_profitability,
+        metro_distance_km=metro_distance_km,
+    )
 
     truck_positions = load_truck_positions(conn)
     active_routes = load_active_routes(conn)
@@ -682,6 +801,9 @@ with connection_scope() as conn:
         view_options = {
             "m³ vs km profitability": create_m3_vs_km_figure,
             "Quoted vs calculated $/m³": create_m3_margin_figure,
+            "Metro profitability spotlight": lambda data: create_metro_profitability_figure(
+                data, max_distance_km=metro_distance_km
+            ),
         }
         selected_view = st.radio(
             "Choose a view",
@@ -692,6 +814,11 @@ with connection_scope() as conn:
         )
         fig = view_options[selected_view](filtered_df)
         st.plotly_chart(fig, use_container_width=True)
+
+        if selected_view == "Metro profitability spotlight":
+            st.caption(
+                "Metro view highlights close-in routes with margin and cost sensitivity overlays."
+            )
 
         if "margin_per_m3" in filtered_df.columns:
             st.markdown("#### Margin outliers")
@@ -708,7 +835,7 @@ with connection_scope() as conn:
                         "corridor_display",
                         "price_per_m3",
                         "final_cost_per_m3",
-                        "margin_per_m3",
+            "margin_per_m3",
                         "margin_per_m3_pct",
                     ]
                     if col in ranked.columns
@@ -737,15 +864,9 @@ with connection_scope() as conn:
             help="Apply a distance filter using distance_km ≤ 100 to focus on metro corridors.",
         )
 
-        scoped_df = filtered_df
-        if metro_only:
-            try:
-                scoped_df = filter_jobs_by_distance(filtered_df, metro_only=True)
-            except KeyError:
-                st.warning(
-                    "Distance data is unavailable, showing all jobs instead of applying the metro filter."
-                )
-                scoped_df = filtered_df
+        scoped_df = _filter_by_distance(
+            filtered_df, metro_only=metro_only, max_distance_km=metro_distance_km
+        )
 
         if map_mode == "Routes/points":
             colour_dimensions = {
@@ -1319,4 +1440,3 @@ with connection_scope() as conn:
         file_name="price_distribution_filtered.csv",
         mime="text/csv",
     )
-
