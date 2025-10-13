@@ -8,6 +8,7 @@ from analytics.live_data import MockTelemetryIngestor, load_active_routes, load_
 from analytics.price_distribution import (
     PROFITABILITY_COLOURS,
     classify_profit_band,
+    classify_profitability_status,
     prepare_profitability_route_data,
 )
 from corkysoft.schema import ensure_schema
@@ -92,6 +93,8 @@ def test_mock_ingestor_populates_live_tables():
 
         assert "colour" in mapped.columns
         assert all(isinstance(colour, list) for colour in mapped["colour"])
+        assert "profitability_status" in mapped.columns
+        assert set(mapped["profitability_status"]) <= {"Profitable", "Break-even"}
     finally:
         conn.close()
 
@@ -103,3 +106,11 @@ def test_classify_profit_band_edges():
     assert classify_profit_band(320.0, 250.0) == "50-100 above break-even"
     assert classify_profit_band(370.0, 250.0) == "100+ above break-even"
     assert PROFITABILITY_COLOURS["Below break-even"]
+
+
+def test_classify_profitability_status_thresholds():
+    assert classify_profitability_status(None, 250.0) == "Unknown"
+    assert classify_profitability_status("not-a-number", 250.0) == "Unknown"
+    assert classify_profitability_status(240.0, 250.0) == "Loss-leading"
+    assert classify_profitability_status(254.0, 250.0) == "Break-even"
+    assert classify_profitability_status(300.0, 250.0) == "Profitable"

@@ -459,7 +459,9 @@ def render_network_map(
     if show_live_overlay and not active_routes.empty:
         if "job_id" in active_routes.columns and not historical_routes.empty:
             enriched = active_routes.merge(
-                historical_routes[["id", "colour", "profit_band", "tooltip"]],
+                historical_routes[
+                    ["id", "colour", "profit_band", "profitability_status", "tooltip"]
+                ],
                 left_on="job_id",
                 right_on="id",
                 how="left",
@@ -469,19 +471,30 @@ def render_network_map(
                 enriched["colour"] = enriched["colour_hist"]
             if "profit_band" not in enriched.columns and "profit_band_hist" in enriched.columns:
                 enriched["profit_band"] = enriched["profit_band_hist"]
+            if (
+                "profitability_status" not in enriched.columns
+                and "profitability_status_hist" in enriched.columns
+            ):
+                enriched["profitability_status"] = enriched["profitability_status_hist"]
             if "tooltip" not in enriched.columns and "tooltip_hist" in enriched.columns:
                 enriched["tooltip"] = enriched["tooltip_hist"]
         else:
             enriched = active_routes.copy()
             enriched["colour"] = [PROFITABILITY_COLOURS["Unknown"]] * len(enriched)
             enriched["profit_band"] = "Unknown"
+            enriched["profitability_status"] = "Unknown"
             enriched["tooltip"] = "Active route"
 
         enriched["colour"] = enriched["colour"].apply(
             lambda value: value if isinstance(value, (list, tuple)) else [255, 255, 255]
         )
         enriched["tooltip"] = enriched.apply(
-            lambda row: f"Truck {row['truck_id']} ({row.get('profit_band', 'Unknown')})", axis=1
+            lambda row: "Truck {} ({})".format(
+                row["truck_id"],
+                row.get("profitability_status")
+                or row.get("profit_band", "Unknown"),
+            ),
+            axis=1,
         )
 
         active_layer = pdk.Layer(
