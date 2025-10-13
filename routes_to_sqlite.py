@@ -64,6 +64,10 @@ def migrate_schema(conn: sqlite3.Connection):
     conn.commit()
 
 # ---------- Geocoding helpers ----------
+STRICT_PELIAS_LAYERS = ["address", "street", "locality"]
+STRICT_PELIAS_SOURCES = ["osm", "wof"]
+
+
 def pelias_geocode(place: str, country: str):
     """
     Try a stricter AU-focused search first (address/street/locality layers),
