@@ -11,8 +11,10 @@ from analytics.db import ensure_global_parameters_table, set_parameter_value
 from analytics.price_distribution import (
     BREAK_EVEN_KEY,
     create_histogram,
+    create_metro_profitability_figure,
     create_m3_margin_figure,
     create_m3_vs_km_figure,
+    filter_metro_jobs,
     load_historical_jobs,
     prepare_route_map_data,
     summarise_distribution,
@@ -157,6 +159,27 @@ def build_conn() -> sqlite3.Connection:
     return conn
 
 
+@pytest.fixture()
+def metro_profitability_df():
+    return pd.DataFrame(
+        {
+            "price_per_m3": [280.0, 320.0, 260.0, 310.0],
+            "revenue_per_km": [8.5, 7.2, 6.8, 9.1],
+            "margin_per_m3": [45.0, 55.0, 28.0, 60.0],
+            "margin_per_m3_pct": [0.19, 0.21, 0.12, 0.24],
+            "final_cost_per_m3": [235.0, 265.0, 232.0, 250.0],
+            "distance_km": [45.0, 180.0, 75.0, 95.0],
+            "client_display": ["Acme", "Acme", "Beta", "Delta"],
+            "corridor_display": [
+                "BNE-SYD",
+                "SYD-MEL",
+                "BNE-IPS",
+                "BNE-GC",
+            ],
+        }
+    )
+
+
 def test_load_historical_jobs_filters_by_client_and_corridor():
     conn = build_conn()
     try:
@@ -186,6 +209,25 @@ def test_load_historical_jobs_filters_by_client_and_corridor():
         assert set(df_postcode["origin"].unique()) == {"Cairns"}
     finally:
         conn.close()
+
+
+def test_filter_metro_jobs_handles_missing_distances(metro_profitability_df):
+    df = metro_profitability_df.copy()
+    df.loc[len(df)] = {
+        "price_per_m3": 300.0,
+        "revenue_per_km": 8.0,
+        "margin_per_m3": 40.0,
+        "margin_per_m3_pct": 0.18,
+        "final_cost_per_m3": 260.0,
+        "distance_km": np.nan,
+        "client_display": "Zeta",
+        "corridor_display": "MEL-CBD",
+    }
+
+    filtered = filter_metro_jobs(df, max_distance_km=100.0)
+    assert set(filtered["distance_km"].tolist()) == {45.0, 75.0, 95.0}
+    # Ensure original frame was not modified
+    assert len(df) == 5
 
 
 def test_summarise_distribution_and_histogram():
@@ -239,6 +281,13 @@ def test_profitability_summary_and_views():
         assert line_traces
     finally:
         conn.close()
+
+
+def test_create_metro_profitability_figure_has_multiple_traces(metro_profitability_df):
+    fig = create_metro_profitability_figure(metro_profitability_df, max_distance_km=120.0)
+    assert len(fig.data) >= 2
+    assert any(trace.type == "scatter" for trace in fig.data)
+    assert any(trace.type == "histogram" for trace in fig.data)
 
 
 def test_prepare_route_map_data_filters_missing_coordinates():

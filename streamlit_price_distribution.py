@@ -18,9 +18,11 @@ from analytics.price_distribution import (
     ProfitabilitySummary,
     PROFITABILITY_COLOURS,
     create_histogram,
+    create_metro_profitability_figure,
     create_m3_margin_figure,
     create_m3_vs_km_figure,
     ensure_break_even_parameter,
+    filter_metro_jobs,
     load_historical_jobs,
     prepare_profitability_map_data,
     prepare_profitability_route_data,
@@ -89,6 +91,10 @@ def render_summary(
     summary: DistributionSummary,
     break_even: float,
     profitability_summary: ProfitabilitySummary,
+    *,
+    metro_summary: Optional[DistributionSummary] = None,
+    metro_profitability: Optional[ProfitabilitySummary] = None,
+    metro_distance_km: float = 100.0,
 ) -> None:
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Jobs in filter", summary.job_count)
@@ -162,6 +168,55 @@ def render_summary(
             label,
             _format_value(value, currency=as_currency, percentage=as_percentage),
         )
+
+    if metro_summary and metro_profitability:
+        st.markdown(
+            f"**Metro subset (≤{metro_distance_km:,.0f} km)**"
+        )
+        share = 0.0
+        if summary.job_count:
+            share = metro_summary.job_count / summary.job_count
+        st.caption(
+            f"{metro_summary.job_count} jobs in metro scope "
+            f"({share:.1%} of filtered jobs)."
+        )
+
+        metro_metrics = [
+            ("Median $/km", "revenue_per_km_median", True, False),
+            ("Average $/km", "revenue_per_km_mean", True, False),
+            ("Median margin $/m³", "margin_per_m3_median", True, False),
+            ("Median margin %", "margin_per_m3_pct_median", False, True),
+        ]
+        metro_cols = st.columns(len(metro_metrics))
+        for column, (label, attr, as_currency, as_percentage) in zip(
+            metro_cols, metro_metrics
+        ):
+            metro_value = getattr(metro_profitability, attr)
+            overall_value = getattr(profitability_summary, attr)
+            delta = None
+            if (
+                metro_value is not None
+                and overall_value is not None
+                and not any(
+                    isinstance(val, float)
+                    and (math.isnan(val) or math.isinf(val))
+                    for val in (metro_value, overall_value)
+                )
+            ):
+                diff = metro_value - overall_value
+                if as_currency:
+                    delta = f"{diff:+,.2f}"
+                elif as_percentage:
+                    delta = f"{diff * 100:+.1f}%"
+                else:
+                    delta = f"{diff:+.2f}"
+            column.metric(
+                label,
+                _format_value(
+                    metro_value, currency=as_currency, percentage=as_percentage
+                ),
+                delta=delta,
+            )
 
 
 def build_route_map(
@@ -630,7 +685,26 @@ with connection_scope() as conn:
 
     summary = summarise_distribution(filtered_df, break_even_value)
     profitability_summary = summarise_profitability(filtered_df)
-    render_summary(summary, break_even_value, profitability_summary)
+
+    metro_distance_km = 100.0
+    metro_df = filter_metro_jobs(filtered_df, max_distance_km=metro_distance_km)
+    metro_summary = (
+        summarise_distribution(metro_df, break_even_value)
+        if not metro_df.empty
+        else None
+    )
+    metro_profitability = (
+        summarise_profitability(metro_df) if not metro_df.empty else None
+    )
+
+    render_summary(
+        summary,
+        break_even_value,
+        profitability_summary,
+        metro_summary=metro_summary,
+        metro_profitability=metro_profitability,
+        metro_distance_km=metro_distance_km,
+    )
 
     truck_positions = load_truck_positions(conn)
     active_routes = load_active_routes(conn)
@@ -679,6 +753,9 @@ with connection_scope() as conn:
         view_options = {
             "m³ vs km profitability": create_m3_vs_km_figure,
             "Quoted vs calculated $/m³": create_m3_margin_figure,
+            "Metro profitability spotlight": lambda data: create_metro_profitability_figure(
+                data, max_distance_km=metro_distance_km
+            ),
         }
         selected_view = st.radio(
             "Choose a view",
@@ -689,6 +766,11 @@ with connection_scope() as conn:
         )
         fig = view_options[selected_view](filtered_df)
         st.plotly_chart(fig, use_container_width=True)
+
+        if selected_view == "Metro profitability spotlight":
+            st.caption(
+                "Metro view highlights close-in routes with margin and cost sensitivity overlays."
+            )
 
         if "margin_per_m3" in filtered_df.columns:
             st.markdown("#### Margin outliers")

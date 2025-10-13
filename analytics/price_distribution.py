@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from .db import (
     bootstrap_parameters,
@@ -703,6 +704,17 @@ def _empty_figure(title: str, x_title: str, y_title: str, message: str) -> go.Fi
     return fig
 
 
+def filter_metro_jobs(df: pd.DataFrame, max_distance_km: float = 100.0) -> pd.DataFrame:
+    """Return a copy filtered to jobs within the metro distance threshold."""
+
+    if "distance_km" not in df.columns:
+        return df.copy()
+
+    distances = df["distance_km"].astype(float)
+    within_threshold = distances.fillna(np.inf) <= max_distance_km
+    return df.loc[within_threshold].copy()
+
+
 def create_m3_vs_km_figure(df: pd.DataFrame) -> go.Figure:
     """Visualise $/m³ profitability relative to $/km earnings."""
 
@@ -827,6 +839,179 @@ def create_m3_margin_figure(df: pd.DataFrame) -> go.Figure:
         fig.add_trace(parity_line)
 
     fig.update_layout(coloraxis_colorbar=dict(title="Margin %"), legend_title_text=None)
+    return fig
+
+
+def create_metro_profitability_figure(
+    df: pd.DataFrame, *, max_distance_km: float = 100.0
+) -> go.Figure:
+    """Summarise metro-only profitability with scatter and distribution views."""
+
+    title = f"Metro profitability (≤{max_distance_km:,.0f} km)"
+    metro_df = filter_metro_jobs(df, max_distance_km=max_distance_km)
+
+    if metro_df.empty:
+        return _empty_figure(
+            title=title,
+            x_title="$ per m³",
+            y_title="$ per km",
+            message="No jobs fall within the metro distance threshold.",
+        )
+
+    required = {"price_per_m3", "revenue_per_km"}
+    missing = required - set(metro_df.columns)
+    if missing:
+        missing_list = ", ".join(sorted(missing))
+        return _empty_figure(
+            title=title,
+            x_title="$ per m³",
+            y_title="$ per km",
+            message=f"Metro view requires columns: {missing_list}.",
+        )
+
+    scatter_df = metro_df.dropna(subset=list(required))
+    if scatter_df.empty:
+        return _empty_figure(
+            title=title,
+            x_title="$ per m³",
+            y_title="$ per km",
+            message="Metro jobs lack both price and revenue per km values.",
+        )
+
+    margin_available = (
+        "margin_per_m3" in metro_df.columns
+        and not metro_df["margin_per_m3"].dropna().empty
+    )
+    cost_ratio_series = pd.Series(dtype=float)
+    if "final_cost_per_m3" in metro_df.columns:
+        ratio_df = metro_df.dropna(subset=["final_cost_per_m3", "price_per_m3"])
+        if not ratio_df.empty:
+            denom = ratio_df["price_per_m3"].replace(0, np.nan)
+            cost_ratio_series = (ratio_df["final_cost_per_m3"] / denom).replace(
+                [np.inf, -np.inf], np.nan
+            )
+            cost_ratio_series = cost_ratio_series.dropna()
+    cost_available = not cost_ratio_series.empty
+
+    subplot_titles = ["Price vs $/km (metro)"]
+    specs: list[dict[str, str]] = [{"type": "xy"}]
+    if margin_available:
+        subplot_titles.append("Margin $/m³ (metro)")
+        specs.append({"type": "xy"})
+    if cost_available:
+        subplot_titles.append("Cost vs quote share")
+        specs.append({"type": "xy"})
+
+    fig = make_subplots(
+        rows=1,
+        cols=len(subplot_titles),
+        subplot_titles=subplot_titles,
+        specs=[specs],
+        horizontal_spacing=0.08,
+    )
+
+    hover_bits: list[list[str]] = []
+    hover_columns = [
+        ("client_display", "Client"),
+        ("corridor_display", "Corridor"),
+        ("job_date", "Date"),
+        ("volume_m3", "Volume (m³)"),
+        ("distance_km", "Distance (km)"),
+        ("margin_per_m3", "Margin $/m³"),
+        ("margin_per_m3_pct", "Margin %"),
+    ]
+    for _, row in scatter_df.iterrows():
+        parts = [
+            f"Quoted $/m³: {row['price_per_m3']:,.2f}",
+            f"$ per km: {row['revenue_per_km']:,.2f}",
+        ]
+        for column, label in hover_columns:
+            if column not in scatter_df.columns:
+                continue
+            value = row.get(column)
+            if pd.isna(value):
+                continue
+            if column.endswith("pct"):
+                parts.append(f"{label}: {value * 100:.1f}%")
+            elif isinstance(value, (int, float)):
+                parts.append(f"{label}: {value:,.2f}")
+            else:
+                parts.append(f"{label}: {value}")
+        hover_bits.append(parts)
+
+    hover_texts = ["<br>".join(parts) for parts in hover_bits]
+
+    marker_args: dict[str, object] = {"size": 10, "opacity": 0.85}
+    if "margin_per_m3_pct" in scatter_df.columns and not scatter_df["margin_per_m3_pct"].dropna().empty:
+        marker_args.update(
+            {
+                "color": scatter_df["margin_per_m3_pct"],
+                "colorscale": "RdYlGn",
+                "showscale": True,
+                "colorbar": {"title": "Margin %", "tickformat": ".0%"},
+            }
+        )
+
+    fig.add_trace(
+        go.Scatter(
+            x=scatter_df["price_per_m3"],
+            y=scatter_df["revenue_per_km"],
+            mode="markers",
+            name="Metro jobs",
+            marker=marker_args,
+            hovertemplate="%{text}<extra></extra>",
+            text=hover_texts,
+        ),
+        row=1,
+        col=1,
+    )
+
+    fig.update_xaxes(title_text="Quoted $ per m³", row=1, col=1)
+    fig.update_yaxes(title_text="Revenue $ per km", row=1, col=1)
+
+    current_col = 2
+    if margin_available:
+        margin_series = metro_df["margin_per_m3"].dropna()
+        fig.add_trace(
+            go.Histogram(
+                x=margin_series,
+                name="Margin $/m³",
+                marker=dict(color="rgba(91, 192, 222, 0.85)"),
+                hovertemplate="Margin $/m³: %{x:,.2f}<br>Count: %{y}<extra></extra>",
+            ),
+            row=1,
+            col=current_col,
+        )
+        fig.update_xaxes(title_text="Margin $ per m³", row=1, col=current_col)
+        fig.update_yaxes(title_text="Job count", row=1, col=current_col)
+        current_col += 1
+
+    if cost_available:
+        fig.add_trace(
+            go.Histogram(
+                x=cost_ratio_series,
+                name="Cost sensitivity",
+                marker=dict(color="rgba(217, 83, 79, 0.7)"),
+                hovertemplate="Cost/price: %{x:.1%}<br>Count: %{y}<extra></extra>",
+            ),
+            row=1,
+            col=current_col,
+        )
+        fig.update_xaxes(
+            title_text="Cost as share of quoted price",
+            tickformat=".0%",
+            row=1,
+            col=current_col,
+        )
+        fig.update_yaxes(title_text="Job count", row=1, col=current_col)
+
+    fig.update_layout(
+        title=title,
+        bargap=0.05,
+        hovermode="closest",
+        legend_title_text=None,
+    )
+
     return fig
 
 
