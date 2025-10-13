@@ -78,6 +78,7 @@ Key visuals include:
 - Optional profitability tabs that compare $/m³ against $/km and contrast quoted vs cost-derived $/m³, including margin outlier tables.
 - An interactive Mapbox view showing each route with selectable colouring (job, client, origin city, or destination city) and toggles to focus on lines or points when clusters get dense.
 - A live network map that blends historical job filters with real-time truck telemetry, colouring corridors by profitability band and highlighting active trucks/routes.
+- A non-technical optimizer tab that recommends corridor price uplifts from the filtered data and offers a CSV export for action lists.
 
 ```bash
 streamlit run streamlit_price_distribution.py
