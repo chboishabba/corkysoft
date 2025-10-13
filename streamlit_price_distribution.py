@@ -985,7 +985,10 @@ with connection_scope() as conn:
                     default_margin_percent if default_margin_percent is not None else 20.0
                 ),
                 step=1.0,
-                disabled=not apply_margin,
+                help=(
+                    "Enter the desired margin percentage. The value is only used when 'Apply margin'"
+                    " is enabled."
+                ),
             )
             submitted = st.form_submit_button("Calculate quote")
 
