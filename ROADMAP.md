@@ -98,7 +98,7 @@ This merges everything from:
 | **CLI report (`list`)**                  |    ✅   | Clean console output.                      |
 | **Streamlit dashboard (MVP)**            |   🔜   | Route map + distribution + summary.        |
 | **Insurance / audit bundles (PDF)**      |   🔜   | One-click job evidence packs.              |
-| **Automated CSV / Google Sheets export** |   🔜   | For management analysis.                   |
+| **Automated CSV / Google Sheets export** |   🧩   | Helpers produce CSV-ready profitability summaries. |
 | **API endpoints**                        |   🔜   | JSON / REST for ERP + insurer integration. |
 
 ---

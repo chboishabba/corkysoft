@@ -581,6 +581,249 @@ def summarise_profitability(df: pd.DataFrame) -> ProfitabilitySummary:
     )
 
 
+def _format_ratio(ratio: float) -> str:
+    if ratio is None or math.isnan(ratio):
+        return "n/a"
+    return f"{ratio:.1%}"
+
+
+def _safe_float(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return math.nan
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return math.nan
+    if math.isnan(numeric):
+        return math.nan
+    return numeric
+
+
+def _format_corridor_notes(row: pd.Series, break_even: float) -> str:
+    details: list[str] = []
+
+    avg_margin_m3 = _safe_float(row.get("avg_margin_per_m3"))
+    if not math.isnan(avg_margin_m3):
+        details.append(f"Avg margin per m³ ${avg_margin_m3:.2f}")
+
+    avg_margin_pct = _safe_float(row.get("avg_margin_pct"))
+    if not math.isnan(avg_margin_pct):
+        details.append(f"Avg margin % {_format_ratio(avg_margin_pct)}")
+
+    avg_price_m3 = _safe_float(row.get("avg_price_per_m3"))
+    if not math.isnan(avg_price_m3):
+        delta = avg_price_m3 - break_even
+        details.append(f"Δ vs break-even ${delta:.2f}")
+
+    total_margin = _safe_float(row.get("total_margin"))
+    if not math.isnan(total_margin):
+        details.append(f"Total margin ${total_margin:.2f}")
+
+    total_volume = _safe_float(row.get("total_volume"))
+    if not math.isnan(total_volume):
+        details.append(f"Volume {total_volume:.1f} m³")
+
+    job_count = row.get("job_count")
+    if pd.notna(job_count):
+        details.append(f"Jobs {int(job_count)}")
+
+    return " | ".join(details)
+
+
+def build_profitability_export(
+    df: pd.DataFrame,
+    break_even: float,
+    *,
+    top_n_corridors: int = 3,
+) -> pd.DataFrame:
+    """Return a tabular export of profitability and optimisation highlights.
+
+    The export flattens the key metrics used throughout the dashboard into a
+    lightweight dataframe so that Streamlit and CLI callers can expose a
+    ready-to-download CSV summarising the filtered dataset.
+    """
+
+    distribution_summary = summarise_distribution(df, break_even)
+    profitability_summary = summarise_profitability(df)
+
+    rows: list[dict[str, object]] = []
+
+    def append_row(section: str, metric: str, value: object, unit: str = "", notes: str = "") -> None:
+        rows.append(
+            {
+                "section": section,
+                "metric": metric,
+                "value": value,
+                "unit": unit,
+                "notes": notes,
+            }
+        )
+
+    append_row("Assumptions", "Break-even assumption", float(break_even), "$/m³")
+
+    append_row("Distribution", "Jobs analysed", distribution_summary.job_count, "jobs")
+    append_row("Distribution", "Jobs with price", distribution_summary.priced_job_count, "jobs")
+
+    if not math.isnan(distribution_summary.median):
+        append_row("Distribution", "Median price per m³", distribution_summary.median, "$/m³")
+        append_row(
+            "Distribution",
+            "25th percentile price per m³",
+            distribution_summary.percentile_25,
+            "$/m³",
+        )
+        append_row(
+            "Distribution",
+            "75th percentile price per m³",
+            distribution_summary.percentile_75,
+            "$/m³",
+        )
+        append_row("Distribution", "Mean price per m³", distribution_summary.mean, "$/m³")
+        append_row("Distribution", "Std deviation", distribution_summary.std_dev, "$/m³")
+        append_row("Distribution", "Kurtosis", distribution_summary.kurtosis)
+        append_row("Distribution", "Skewness", distribution_summary.skewness)
+
+    below_ratio_note = f"{_format_ratio(distribution_summary.below_break_even_ratio)} of priced jobs"
+    append_row(
+        "Distribution",
+        "Below break-even jobs",
+        distribution_summary.below_break_even_count,
+        "jobs",
+        below_ratio_note,
+    )
+
+    append_row(
+        "Profitability",
+        "Median revenue per km",
+        profitability_summary.revenue_per_km_median,
+        "$/km",
+    )
+    append_row(
+        "Profitability",
+        "Mean revenue per km",
+        profitability_summary.revenue_per_km_mean,
+        "$/km",
+    )
+    append_row(
+        "Profitability",
+        "Median margin per m³",
+        profitability_summary.margin_per_m3_median,
+        "$/m³",
+    )
+    append_row(
+        "Profitability",
+        "Median margin per m³ %",
+        profitability_summary.margin_per_m3_pct_median,
+        "ratio",
+    )
+    append_row(
+        "Profitability",
+        "Median margin total",
+        profitability_summary.margin_total_median,
+        "$",
+    )
+    append_row(
+        "Profitability",
+        "Median margin total %",
+        profitability_summary.margin_total_pct_median,
+        "ratio",
+    )
+
+    if "price_per_m3" in df.columns:
+        price_series = pd.to_numeric(df["price_per_m3"], errors="coerce")
+        bands = price_series.apply(lambda value: classify_profit_band(value, break_even))
+        band_counts = bands.value_counts()
+        priced_jobs = len(price_series.dropna()) or 1
+        for label, count in band_counts.items():
+            ratio = _format_ratio(count / priced_jobs)
+            append_row(
+                "Profitability",
+                f"Band - {label}",
+                int(count),
+                "jobs",
+                f"{ratio} of priced jobs",
+            )
+
+    if "corridor_display" in df.columns:
+        numeric_df = df.copy()
+        column_pairs = {
+            "price_per_m3_numeric": "price_per_m3",
+            "margin_per_m3_numeric": "margin_per_m3",
+            "margin_per_m3_pct_numeric": "margin_per_m3_pct",
+            "margin_total_numeric": "margin_total",
+            "volume_m3_numeric": "volume_m3",
+        }
+        for numeric_column, source_column in column_pairs.items():
+            if source_column in numeric_df.columns:
+                numeric_df[numeric_column] = pd.to_numeric(
+                    numeric_df[source_column], errors="coerce"
+                )
+            else:
+                numeric_df[numeric_column] = math.nan
+
+        grouped = numeric_df.groupby("corridor_display", dropna=False)
+        corridor_stats = grouped.agg(
+            avg_price_per_m3=("price_per_m3_numeric", "mean"),
+            avg_margin_per_m3=("margin_per_m3_numeric", "mean"),
+            avg_margin_pct=("margin_per_m3_pct_numeric", "mean"),
+            total_margin=("margin_total_numeric", "sum"),
+            total_volume=("volume_m3_numeric", "sum"),
+        )
+        corridor_stats["job_count"] = grouped.size()
+
+        corridor_stats = corridor_stats.replace({np.inf: math.nan, -np.inf: math.nan})
+
+        if not corridor_stats.empty and corridor_stats["avg_margin_per_m3"].notna().any():
+            sorted_corridors = corridor_stats.sort_values(
+                "avg_margin_per_m3", ascending=False
+            )
+            top_corridors = sorted_corridors.head(top_n_corridors)
+            for idx, (corridor, row) in enumerate(top_corridors.iterrows(), start=1):
+                append_row(
+                    "Optimisation",
+                    f"Top corridor #{idx} by avg margin per m³",
+                    corridor,
+                    notes=_format_corridor_notes(row, break_even),
+                )
+
+            bottom_corridors = sorted_corridors.tail(top_n_corridors).sort_values(
+                "avg_margin_per_m3", ascending=True
+            )
+            for idx, (corridor, row) in enumerate(bottom_corridors.iterrows(), start=1):
+                append_row(
+                    "Optimisation",
+                    f"Lowest margin corridor #{idx}",
+                    corridor,
+                    notes=_format_corridor_notes(row, break_even),
+                )
+
+        if "avg_price_per_m3" in corridor_stats.columns:
+            below_break_even = corridor_stats[
+                corridor_stats["avg_price_per_m3"] < float(break_even)
+            ]
+            if not below_break_even.empty:
+                entries: list[str] = []
+                ordered = below_break_even.sort_values("avg_price_per_m3")
+                for corridor, row in ordered.iterrows():
+                    avg_price = _safe_float(row.get("avg_price_per_m3"))
+                    if math.isnan(avg_price):
+                        continue
+                    delta = avg_price - float(break_even)
+                    job_count = int(row.get("job_count", 0))
+                    entries.append(
+                        f"{corridor} ({job_count} jobs, Δ ${delta:.2f})"
+                    )
+                if entries:
+                    append_row(
+                        "Optimisation",
+                        "Corridors below break-even",
+                        ", ".join(entries),
+                        notes="Negative Δ indicates pricing below break-even",
+                    )
+
+    return pd.DataFrame(rows, columns=["section", "metric", "value", "unit", "notes"])
+
+
 def classify_profit_band(value: Optional[float], break_even: float) -> str:
     """Return the profitability band label for a per-m³ price."""
 

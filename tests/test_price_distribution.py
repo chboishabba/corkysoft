@@ -15,6 +15,7 @@ from analytics.price_distribution import (
     create_metro_profitability_figure,
     create_m3_margin_figure,
     create_m3_vs_km_figure,
+    build_profitability_export,
     filter_metro_jobs,
     load_historical_jobs,
     prepare_route_map_data,
@@ -280,6 +281,38 @@ def test_profitability_summary_and_views():
         line_traces = [trace for trace in margin_fig.data if getattr(trace, "mode", "") == "lines"]
         assert marker_traces
         assert line_traces
+    finally:
+        conn.close()
+
+
+def test_build_profitability_export_shapes_summary_and_corridors():
+    conn = build_conn()
+    try:
+        df, _ = load_historical_jobs(conn)
+        export_df = build_profitability_export(df, break_even=250.0, top_n_corridors=2)
+
+        assert list(export_df.columns) == ["section", "metric", "value", "unit", "notes"]
+
+        jobs_row = export_df[export_df["metric"] == "Jobs analysed"].iloc[0]
+        assert jobs_row["value"] == 4
+
+        below_break_even = export_df[export_df["metric"] == "Below break-even jobs"].iloc[0]
+        assert below_break_even["value"] == 3
+        assert "75.0%" in below_break_even["notes"]
+
+        median_price = export_df[export_df["metric"] == "Median price per m³"].iloc[0]
+        assert pytest.approx(median_price["value"], rel=1e-6) == 212.5
+
+        top_corridors = export_df[export_df["metric"].str.startswith("Top corridor")]
+        assert {"Brisbane → Sydney", "Brisbane → Melbourne"}.issubset(
+            set(top_corridors["value"])
+        )
+
+        lowest_corridors = export_df[export_df["metric"].str.startswith("Lowest margin corridor")]
+        assert "Cairns → Melbourne" in set(lowest_corridors["value"])
+
+        below_corridors = export_df[export_df["metric"] == "Corridors below break-even"].iloc[0]
+        assert "Cairns → Melbourne" in below_corridors["value"]
     finally:
         conn.close()
 
