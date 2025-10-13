@@ -414,6 +414,8 @@ def render_network_map(
     historical_routes: pd.DataFrame,
     trucks: pd.DataFrame,
     active_routes: pd.DataFrame,
+    *,
+    toggle_key: str = "network_map_live_overlay_toggle",
 ) -> None:
     st.markdown("### Live network overview")
 
@@ -424,7 +426,7 @@ def render_network_map(
             "Toggle the live overlay of active routes and truck telemetry without "
             "hiding the base map."
         ),
-        key="network_map_live_overlay_toggle",
+        key=toggle_key,
     )
 
     if historical_routes.empty and trucks.empty and active_routes.empty:
@@ -802,7 +804,12 @@ with connection_scope() as conn:
     active_routes = load_active_routes(conn)
     map_routes = prepare_profitability_route_data(filtered_df, break_even_value)
 
-    render_network_map(map_routes, truck_positions, active_routes)
+    render_network_map(
+        map_routes,
+        truck_positions,
+        active_routes,
+        toggle_key="network_map_live_overlay_toggle_overview",
+    )
 
     st.button(
         "Open quote builder",
@@ -1041,7 +1048,12 @@ with connection_scope() as conn:
                     st.plotly_chart(heatmap_fig, use_container_width=True)
 
         network_routes = prepare_profitability_map_data(scoped_df, break_even_value)
-        render_network_map(network_routes, truck_positions, active_routes)
+        render_network_map(
+            network_routes,
+            truck_positions,
+            active_routes,
+            toggle_key="network_map_live_overlay_toggle_tab",
+        )
 
     with tab_map["Quote builder"]:
         st.markdown("### Quote builder")
