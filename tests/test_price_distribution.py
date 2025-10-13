@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import warnings
 
 import pytest
 
@@ -223,6 +224,49 @@ def test_load_historical_jobs_filters_by_client_and_corridor():
 
         df_postcode, _ = load_historical_jobs(conn, postcode_prefix="48")
         assert set(df_postcode["origin"].unique()) == {"Cairns"}
+    finally:
+        conn.close()
+
+
+def test_load_historical_jobs_parses_dayfirst_dates_without_warnings():
+    conn = build_conn()
+    try:
+        dayfirst_dates = {
+            1: "05/01/2024",
+            2: "18/01/2024",
+            3: "01/02/2024",
+            4: "10/02/2024",
+        }
+        for job_id, date_str in dayfirst_dates.items():
+            conn.execute(
+                "UPDATE historical_jobs SET job_date = ? WHERE id = ?",
+                (date_str, job_id),
+            )
+        conn.commit()
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            df, mapping = load_historical_jobs(conn)
+        assert caught == []
+
+        assert mapping.date == "job_date"
+        expected_dates = [
+            pd.Timestamp("2024-01-05"),
+            pd.Timestamp("2024-01-18"),
+            pd.Timestamp("2024-02-01"),
+            pd.Timestamp("2024-02-10"),
+        ]
+        assert df[mapping.date].tolist() == expected_dates
+        assert str(df[mapping.date].dtype).startswith("datetime64[ns]")
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            filtered_df, filtered_mapping = load_historical_jobs(
+                conn, start_date=pd.Timestamp("2024-02-01")
+            )
+        assert caught == []
+        assert filtered_mapping.date == mapping.date
+        assert filtered_df[filtered_mapping.date].tolist() == expected_dates[2:]
     finally:
         conn.close()
 
