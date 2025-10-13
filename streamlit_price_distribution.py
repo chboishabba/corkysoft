@@ -300,9 +300,17 @@ def render_network_map(
 ) -> None:
     st.markdown("### Live network overview")
 
+    show_live_overlay = st.toggle(
+        "Show live network overlay",
+        value=True,
+        help=(
+            "Toggle the live overlay of active routes and truck telemetry without "
+            "hiding the base map."
+        ),
+    )
+
     if historical_routes.empty and trucks.empty and active_routes.empty:
         st.info("No geocoded historical jobs or live telemetry available to plot yet.")
-        return
 
     truck_data = trucks.copy()
     if not truck_data.empty:
@@ -314,10 +322,19 @@ def render_network_map(
             lambda row: f"{row['truck_id']} ({row['status']})", axis=1
         )
 
-    layers: list[pdk.Layer] = []
+    base_map_layer = pdk.Layer(
+        "TileLayer",
+        data="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        min_zoom=0,
+        max_zoom=19,
+        tile_size=256,
+        attribution="© OpenStreetMap contributors",
+    )
 
-    if not historical_routes.empty:
-        base_layer = pdk.Layer(
+    overlay_layers: list[pdk.Layer] = []
+
+    if show_live_overlay and not historical_routes.empty:
+        history_layer = pdk.Layer(
             "LineLayer",
             data=historical_routes,
             get_source_position="[origin_lon, origin_lat]",
@@ -327,9 +344,9 @@ def render_network_map(
             pickable=True,
             opacity=0.4,
         )
-        layers.append(base_layer)
+        overlay_layers.append(history_layer)
 
-    if not active_routes.empty:
+    if show_live_overlay and not active_routes.empty:
         if "job_id" in active_routes.columns and not historical_routes.empty:
             enriched = active_routes.merge(
                 historical_routes[["id", "colour", "profit_band", "tooltip"]],
@@ -367,9 +384,9 @@ def render_network_map(
             pickable=True,
             opacity=0.9,
         )
-        layers.append(active_layer)
+        overlay_layers.append(active_layer)
 
-    if not truck_data.empty:
+    if show_live_overlay and not truck_data.empty:
         trucks_layer = pdk.Layer(
             "ScatterplotLayer",
             data=truck_data,
@@ -378,7 +395,7 @@ def render_network_map(
             get_radius=800,
             pickable=True,
         )
-        layers.append(trucks_layer)
+        overlay_layers.append(trucks_layer)
 
         text_layer = pdk.Layer(
             "TextLayer",
@@ -391,7 +408,7 @@ def render_network_map(
             size_scale=16,
             get_alignment_baseline="bottom",
         )
-        layers.append(text_layer)
+        overlay_layers.append(text_layer)
 
     view_df_candidates: list[pd.DataFrame] = []
     if not historical_routes.empty:
@@ -410,24 +427,27 @@ def render_network_map(
         )
     view_df = pd.concat(view_df_candidates) if view_df_candidates else pd.DataFrame()
 
-    tooltip = {"html": "<b>{tooltip}</b>", "style": {"color": "white"}}
+    tooltip = None
+    if show_live_overlay and overlay_layers:
+        tooltip = {"html": "<b>{tooltip}</b>", "style": {"color": "white"}}
 
     st.pydeck_chart(
         pdk.Deck(
-            layers=layers,
+            layers=[base_map_layer, *overlay_layers],
             initial_view_state=_initial_view_state(view_df),
             tooltip=tooltip,
-            map_style="mapbox://styles/mapbox/light-v9",
+            map_style=None,
         )
     )
 
-    legend_cols = st.columns(len(PROFITABILITY_COLOURS))
-    for (band, colour), column in zip(PROFITABILITY_COLOURS.items(), legend_cols):
-        colour_hex = "#" + "".join(f"{int(c):02x}" for c in colour)
-        column.markdown(
-            f"<div style='color:{colour_hex}; font-weight:bold'>{band}</div>",
-            unsafe_allow_html=True,
-        )
+    if show_live_overlay and overlay_layers:
+        legend_cols = st.columns(len(PROFITABILITY_COLOURS))
+        for (band, colour), column in zip(PROFITABILITY_COLOURS.items(), legend_cols):
+            colour_hex = "#" + "".join(f"{int(c):02x}" for c in colour)
+            column.markdown(
+                f"<div style='color:{colour_hex}; font-weight:bold'>{band}</div>",
+                unsafe_allow_html=True,
+            )
 
 
 def _set_query_params(**params: str) -> None:
