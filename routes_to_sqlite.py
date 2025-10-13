@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-import os, time, sqlite3, datetime, json
+import os, time, sqlite3, datetime, json, re
 import openrouteservice as ors
 from datetime import datetime, timezone
 import argparse, csv, sys
+from typing import Optional
 
 from corkysoft.au_address import GeocodeResult, geocode_with_normalization
 
@@ -42,6 +43,30 @@ CREATE TABLE IF NOT EXISTS jobs (
   updated_at TEXT,
   UNIQUE(origin, destination)
 );
+
+CREATE TABLE IF NOT EXISTS historical_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_date TEXT NOT NULL,
+  origin TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  m3 REAL,
+  quoted_price REAL,
+  price_per_m3 REAL,
+  client TEXT NOT NULL DEFAULT '',
+  origin_normalized TEXT,
+  destination_normalized TEXT,
+  origin_postcode TEXT,
+  destination_postcode TEXT,
+  origin_lon REAL,
+  origin_lat REAL,
+  dest_lon REAL,
+  dest_lat REAL,
+  distance_km REAL,
+  duration_hr REAL,
+  imported_at TEXT NOT NULL,
+  updated_at TEXT,
+  UNIQUE(job_date, origin, destination, client, quoted_price)
+);
 """
 
 def ensure_schema(conn: sqlite3.Connection):
@@ -62,6 +87,78 @@ def migrate_schema(conn: sqlite3.Connection):
     add("dest_lat", "REAL")
     add("route_geojson", "TEXT")  # full driving lines
     conn.commit()
+
+# ---------- Address normalization (AU-focused) ----------
+ABBREV = {
+    " cr ": " Circuit ",
+    " crt ": " Court ",
+    " ct ": " Court ",
+    " ave ": " Avenue ",
+    " av ": " Avenue ",
+    " rd ": " Road ",
+    " st ": " Street ",
+    " hwy ": " Highway ",
+    " pde ": " Parade ",
+    " dr ": " Drive ",
+    " wy ": " Way ",
+}
+
+def normalize_au_address(s: str) -> str:
+    if not s:
+        return s
+    t = f" {s.strip()} ".lower()
+    for k, v in ABBREV.items():
+        t = t.replace(k, v.lower())
+    t = " ".join(t.split())  # collapse spaces
+    # Capitalize words
+    t = " ".join(w.capitalize() for w in t.split())
+    # If there’s a postcode but no explicit state, default to QLD (common case you showed)
+    if " qld " not in (" " + t.lower() + " ") and any(ch.isdigit() for ch in t[-5:]):
+        t = t + ", QLD"
+    return t
+
+# ---------- Shared utilities ----------
+POSTCODE_RE = re.compile(r"\b(\d{4})\b")
+
+
+def _normalize_whitespace(value: str) -> str:
+    return " ".join(value.strip().split())
+
+
+def normalize_location(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    return _normalize_whitespace(value)
+
+
+def normalize_postcode(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    match = POSTCODE_RE.search(value)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def parse_date(value: str) -> datetime.date:
+    value = value.strip()
+    # Try a set of common formats (ISO, AU, US) before falling back to date.fromisoformat
+    candidates = (
+        "%Y-%m-%d",
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+        "%m/%d/%Y",
+    )
+    for fmt in candidates:
+        try:
+            return datetime.datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+    try:
+        return datetime.date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"Unrecognised date format: {value!r}") from exc
+
 
 # ---------- Geocoding helpers ----------
 STRICT_PELIAS_LAYERS = ["address", "street", "locality"]
@@ -152,6 +249,162 @@ def cost_breakdown(distance_km: float, duration_hr: float, hourly_rate: float, p
     cost_time = duration_hr * hourly_rate
     cost_dist = distance_km * per_km_rate
     return cost_time, cost_dist, (cost_time + cost_dist)
+
+# ---------- Historical job import ----------
+def import_historical_jobs(
+    conn: sqlite3.Connection,
+    csv_path: str,
+    *,
+    geocode: bool = False,
+    route: bool = False,
+    country: str = COUNTRY_DEFAULT,
+):
+    if route:
+        geocode = True
+
+    inserted = 0
+    updated = 0
+    now = datetime.datetime.now(timezone.utc).isoformat()
+
+    with open(csv_path, newline="") as f:
+        reader = csv.DictReader(f)
+        expected = {"date", "origin", "destination", "m3", "quoted_price", "client"}
+        missing = expected - set(reader.fieldnames or [])
+        if missing:
+            raise ValueError(f"CSV is missing required headers: {', '.join(sorted(missing))}")
+
+        for idx, row in enumerate(reader, start=2):  # header is line 1
+            try:
+                date_raw = row.get("date", "").strip()
+                origin_raw = row.get("origin", "").strip()
+                dest_raw = row.get("destination", "").strip()
+                m3_raw = row.get("m3", "").strip()
+                price_raw = row.get("quoted_price", "").strip()
+                client_raw = row.get("client", "").strip()
+
+                if not (date_raw and origin_raw and dest_raw and price_raw):
+                    raise ValueError("Row is missing required values")
+
+                job_date = parse_date(date_raw).isoformat()
+                origin = origin_raw
+                destination = dest_raw
+                client = client_raw or ""
+
+                try:
+                    m3 = float(m3_raw) if m3_raw else None
+                except ValueError as exc:
+                    raise ValueError(f"Invalid m3 value: {m3_raw!r}") from exc
+
+                try:
+                    quoted_price = float(price_raw)
+                except ValueError as exc:
+                    raise ValueError(f"Invalid quoted_price value: {price_raw!r}") from exc
+
+                price_per_m3 = None
+                if m3 is not None and m3 > 0:
+                    price_per_m3 = quoted_price / m3
+
+                origin_norm = normalize_location(origin)
+                dest_norm = normalize_location(destination)
+                origin_postcode = normalize_postcode(origin_norm or "")
+                dest_postcode = normalize_postcode(dest_norm or "")
+
+                origin_lon = origin_lat = dest_lon = dest_lat = None
+                distance_km = duration_hr = None
+
+                if geocode and origin_norm:
+                    try:
+                        origin_lon, origin_lat, origin_label = geocode_cached(conn, origin_norm, country)
+                        origin_norm = origin_label or origin_norm
+                    except Exception as exc:
+                        print(f"[WARN] Line {idx}: failed to geocode origin {origin!r}: {exc}", file=sys.stderr)
+
+                if geocode and dest_norm:
+                    try:
+                        dest_lon, dest_lat, dest_label = geocode_cached(conn, dest_norm, country)
+                        dest_norm = dest_label or dest_norm
+                    except Exception as exc:
+                        print(f"[WARN] Line {idx}: failed to geocode destination {destination!r}: {exc}", file=sys.stderr)
+
+                if route and None not in (origin_lon, origin_lat, dest_lon, dest_lat):
+                    try:
+                        route_res = client.directions(
+                            coordinates=[[origin_lon, origin_lat], [dest_lon, dest_lat]],
+                            profile="driving-car",
+                            format="json",
+                        )
+                        summary = route_res["routes"][0]["summary"]
+                        distance_km = float(summary["distance"]) / 1000.0
+                        duration_hr = float(summary["duration"]) / 3600.0
+                        time.sleep(ROUTE_BACKOFF)
+                    except Exception as exc:
+                        print(f"[WARN] Line {idx}: failed to route {origin!r} -> {destination!r}: {exc}", file=sys.stderr)
+
+                params = (
+                    job_date,
+                    origin,
+                    destination,
+                    m3,
+                    quoted_price,
+                    price_per_m3,
+                    client,
+                    origin_norm,
+                    dest_norm,
+                    origin_postcode,
+                    dest_postcode,
+                    origin_lon,
+                    origin_lat,
+                    dest_lon,
+                    dest_lat,
+                    distance_km,
+                    duration_hr,
+                    now,
+                    now,
+                )
+
+                existing = conn.execute(
+                    """
+                    SELECT 1 FROM historical_jobs
+                    WHERE job_date = ? AND origin = ? AND destination = ? AND quoted_price = ? AND client = ?
+                    """,
+                    (job_date, origin, destination, quoted_price, client),
+                ).fetchone()
+
+                conn.execute(
+                    """
+                    INSERT INTO historical_jobs (
+                        job_date, origin, destination, m3, quoted_price, price_per_m3, client,
+                        origin_normalized, destination_normalized, origin_postcode, destination_postcode,
+                        origin_lon, origin_lat, dest_lon, dest_lat, distance_km, duration_hr,
+                        imported_at, updated_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(job_date, origin, destination, client, quoted_price)
+                    DO UPDATE SET
+                        m3 = excluded.m3,
+                        price_per_m3 = excluded.price_per_m3,
+                        origin_normalized = COALESCE(excluded.origin_normalized, historical_jobs.origin_normalized),
+                        destination_normalized = COALESCE(excluded.destination_normalized, historical_jobs.destination_normalized),
+                        origin_postcode = COALESCE(excluded.origin_postcode, historical_jobs.origin_postcode),
+                        destination_postcode = COALESCE(excluded.destination_postcode, historical_jobs.destination_postcode),
+                        origin_lon = COALESCE(excluded.origin_lon, historical_jobs.origin_lon),
+                        origin_lat = COALESCE(excluded.origin_lat, historical_jobs.origin_lat),
+                        dest_lon = COALESCE(excluded.dest_lon, historical_jobs.dest_lon),
+                        dest_lat = COALESCE(excluded.dest_lat, historical_jobs.dest_lat),
+                        distance_km = COALESCE(excluded.distance_km, historical_jobs.distance_km),
+                        duration_hr = COALESCE(excluded.duration_hr, historical_jobs.duration_hr),
+                        updated_at = excluded.updated_at
+                    """,
+                    params,
+                )
+                if existing:
+                    updated += 1
+                else:
+                    inserted += 1
+            except Exception as exc:
+                print(f"[ERR] Line {idx}: {exc}", file=sys.stderr)
+
+    conn.commit()
+    print(f"Imported historical jobs: {inserted} inserted, {updated} updated.")
 
 # ---------- Processing ----------
 def process_pending(conn: sqlite3.Connection, limit: int = 1000):
@@ -377,11 +630,16 @@ def cli():
     a2 = sub.add_parser("add-csv")
     a2.add_argument("csv")
 
+    a_history = sub.add_parser("import-history")
+    a_history.add_argument("csv")
+    a_history.add_argument("--geocode", action="store_true", help="Geocode origins/destinations while importing")
+    a_history.add_argument("--route", action="store_true", help="Calculate route metrics (implies --geocode)")
+
     sub.add_parser("list")
     sub.add_parser("run")
 
-    a3 = sub.add_parser("map")
-    a3.add_argument("--out", default="routes_map.html", help="Output HTML map path")
+    a_map = sub.add_parser("map")
+    a_map.add_argument("--out", default="routes_map.html", help="Output HTML map path")
 
     args = p.parse_args()
     conn = sqlite3.connect(DB_PATH)
@@ -394,6 +652,8 @@ def cli():
     elif args.cmd == "add-csv":
         add_from_csv(conn, args.csv)
         print("Imported.")
+    elif args.cmd == "import-history":
+        import_historical_jobs(conn, args.csv, geocode=args.geocode, route=args.route)
     elif args.cmd == "list":
         list_jobs(conn)
     elif args.cmd == "run":
