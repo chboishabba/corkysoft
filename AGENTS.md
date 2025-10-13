@@ -23,3 +23,5 @@ Please also check ROADMAP.md and README.md
 Update these with any progress you make, and with instructions on how to use the software.
 
 Ensure tests are added along with features to prevent regressions.
+
+Make sure you run the tests relevant to the code you're editing too!
