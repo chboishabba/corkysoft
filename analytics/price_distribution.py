@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional, Sequence
 
@@ -10,6 +11,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+from pandas.api.types import is_datetime64_any_dtype
 
 from .db import (
     bootstrap_parameters,
@@ -199,6 +202,52 @@ def _first_present(columns: Iterable[str], candidates: Sequence[str]) -> Optiona
     return None
 
 
+def _infer_datetime_parse_kwargs(series: pd.Series) -> dict[str, Any]:
+    """Infer keyword arguments for :func:`pandas.to_datetime` for *series*."""
+    if is_datetime64_any_dtype(series):
+        return {}
+
+    sample = (
+        series.dropna()
+        .astype(str)
+        .str.strip()
+        .replace({"": np.nan})
+        .dropna()
+    )
+
+    if sample.empty:
+        return {}
+
+    sample_values = sample.head(20).tolist()
+
+    iso_date_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+    if all(iso_date_pattern.match(value) for value in sample_values):
+        return {"format": "%Y-%m-%d"}
+
+    slash_pattern = re.compile(r"^\d{1,2}/\d{1,2}/\d{4}$")
+    slash_values = [value for value in sample_values if slash_pattern.match(value)]
+    if slash_values and len(slash_values) == len(sample_values):
+        numeric_parts = [tuple(int(part) for part in value.split("/")) for value in slash_values]
+        if any(parts[0] > 12 for parts in numeric_parts):
+            return {"dayfirst": True}
+        if any(parts[1] > 12 for parts in numeric_parts):
+            return {"dayfirst": False}
+        # Ambiguous day/month ordering; prefer day-first to match AU/EU data dumps.
+        return {"dayfirst": True}
+
+    dash_pattern = re.compile(r"^\d{1,2}-\d{1,2}-\d{4}$")
+    dash_values = [value for value in sample_values if dash_pattern.match(value)]
+    if dash_values and len(dash_values) == len(sample_values):
+        numeric_parts = [tuple(int(part) for part in value.split("-")) for value in dash_values]
+        if any(parts[0] > 12 for parts in numeric_parts):
+            return {"dayfirst": True}
+        if any(parts[1] > 12 for parts in numeric_parts):
+            return {"dayfirst": False}
+        return {"dayfirst": True}
+
+    return {}
+
+
 def infer_columns(df: pd.DataFrame) -> ColumnMapping:
     cols = df.columns
     return ColumnMapping(
@@ -313,11 +362,16 @@ def load_historical_jobs(
     mapping = infer_columns(df)
 
     if mapping.date and mapping.date in df.columns:
-        df[mapping.date] = pd.to_datetime(df[mapping.date], errors="coerce")
+        parse_kwargs = _infer_datetime_parse_kwargs(df[mapping.date])
+        df[mapping.date] = pd.to_datetime(
+            df[mapping.date], errors="coerce", **parse_kwargs
+        )
+        parsed_dates = df[mapping.date]
         if start_date is not None:
-            df = df[df[mapping.date] >= pd.to_datetime(start_date)]
+            df = df[parsed_dates >= start_date]
+            parsed_dates = df[mapping.date]
         if end_date is not None:
-            df = df[df[mapping.date] <= pd.to_datetime(end_date)]
+            df = df[parsed_dates <= end_date]
 
     if mapping.client and clients:
         df = df[df[mapping.client].isin(clients)]
