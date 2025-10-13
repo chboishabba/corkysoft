@@ -424,6 +424,7 @@ def render_network_map(
             "Toggle the live overlay of active routes and truck telemetry without "
             "hiding the base map."
         ),
+        key="network_map_live_overlay_toggle",
     )
 
     if historical_routes.empty and trucks.empty and active_routes.empty:
