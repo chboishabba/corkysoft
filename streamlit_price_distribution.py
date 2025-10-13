@@ -53,9 +53,32 @@ from corkysoft.quote_service import (
 # Prefer the newer `filter_jobs_by_distance(df, metro_only=True/False, max_distance_km=...)`.
 # If unavailable, fall back to `filter_metro_jobs(df, max_distance_km=...)`.
 try:
+    from inspect import signature
+
     from analytics.price_distribution import (  # type: ignore
-        filter_jobs_by_distance as _filter_by_distance,
+        filter_jobs_by_distance as _filter_jobs_by_distance,
     )
+
+    try:
+        _FILTER_DISTANCE_PARAM = next(
+            param
+            for param in ("max_distance_km", "threshold_km")
+            if param in signature(_filter_jobs_by_distance).parameters
+        )
+    except (StopIteration, ValueError, TypeError):
+        _FILTER_DISTANCE_PARAM = None
+
+    def _filter_by_distance(
+        df: pd.DataFrame,
+        *,
+        metro_only: bool = False,
+        max_distance_km: float = 100.0,
+    ) -> pd.DataFrame:
+        kwargs = {"metro_only": metro_only}
+        if _FILTER_DISTANCE_PARAM is not None:
+            kwargs[_FILTER_DISTANCE_PARAM] = max_distance_km
+        return _filter_jobs_by_distance(df, **kwargs)
+
 except Exception:
     try:
         from analytics.price_distribution import (  # type: ignore
