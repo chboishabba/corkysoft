@@ -640,7 +640,7 @@ def render_network_map(
             get_source_position="[origin_lon, origin_lat]",
             get_target_position="[dest_lon, dest_lat]",
             get_color="colour",
-            get_width=250,
+            get_width=5,
             pickable=True,
             opacity=0.9,
         )
