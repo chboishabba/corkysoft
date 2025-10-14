@@ -333,6 +333,155 @@ def _historical_jobs_query() -> str:
     """
 
 
+def _prepare_loaded_jobs(
+    df: pd.DataFrame,
+    mapping: ColumnMapping,
+    base_costs: BaseCostConfig,
+    *,
+    start_date: Optional[pd.Timestamp] = None,
+    end_date: Optional[pd.Timestamp] = None,
+    clients: Optional[Sequence[str]] = None,
+    corridor: Optional[str] = None,
+    postcode_prefix: Optional[str] = None,
+) -> tuple[pd.DataFrame, ColumnMapping]:
+    """Return ``df`` filtered and enriched for downstream visualisations."""
+
+    if df.empty:
+        return df, mapping
+
+    working = df.copy()
+
+    if mapping.date and mapping.date in working.columns:
+        parse_kwargs = _infer_datetime_parse_kwargs(working[mapping.date])
+        working[mapping.date] = pd.to_datetime(
+            working[mapping.date], errors="coerce", **parse_kwargs
+        )
+        parsed_dates = working[mapping.date]
+        if start_date is not None:
+            working = working[parsed_dates >= start_date]
+            parsed_dates = working[mapping.date]
+        if end_date is not None:
+            working = working[parsed_dates <= end_date]
+
+    if mapping.client and clients:
+        working = working[working[mapping.client].isin(clients)]
+
+    if postcode_prefix:
+        prefix = str(postcode_prefix).strip()
+        if prefix:
+            prefix_lower = prefix.lower()
+            known_postcodes = {pc.lower() for pc in POSTCODE_COLUMNS}
+            postcode_columns = [
+                column for column in working.columns if column.lower() in known_postcodes
+            ]
+            text_columns = list(dict.fromkeys(postcode_columns))
+            if mapping.corridor and mapping.corridor in working.columns:
+                text_columns.append(mapping.corridor)
+            if mapping.origin and mapping.origin in working.columns:
+                text_columns.append(mapping.origin)
+            if mapping.destination and mapping.destination in working.columns:
+                text_columns.append(mapping.destination)
+            if text_columns:
+                mask = pd.Series(False, index=working.index)
+                for col in text_columns:
+                    mask = mask | working[col].astype(str).str.lower().str.contains(
+                        prefix_lower, na=False
+                    )
+                working = working[mask]
+
+    revenue_series: Optional[pd.Series] = None
+    volume_series: Optional[pd.Series] = None
+    distance_series: Optional[pd.Series] = None
+    final_cost_series: Optional[pd.Series] = None
+
+    if mapping.revenue and mapping.revenue in working.columns:
+        revenue_series = pd.to_numeric(working[mapping.revenue], errors="coerce")
+        working[mapping.revenue] = revenue_series
+    if mapping.volume and mapping.volume in working.columns:
+        volume_series = pd.to_numeric(working[mapping.volume], errors="coerce")
+        working[mapping.volume] = volume_series
+    if mapping.distance and mapping.distance in working.columns:
+        distance_series = pd.to_numeric(working[mapping.distance], errors="coerce")
+        working[mapping.distance] = distance_series
+        working["distance_km"] = distance_series
+    if mapping.final_cost and mapping.final_cost in working.columns:
+        final_cost_series = pd.to_numeric(working[mapping.final_cost], errors="coerce")
+        working[mapping.final_cost] = final_cost_series
+
+    if mapping.price and mapping.price in working.columns:
+        working["price_per_m3"] = pd.to_numeric(working[mapping.price], errors="coerce")
+    else:
+        if revenue_series is None or volume_series is None:
+            raise RuntimeError(
+                "Jobs must contain a per-m³ price column or both revenue and volume columns"
+            )
+        working["price_per_m3"] = revenue_series / volume_series.replace({0: np.nan})
+
+    if revenue_series is not None and distance_series is not None:
+        working["revenue_per_km"] = revenue_series / distance_series.replace({0: np.nan})
+
+    if final_cost_series is not None:
+        working["final_cost_total"] = final_cost_series
+        safe_cost = final_cost_series.replace({0: np.nan})
+        if revenue_series is not None:
+            margin_total = revenue_series - final_cost_series
+            working["margin_total"] = margin_total
+            working["margin_total_pct"] = margin_total / safe_cost
+        if volume_series is not None:
+            safe_volume = volume_series.replace({0: np.nan})
+            cost_per_m3 = final_cost_series / safe_volume
+            working["final_cost_per_m3"] = cost_per_m3
+            margin_per_m3 = working["price_per_m3"] - cost_per_m3
+            working["margin_per_m3"] = margin_per_m3
+            safe_cost_per_m3 = cost_per_m3.replace({0: np.nan})
+            working["margin_per_m3_pct"] = margin_per_m3 / safe_cost_per_m3
+
+    if mapping.corridor and mapping.corridor in working.columns:
+        working["corridor_display"] = working[mapping.corridor]
+    else:
+        origin = working[mapping.origin] if mapping.origin else None
+        destination = working[mapping.destination] if mapping.destination else None
+        if origin is not None and destination is not None:
+            working["corridor_display"] = origin.fillna("?") + " → " + destination.fillna("?")
+        else:
+            working["corridor_display"] = "Unknown"
+
+    if corridor:
+        if mapping.corridor and mapping.corridor in working.columns:
+            working = working[working[mapping.corridor] == corridor]
+        else:
+            working = working[working["corridor_display"] == corridor]
+
+    if mapping.client and mapping.client in working.columns:
+        working["client_display"] = working[mapping.client]
+    else:
+        working["client_display"] = "Unknown"
+
+    if mapping.date and mapping.date in working.columns:
+        working["job_date"] = working[mapping.date]
+
+    numeric_cols = [
+        c
+        for c in [mapping.revenue, mapping.volume, mapping.distance, mapping.final_cost]
+        if c
+    ]
+    for col in numeric_cols:
+        working[col] = pd.to_numeric(working[col], errors="coerce")
+
+    if volume_series is not None and distance_series is not None:
+        break_even_total, break_even_per_m3 = compute_break_even_series(
+            distance_series,
+            volume_series,
+            base_costs,
+        )
+        working["break_even_total"] = break_even_total
+        working["break_even_per_m3"] = break_even_per_m3
+        if "price_per_m3" in working.columns:
+            working["margin_vs_break_even"] = working["price_per_m3"] - break_even_per_m3
+
+    return working.reset_index(drop=True), mapping
+
+
 def load_historical_jobs(
     conn,
     start_date: Optional[pd.Timestamp] = None,
@@ -355,139 +504,48 @@ def load_historical_jobs(
         except Exception as exc:  # pragma: no cover - surfaces friendly error in UI
             raise RuntimeError("historical_jobs table is required for this view") from exc
 
-    if df.empty:
-        mapping = infer_columns(df)
-        return df, mapping
+    mapping = infer_columns(df)
+    return _prepare_loaded_jobs(
+        df,
+        mapping,
+        base_costs,
+        start_date=start_date,
+        end_date=end_date,
+        clients=clients,
+        corridor=corridor,
+        postcode_prefix=postcode_prefix,
+    )
+
+
+def load_live_jobs(
+    conn,
+    start_date: Optional[pd.Timestamp] = None,
+    end_date: Optional[pd.Timestamp] = None,
+    clients: Optional[Sequence[str]] = None,
+    corridor: Optional[str] = None,
+    postcode_prefix: Optional[str] = None,
+) -> tuple[pd.DataFrame, ColumnMapping]:
+    """Load live job data from the ``jobs`` table for real-time monitoring."""
+
+    ensure_global_parameters_table(conn)
+    base_costs = ensure_base_cost_parameters(conn)
+
+    try:
+        df = pd.read_sql_query("SELECT * FROM jobs", conn)
+    except Exception as exc:
+        raise RuntimeError("jobs table is required for live monitoring") from exc
 
     mapping = infer_columns(df)
-
-    if mapping.date and mapping.date in df.columns:
-        parse_kwargs = _infer_datetime_parse_kwargs(df[mapping.date])
-        df[mapping.date] = pd.to_datetime(
-            df[mapping.date], errors="coerce", **parse_kwargs
-        )
-        parsed_dates = df[mapping.date]
-        if start_date is not None:
-            df = df[parsed_dates >= start_date]
-            parsed_dates = df[mapping.date]
-        if end_date is not None:
-            df = df[parsed_dates <= end_date]
-
-    if mapping.client and clients:
-        df = df[df[mapping.client].isin(clients)]
-
-    if postcode_prefix:
-        postcode_prefix = str(postcode_prefix).strip()
-        if postcode_prefix:
-            prefix_lower = postcode_prefix.lower()
-            known_postcodes = {pc.lower() for pc in POSTCODE_COLUMNS}
-            postcode_columns = [c for c in df.columns if c.lower() in known_postcodes]
-            text_columns = list(dict.fromkeys(postcode_columns))  # de-duplicate while preserving order
-            if mapping.corridor and mapping.corridor in df.columns:
-                text_columns.append(mapping.corridor)
-            if mapping.origin and mapping.origin in df.columns:
-                text_columns.append(mapping.origin)
-            if mapping.destination and mapping.destination in df.columns:
-                text_columns.append(mapping.destination)
-            if text_columns:
-                mask = pd.Series(False, index=df.index)
-                for col in text_columns:
-                    mask = mask | df[col].astype(str).str.lower().str.contains(prefix_lower, na=False)
-                df = df[mask]
-
-    df = df.copy()
-
-    revenue_series: Optional[pd.Series] = None
-    volume_series: Optional[pd.Series] = None
-    distance_series: Optional[pd.Series] = None
-    final_cost_series: Optional[pd.Series] = None
-
-    if mapping.revenue and mapping.revenue in df.columns:
-        revenue_series = pd.to_numeric(df[mapping.revenue], errors="coerce")
-        df[mapping.revenue] = revenue_series
-    if mapping.volume and mapping.volume in df.columns:
-        volume_series = pd.to_numeric(df[mapping.volume], errors="coerce")
-        df[mapping.volume] = volume_series
-    if mapping.distance and mapping.distance in df.columns:
-        distance_series = pd.to_numeric(df[mapping.distance], errors="coerce")
-        df[mapping.distance] = distance_series
-        df["distance_km"] = distance_series
-    if mapping.final_cost and mapping.final_cost in df.columns:
-        final_cost_series = pd.to_numeric(df[mapping.final_cost], errors="coerce")
-        df[mapping.final_cost] = final_cost_series
-
-    if mapping.price and mapping.price in df.columns:
-        df["price_per_m3"] = pd.to_numeric(df[mapping.price], errors="coerce")
-    else:
-        if revenue_series is None or volume_series is None:
-            raise RuntimeError(
-                "historical_jobs must contain a per-m³ price column or both revenue and volume columns"
-            )
-        df["price_per_m3"] = revenue_series / volume_series.replace({0: np.nan})
-
-    if revenue_series is not None and distance_series is not None:
-        df["revenue_per_km"] = revenue_series / distance_series.replace({0: np.nan})
-
-    if final_cost_series is not None:
-        df["final_cost_total"] = final_cost_series
-        safe_cost = final_cost_series.replace({0: np.nan})
-        if revenue_series is not None:
-            margin_total = revenue_series - final_cost_series
-            df["margin_total"] = margin_total
-            df["margin_total_pct"] = margin_total / safe_cost
-        if volume_series is not None:
-            safe_volume = volume_series.replace({0: np.nan})
-            cost_per_m3 = final_cost_series / safe_volume
-            df["final_cost_per_m3"] = cost_per_m3
-            margin_per_m3 = df["price_per_m3"] - cost_per_m3
-            df["margin_per_m3"] = margin_per_m3
-            safe_cost_per_m3 = cost_per_m3.replace({0: np.nan})
-            df["margin_per_m3_pct"] = margin_per_m3 / safe_cost_per_m3
-
-    if mapping.corridor and mapping.corridor in df.columns:
-        df["corridor_display"] = df[mapping.corridor]
-    else:
-        origin = df[mapping.origin] if mapping.origin else None
-        destination = df[mapping.destination] if mapping.destination else None
-        if origin is not None and destination is not None:
-            df["corridor_display"] = origin.fillna("?") + " → " + destination.fillna("?")
-        else:
-            df["corridor_display"] = "Unknown"
-
-    if corridor:
-        if mapping.corridor and mapping.corridor in df.columns:
-            df = df[df[mapping.corridor] == corridor]
-        else:
-            df = df[df["corridor_display"] == corridor]
-
-    if mapping.client and mapping.client in df.columns:
-        df["client_display"] = df[mapping.client]
-    else:
-        df["client_display"] = "Unknown"
-
-    if mapping.date:
-        df["job_date"] = df[mapping.date]
-
-    numeric_cols = [
-        c
-        for c in [mapping.revenue, mapping.volume, mapping.distance, mapping.final_cost]
-        if c
-    ]
-    for col in numeric_cols:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    if volume_series is not None and distance_series is not None:
-        break_even_total, break_even_per_m3 = compute_break_even_series(
-            distance_series,
-            volume_series,
-            base_costs,
-        )
-        df["break_even_total"] = break_even_total
-        df["break_even_per_m3"] = break_even_per_m3
-        if "price_per_m3" in df.columns:
-            df["margin_vs_break_even"] = df["price_per_m3"] - break_even_per_m3
-
-    return df, mapping
+    return _prepare_loaded_jobs(
+        df,
+        mapping,
+        base_costs,
+        start_date=start_date,
+        end_date=end_date,
+        clients=clients,
+        corridor=corridor,
+        postcode_prefix=postcode_prefix,
+    )
 
 
 def prepare_route_map_data(
