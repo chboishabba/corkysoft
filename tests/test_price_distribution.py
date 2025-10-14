@@ -17,6 +17,7 @@ from analytics.price_distribution import (
     MAINTENANCE_COST_KEY,
     OVERHEAD_COST_KEY,
     aggregate_corridor_performance,
+    build_isochrone_polygons,
     build_heatmap_source,
     create_histogram,
     create_metro_profitability_figure,
@@ -852,3 +853,62 @@ def test_aggregate_corridor_performance_handles_missing_columns():
     assert bne_mel["job_count"] == 2
     assert pytest.approx(bne_mel["share_of_jobs"], rel=1e-6) == 2 / 3
     assert pytest.approx(bne_mel["below_break_even_ratio"], rel=1e-6) == 0.5
+
+
+def test_build_isochrone_polygons_uses_duration_for_speed():
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705],
+            "origin_lon": [153.0260],
+            "dest_lat": [-33.8688],
+            "dest_lon": [151.2093],
+            "distance_km": [920.0],
+            "duration_hr": [10.0],
+            "corridor_display": ["Brisbane → Sydney"],
+        }
+    )
+
+    iso_df = build_isochrone_polygons(
+        df,
+        centre="origin",
+        horizon_hours=2.0,
+        default_speed_kmh=60.0,
+        max_routes=5,
+        points=12,
+    )
+
+    assert len(iso_df) == 1
+    record = iso_df.iloc[0]
+    assert record["label"] == "Brisbane → Sydney"
+    assert record["latitudes"][0] != record["latitudes"][1]
+    assert len(record["latitudes"]) == 13
+    assert len(record["longitudes"]) == 13
+    assert record["speed_kmh"] == pytest.approx(92.0, rel=1e-6)
+    assert record["radius_km"] == pytest.approx(184.0, rel=1e-6)
+    assert "hr reach" in record["tooltip"]
+
+
+def test_build_isochrone_polygons_handles_missing_inputs():
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.0],
+            "origin_lon": [153.0],
+            "distance_km": [None],
+        }
+    )
+
+    iso_df = build_isochrone_polygons(df)
+    assert iso_df.empty
+
+
+def test_build_isochrone_polygons_validates_centre():
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705],
+            "origin_lon": [153.0260],
+            "distance_km": [100.0],
+        }
+    )
+
+    with pytest.raises(ValueError):
+        build_isochrone_polygons(df, centre="truck")

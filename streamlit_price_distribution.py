@@ -4,7 +4,7 @@ from __future__ import annotations
 import io
 import math
 from datetime import date
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 import plotly.express as px
@@ -26,6 +26,7 @@ from analytics.price_distribution import (
     PROFITABILITY_COLOURS,
     ColumnMapping,
     available_heatmap_weightings,
+    build_isochrone_polygons,
     build_heatmap_source,
     create_histogram,
     create_metro_profitability_figure,
@@ -71,6 +72,41 @@ from corkysoft.schema import ensure_schema as ensure_core_schema
 DEFAULT_TARGET_MARGIN_PERCENT = 20.0
 _AUS_LAT_LON = (-25.2744, 133.7751)
 _PIN_NOTE = "Manual pin override used for routing"
+_ISOCHRONE_PALETTE = [
+    "#636EFA",
+    "#EF553B",
+    "#00CC96",
+    "#AB63FA",
+    "#FFA15A",
+    "#19D3F3",
+    "#FF6692",
+    "#B6E880",
+    "#FF97FF",
+    "#FECB52",
+]
+
+
+def _hex_to_rgb(value: str) -> Tuple[int, int, int]:
+    """Convert ``value`` (hex or rgb string) into an ``(r, g, b)`` tuple."""
+
+    colour = value.strip()
+    if colour.startswith("#"):
+        digits = colour.lstrip("#")
+        if len(digits) == 3:
+            digits = "".join(ch * 2 for ch in digits)
+        if len(digits) != 6:
+            raise ValueError(f"Unsupported hex colour format: {value}")
+        return tuple(int(digits[idx : idx + 2], 16) for idx in (0, 2, 4))  # type: ignore[arg-type]
+
+    if colour.startswith("rgb"):
+        start = colour.find("(")
+        end = colour.find(")")
+        if start == -1 or end == -1 or end <= start:
+            raise ValueError(f"Unsupported rgb colour format: {value}")
+        components = colour[start + 1 : end].split(",")[:3]
+        return tuple(int(float(component.strip())) for component in components)
+
+    raise ValueError(f"Unsupported colour format: {value}")
 
 
 def _initial_pin_state(result: QuoteResult) -> Dict[str, Any]:
@@ -1204,9 +1240,12 @@ with connection_scope() as conn:
         st.markdown("### Corridor visualisation")
         map_mode = st.radio(
             "Visualisation mode",
-            ("Routes/points", "Heatmap"),
+            ("Routes/points", "Heatmap", "Isochrones"),
             horizontal=True,
-            help="Switch between individual routes/points and an aggregate density heatmap.",
+            help=(
+                "Switch between individual routes/points, an aggregate density heatmap, "
+                "or travel-time isochrones around each corridor."
+            ),
         )
         metro_only = st.checkbox(
             "Limit to metro jobs (≤100 km)",
@@ -1265,7 +1304,7 @@ with connection_scope() as conn:
                         show_points=show_points,
                     )
                     st.plotly_chart(route_map, use_container_width=True)
-        else:
+        elif map_mode == "Heatmap":
             weight_options = available_heatmap_weightings(filtered_df)
             weight_label = st.selectbox(
                 "Heatmap weighting",
@@ -1344,6 +1383,90 @@ with connection_scope() as conn:
                         coloraxis_colorbar={"title": weight_label},
                     )
                     st.plotly_chart(heatmap_fig, use_container_width=True)
+        else:
+            centre_label = st.radio(
+                "Isochrone centre",
+                ("Origin", "Destination"),
+                horizontal=True,
+                help="Choose whether to anchor isochrones at route origins or destinations.",
+            )
+            iso_hours = st.slider(
+                "Travel time horizon (hours)",
+                min_value=0.5,
+                max_value=24.0,
+                value=4.0,
+                step=0.5,
+                help=(
+                    "Approximate reach based on the corridor's average speed multiplied by this time horizon."
+                ),
+            )
+            max_iso_routes = st.slider(
+                "Maximum corridors to display",
+                min_value=5,
+                max_value=80,
+                value=25,
+                step=5,
+                help="Limit the number of polygons rendered to keep the map readable.",
+            )
+
+            iso_source = build_isochrone_polygons(
+                scoped_df,
+                centre="origin" if centre_label == "Origin" else "destination",
+                horizon_hours=float(iso_hours),
+                max_routes=int(max_iso_routes),
+            )
+
+            if iso_source.empty:
+                st.info(
+                    "No geocoded routes with distance data are available to build isochrones for the current filters."
+                )
+            else:
+                figure = go.Figure()
+                palette = _ISOCHRONE_PALETTE or ["#636EFA"]
+
+                for idx, (_, row) in enumerate(iso_source.iterrows()):
+                    colour_hex = palette[idx % len(palette)]
+                    r, g, b = _hex_to_rgb(colour_hex)
+                    fill_colour = f"rgba({r},{g},{b},0.18)"
+                    line_colour = f"rgba({r},{g},{b},0.9)"
+
+                    figure.add_trace(
+                        go.Scattermapbox(
+                            lat=row["latitudes"],
+                            lon=row["longitudes"],
+                            mode="lines",
+                            fill="toself",
+                            line={"width": 2.0, "color": line_colour},
+                            fillcolor=fill_colour,
+                            name=row["label"],
+                            hovertemplate=f"{row['tooltip']}<extra></extra>",
+                        )
+                    )
+
+                    figure.add_trace(
+                        go.Scattermapbox(
+                            lat=[row["centre_lat"]],
+                            lon=[row["centre_lon"]],
+                            mode="markers",
+                            marker={"size": 7, "color": line_colour},
+                            hovertemplate=f"{row['tooltip']}<extra></extra>",
+                            showlegend=False,
+                        )
+                    )
+
+                centre_lat = float(iso_source["centre_lat"].mean())
+                centre_lon = float(iso_source["centre_lon"].mean())
+
+                figure.update_layout(
+                    mapbox={
+                        "style": "carto-positron",
+                        "center": {"lat": centre_lat, "lon": centre_lon},
+                        "zoom": 4,
+                    },
+                    margin={"l": 0, "r": 0, "t": 0, "b": 0},
+                    legend={"orientation": "h", "yanchor": "bottom", "y": 0.01},
+                )
+                st.plotly_chart(figure, use_container_width=True)
 
         network_routes = prepare_profitability_map_data(scoped_df, break_even_value)
         render_network_map(

@@ -78,6 +78,7 @@ Key visuals include:
 - A dataset selector for comparing imported history, saved quick quotes and live telemetry in a single workflow.
 - Optional profitability tabs that compare $/m³ against $/km and contrast quoted vs cost-derived $/m³, including margin outlier tables.
 - An interactive Mapbox view showing each route with selectable colouring (job, client, origin city, or destination city) and toggles to focus on lines or points when clusters get dense.
+- A travel-time isochrone mode that shades the catchment around each corridor using inferred average speeds for rapid reach comparisons.
 - A live network map that blends historical job filters with real-time truck telemetry, colouring corridors by profitability band and highlighting active trucks/routes.
 - A dynamic break-even engine that recalculates per-job cost floors using network-wide fuel, driver, maintenance and overhead settings stored in `global_parameters`.
 - Corridor insights summarising job counts, weighted $/m³ and below break-even ratios aggregated into bidirectional lanes for systemic diagnostics.
