@@ -973,16 +973,29 @@ def filter_jobs_by_distance(
     metro_only: bool = False,
     threshold_km: float = METRO_DISTANCE_THRESHOLD_KM,
 ) -> pd.DataFrame:
-    """Filter jobs by ``distance_km`` when metro-only mode is requested."""
+    """Filter jobs by distance when metro-only mode is requested.
 
-    if not metro_only:
+    When the canonical ``distance_km`` column is unavailable the function attempts to
+    locate an alternative distance column and gracefully skips filtering if none are
+    present instead of raising an exception. This keeps consumer UIs resilient when
+    operating on partially populated datasets.
+    """
+
+    if not metro_only or df.empty:
         return df.copy()
-    if "distance_km" not in df.columns:
-        raise KeyError("'distance_km' column is required to apply the metro filter")
 
-    distances = pd.to_numeric(df["distance_km"], errors="coerce")
+    candidate_columns = ("distance_km", "distance", "km", "kms")
+    distance_column = next((col for col in candidate_columns if col in df.columns), None)
+    if distance_column is None:
+        return df.copy()
+
+    distances = pd.to_numeric(df[distance_column], errors="coerce")
     mask = distances <= threshold_km
     filtered = df.loc[mask].copy()
+
+    if "distance_km" not in filtered.columns and distance_column != "distance_km":
+        filtered["distance_km"] = distances.loc[filtered.index]
+
     return filtered
 
 
