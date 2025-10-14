@@ -596,6 +596,11 @@ def _prepare_loaded_jobs(
 
     working = df.copy()
 
+    if start_date is not None and not isinstance(start_date, pd.Timestamp):
+        start_date = pd.Timestamp(start_date)
+    if end_date is not None and not isinstance(end_date, pd.Timestamp):
+        end_date = pd.Timestamp(end_date)
+
     if mapping.date and mapping.date in working.columns:
         parse_kwargs = _infer_datetime_parse_kwargs(working[mapping.date])
         working[mapping.date] = pd.to_datetime(
