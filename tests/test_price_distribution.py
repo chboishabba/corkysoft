@@ -23,6 +23,7 @@ from analytics.price_distribution import (
     create_m3_margin_figure,
     create_m3_vs_km_figure,
     build_profitability_export,
+    filter_jobs_by_distance,
     filter_metro_jobs,
     import_historical_jobs_from_dataframe,
     load_historical_jobs,
@@ -445,6 +446,27 @@ def test_filter_metro_jobs_handles_missing_distances(metro_profitability_df):
     assert len(df) == 5
 
 
+def test_filter_jobs_by_distance_gracefully_handles_missing_column():
+    df = pd.DataFrame({"price_per_m3": [200.0, 210.0]})
+
+    filtered = filter_jobs_by_distance(df, metro_only=True)
+
+    pd.testing.assert_frame_equal(filtered, df)
+    assert filtered is not df
+
+    df_with_alternative = pd.DataFrame(
+        {"distance": [50.0, 150.0], "value": [1, 2], "price_per_m3": [300.0, 200.0]}
+    )
+
+    alternative_filtered = filter_jobs_by_distance(
+        df_with_alternative, metro_only=True, threshold_km=100.0
+    )
+
+    assert list(alternative_filtered["value"]) == [1]
+    assert "distance_km" in alternative_filtered.columns
+    assert alternative_filtered["distance_km"].iloc[0] == pytest.approx(50.0)
+
+
 def test_summarise_distribution_and_histogram():
     conn = build_conn()
     try:
@@ -747,8 +769,11 @@ def test_build_heatmap_source_metro_and_volume_weighting():
         build_heatmap_source(df, weight_column="unknown_metric")
 
     df_no_distance = df.drop(columns=["distance_km"])
-    with pytest.raises(KeyError):
-        build_heatmap_source(df_no_distance, metro_only=True)
+    fallback_result = build_heatmap_source(
+        df_no_distance, weight_column="volume_m3", metro_only=True
+    )
+    assert len(fallback_result) == 6
+    assert set(fallback_result["weight"].round(2)) == {10.0, 30.0, 5.0}
 
 
 def test_prepare_route_map_data_missing_columns_raise():
