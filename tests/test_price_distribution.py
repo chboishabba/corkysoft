@@ -341,6 +341,31 @@ def test_load_live_jobs_supports_filters():
         conn.close()
 
 
+def test_load_historical_jobs_handles_duplicate_columns():
+    conn = build_conn()
+    try:
+        conn.execute("ALTER TABLE historical_jobs ADD COLUMN origin TEXT")
+        conn.execute("ALTER TABLE historical_jobs ADD COLUMN destination TEXT")
+        conn.execute("ALTER TABLE historical_jobs ADD COLUMN origin_postcode TEXT")
+        conn.execute(
+            "ALTER TABLE historical_jobs ADD COLUMN destination_postcode TEXT"
+        )
+        conn.execute(
+            "UPDATE historical_jobs SET origin = 'Legacy', destination = 'Legacy'"
+        )
+        conn.commit()
+
+        df, mapping = load_historical_jobs(conn)
+        assert not df.empty
+        assert mapping.origin == "origin"
+        assert mapping.destination == "destination"
+        assert "corridor_display" in df.columns
+        assert df["corridor_display"].notna().all()
+        assert "Legacy" not in set(df["origin"].astype(str))
+    finally:
+        conn.close()
+
+
 def test_load_historical_jobs_parses_dayfirst_dates_without_warnings():
     conn = build_conn()
     try:
