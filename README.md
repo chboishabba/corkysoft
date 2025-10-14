@@ -88,6 +88,10 @@ streamlit run streamlit_price_distribution.py
 
 By default it reads from `routes.db`. Set `CORKYSOFT_DB` or `ROUTES_DB` to point at a different SQLite database.
 
+Use the **Import historical jobs from CSV** expander in the sidebar to load data straight into the dashboard. The uploader
+accepts the same headers as the CLI importer (`date`, `origin`, `destination`, `m3`, `quoted_price`, `client`) and will
+calculate per-m³ rates automatically if only revenue and volume are provided.
+
 ### Export profitability summaries
 
 Generate a CSV-ready snapshot of the current profitability filters using the
