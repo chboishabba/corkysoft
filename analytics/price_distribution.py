@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
@@ -16,6 +17,7 @@ from pandas.api.types import is_datetime64_any_dtype
 
 from .db import (
     bootstrap_parameters,
+    ensure_dashboard_tables,
     ensure_global_parameters_table,
     get_parameter_value,
     migrate_geojson_to_routes,
@@ -94,6 +96,7 @@ DATE_COLUMNS = [
     "delivery_date",
     "created_at",
     "updated_at",
+    "date",
 ]
 CLIENT_COLUMNS = [
     "client",
@@ -164,6 +167,18 @@ FINAL_COST_COLUMNS = [
     "total_cost",
     "final_price",
     "final_amount",
+]
+
+ORIGIN_POSTCODE_CANDIDATES = [
+    "origin_postcode",
+    "origin_postal",
+    "origin_pc",
+]
+
+DESTINATION_POSTCODE_CANDIDATES = [
+    "destination_postcode",
+    "destination_postal",
+    "destination_pc",
 ]
 
 
@@ -282,6 +297,216 @@ def infer_columns(df: pd.DataFrame) -> ColumnMapping:
         distance=_first_present(cols, DISTANCE_COLUMNS),
         final_cost=_first_present(cols, FINAL_COST_COLUMNS),
     )
+
+
+def _clean_string(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned or None
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return None
+    return str(value).strip() or None
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _infer_postcode_columns(df: pd.DataFrame) -> tuple[Optional[str], Optional[str]]:
+    lower_to_column = {column.lower(): column for column in df.columns}
+    origin_column = next(
+        (
+            lower_to_column[candidate]
+            for candidate in (c.lower() for c in ORIGIN_POSTCODE_CANDIDATES)
+            if candidate in lower_to_column
+        ),
+        None,
+    )
+    destination_column = next(
+        (
+            lower_to_column[candidate]
+            for candidate in (c.lower() for c in DESTINATION_POSTCODE_CANDIDATES)
+            if candidate in lower_to_column
+        ),
+        None,
+    )
+    return origin_column, destination_column
+
+
+def import_historical_jobs_from_dataframe(
+    conn,
+    df: pd.DataFrame,
+) -> tuple[int, int]:
+    """Insert ``df`` rows into ``historical_jobs`` and return ``(inserted, skipped)``.
+
+    The importer uses :func:`infer_columns` to discover relevant fields and performs
+    light validation before inserting rows. Rows missing a job date, origin,
+    destination or price signal are skipped. Duplicate rows, identified via the
+    combination of ``(job_date, origin, destination, client)``, are ignored.
+    """
+
+    ensure_global_parameters_table(conn)
+    ensure_dashboard_tables(conn)
+
+    if df.empty:
+        return 0, 0
+
+    mapping = infer_columns(df)
+    if mapping.date is None:
+        raise ValueError("Unable to infer a job date column from the uploaded data.")
+    if mapping.origin is None or mapping.destination is None:
+        raise ValueError(
+            "Uploaded data must include origin and destination columns."
+        )
+    if mapping.price is None and (mapping.revenue is None or mapping.volume is None):
+        raise ValueError(
+            "Uploaded data must include a price-per-m³ column or both revenue and volume columns."
+        )
+
+    parse_kwargs = _infer_datetime_parse_kwargs(df[mapping.date])
+    dates = pd.to_datetime(df[mapping.date], errors="coerce", **parse_kwargs)
+
+    origin_pc_col, dest_pc_col = _infer_postcode_columns(df)
+
+    existing_rows = conn.execute(
+        "SELECT job_date, origin, destination, client FROM historical_jobs"
+    ).fetchall()
+    existing_keys = {
+        (
+            row[0],
+            row[1] or None,
+            row[2] or None,
+            (row[3] or "").strip(),
+        )
+        for row in existing_rows
+    }
+
+    now = datetime.now(UTC).isoformat()
+    to_insert: list[tuple[Any, ...]] = []
+    skipped = 0
+
+    for idx in range(len(df)):
+        job_date = dates.iloc[idx]
+        if pd.isna(job_date):
+            skipped += 1
+            continue
+
+        origin_value = _clean_string(df.iloc[idx][mapping.origin])
+        destination_value = _clean_string(df.iloc[idx][mapping.destination])
+        if not origin_value or not destination_value:
+            skipped += 1
+            continue
+
+        client_value = _clean_string(df.iloc[idx][mapping.client]) if mapping.client else None
+
+        price_value = (
+            _safe_float(df.iloc[idx][mapping.price]) if mapping.price else None
+        )
+        revenue_value = (
+            _safe_float(df.iloc[idx][mapping.revenue]) if mapping.revenue else None
+        )
+        volume_value = (
+            _safe_float(df.iloc[idx][mapping.volume]) if mapping.volume else None
+        )
+        distance_value = (
+            _safe_float(df.iloc[idx][mapping.distance]) if mapping.distance else None
+        )
+        final_cost_value = (
+            _safe_float(df.iloc[idx][mapping.final_cost]) if mapping.final_cost else None
+        )
+
+        if price_value is None and revenue_value is not None and volume_value:
+            if volume_value == 0:
+                price_value = None
+            else:
+                price_value = revenue_value / volume_value
+
+        if price_value is None:
+            skipped += 1
+            continue
+
+        corridor_value: Optional[str]
+        if mapping.corridor and mapping.corridor in df.columns:
+            corridor_value = _clean_string(df.iloc[idx][mapping.corridor])
+        else:
+            corridor_value = f"{origin_value} → {destination_value}"
+
+        origin_postcode = (
+            _clean_string(df.iloc[idx][origin_pc_col]) if origin_pc_col else None
+        )
+        dest_postcode = (
+            _clean_string(df.iloc[idx][dest_pc_col]) if dest_pc_col else None
+        )
+
+        key = (
+            job_date.date().isoformat(),
+            origin_value,
+            destination_value,
+            (client_value or ""),
+        )
+        if key in existing_keys:
+            skipped += 1
+            continue
+
+        existing_keys.add(key)
+
+        to_insert.append(
+            (
+                key[0],
+                client_value,
+                corridor_value,
+                float(price_value),
+                revenue_value,
+                revenue_value,
+                volume_value,
+                volume_value,
+                distance_value,
+                final_cost_value,
+                origin_value,
+                destination_value,
+                origin_postcode,
+                dest_postcode,
+                now,
+                now,
+            )
+        )
+
+    if to_insert:
+        conn.executemany(
+            """
+            INSERT INTO historical_jobs (
+                job_date,
+                client,
+                corridor_display,
+                price_per_m3,
+                revenue_total,
+                revenue,
+                volume_m3,
+                volume,
+                distance_km,
+                final_cost,
+                origin,
+                destination,
+                origin_postcode,
+                destination_postcode,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            to_insert,
+        )
+        conn.commit()
+
+    return len(to_insert), skipped
 
 
 def ensure_base_cost_parameters(conn) -> BaseCostConfig:

@@ -25,6 +25,7 @@ from analytics.price_distribution import (
     create_m3_margin_figure,
     create_m3_vs_km_figure,
     ensure_break_even_parameter,
+    import_historical_jobs_from_dataframe,
     load_historical_jobs,
     load_live_jobs,
     prepare_profitability_map_data,
@@ -753,12 +754,77 @@ with connection_scope() as conn:
         )
         dataset_key, dataset_loader = dataset_options[dataset_label]
 
+        import_feedback: Optional[tuple[str, str]] = None
+        if dataset_key == "historical":
+            with st.expander("Import historical jobs from CSV", expanded=False):
+                import_form = st.form(key="historical_import_form")
+                uploaded_file = import_form.file_uploader(
+                    "Select CSV file", type=["csv"], help="Requires headers such as date, origin, destination and m3."
+                )
+                submit_import = import_form.form_submit_button("Import jobs")
+                if submit_import:
+                    if uploaded_file is None:
+                        import_feedback = (
+                            "warning",
+                            "Choose a CSV file before importing.",
+                        )
+                    else:
+                        try:
+                            imported_df = pd.read_csv(uploaded_file)
+                        except Exception as exc:
+                            import_feedback = (
+                                "error",
+                                f"Failed to read CSV: {exc}",
+                            )
+                        else:
+                            try:
+                                inserted, skipped_rows = import_historical_jobs_from_dataframe(
+                                    conn, imported_df
+                                )
+                            except ValueError as exc:
+                                import_feedback = ("error", str(exc))
+                            except Exception as exc:
+                                import_feedback = (
+                                    "error",
+                                    f"Failed to import historical jobs: {exc}",
+                                )
+                            else:
+                                if inserted:
+                                    message = (
+                                        f"Imported {inserted} historical job"
+                                        f"{'s' if inserted != 1 else ''}."
+                                    )
+                                    if skipped_rows:
+                                        message += (
+                                            f" Skipped {skipped_rows} row"
+                                            f"{'s' if skipped_rows != 1 else ''} with missing or duplicate data."
+                                        )
+                                    import_feedback = ("success", message)
+                                else:
+                                    if skipped_rows:
+                                        message = (
+                                            "No new rows imported. Skipped "
+                                            f"{skipped_rows} row{'s' if skipped_rows != 1 else ''} due to validation or duplicates."
+                                        )
+                                    else:
+                                        message = "No rows imported from the provided file."
+                                    import_feedback = ("warning", message)
+
         try:
             df_all, mapping = dataset_loader(conn)
         except RuntimeError as exc:
             dataset_error = str(exc)
         except Exception as exc:
             dataset_error = f"Failed to load {dataset_label.lower()} data: {exc}"
+
+        if import_feedback:
+            level, message = import_feedback
+            if level == "success":
+                st.success(message)
+            elif level == "warning":
+                st.info(message)
+            else:
+                st.error(message)
 
         data_available = dataset_error is None and not df_all.empty
 

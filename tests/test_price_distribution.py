@@ -23,6 +23,7 @@ from analytics.price_distribution import (
     create_m3_vs_km_figure,
     build_profitability_export,
     filter_metro_jobs,
+    import_historical_jobs_from_dataframe,
     load_historical_jobs,
     load_live_jobs,
     prepare_profitability_route_data,
@@ -560,6 +561,130 @@ def test_prepare_route_map_data_filters_missing_coordinates():
     assert len(result) == 1
     assert result.iloc[0]["id"] == 1
     assert result.iloc[0]["map_colour_value"] == "1"
+
+
+def test_import_historical_jobs_from_dataframe_inserts_rows(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE historical_jobs (
+                id INTEGER PRIMARY KEY,
+                job_date TEXT,
+                client TEXT,
+                corridor_display TEXT,
+                price_per_m3 REAL,
+                revenue_total REAL,
+                revenue REAL,
+                volume_m3 REAL,
+                volume REAL,
+                distance_km REAL,
+                final_cost REAL,
+                origin TEXT,
+                destination TEXT,
+                origin_postcode TEXT,
+                destination_postcode TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            """
+        )
+
+        df = pd.DataFrame(
+            {
+                "date": ["2024-01-01", "2024-02-01"],
+                "origin": ["Brisbane", "Sydney"],
+                "destination": ["Sydney", "Melbourne"],
+                "volume_m3": [10, 20],
+                "revenue_total": [2500, 5200],
+                "client": ["Client A", "Client B"],
+            }
+        )
+
+        inserted, skipped = import_historical_jobs_from_dataframe(conn, df)
+        assert inserted == 2
+        assert skipped == 0
+
+        rows = conn.execute(
+            "SELECT job_date, origin, destination, client, price_per_m3, revenue_total, volume_m3 FROM historical_jobs ORDER BY job_date"
+        ).fetchall()
+        first = rows[0]
+        assert first[0] == "2024-01-01"
+        assert first[1] == "Brisbane"
+        assert first[2] == "Sydney"
+        assert first[3] == "Client A"
+        assert first[4] == pytest.approx(250.0)
+        assert first[5] == 2500.0
+        assert first[6] == 10.0
+
+        second = rows[1]
+        assert second[0] == "2024-02-01"
+        assert second[1] == "Sydney"
+        assert second[2] == "Melbourne"
+        assert second[4] == pytest.approx(260.0)
+        assert second[6] == 20.0
+
+        # Re-importing should skip duplicates
+        again_inserted, again_skipped = import_historical_jobs_from_dataframe(conn, df.iloc[:1])
+        assert again_inserted == 0
+        assert again_skipped == 1
+    finally:
+        conn.close()
+
+
+def test_import_historical_jobs_from_dataframe_requires_columns(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE historical_jobs (
+                id INTEGER PRIMARY KEY,
+                job_date TEXT,
+                client TEXT,
+                corridor_display TEXT,
+                price_per_m3 REAL,
+                revenue_total REAL,
+                revenue REAL,
+                volume_m3 REAL,
+                volume REAL,
+                distance_km REAL,
+                final_cost REAL,
+                origin TEXT,
+                destination TEXT,
+                origin_postcode TEXT,
+                destination_postcode TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            """
+        )
+
+        missing_date = pd.DataFrame(
+            {
+                "origin": ["Brisbane"],
+                "destination": ["Sydney"],
+                "volume_m3": [10],
+                "revenue_total": [2500],
+            }
+        )
+
+        with pytest.raises(ValueError):
+            import_historical_jobs_from_dataframe(conn, missing_date)
+
+        missing_price_signal = pd.DataFrame(
+            {
+                "date": ["2024-01-01"],
+                "origin": ["Brisbane"],
+                "destination": ["Sydney"],
+            }
+        )
+
+        with pytest.raises(ValueError):
+            import_historical_jobs_from_dataframe(conn, missing_price_signal)
+    finally:
+        conn.close()
 
 
 def test_build_heatmap_source_counts_and_weights():
