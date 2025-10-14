@@ -25,6 +25,7 @@ from analytics.price_distribution import (
     create_m3_vs_km_figure,
     ensure_break_even_parameter,
     load_historical_jobs,
+    load_live_jobs,
     prepare_profitability_map_data,
     prepare_profitability_route_data,
     summarise_distribution,
@@ -692,16 +693,31 @@ with connection_scope() as conn:
 
     with st.sidebar:
         st.header("Filters")
+        dataset_options = {
+            "Historical quotes": ("historical", load_historical_jobs),
+            "Live jobs": ("live", load_live_jobs),
+        }
+        dataset_label = st.radio(
+            "Dataset",
+            options=list(dataset_options.keys()),
+            format_func=lambda label: label,
+        )
+        dataset_key, dataset_loader = dataset_options[dataset_label]
+
         try:
-            df_all, mapping = load_historical_jobs(conn)
+            df_all, mapping = dataset_loader(conn)
         except RuntimeError as exc:
             st.error(str(exc))
             st.stop()
 
         if df_all.empty:
-            st.info(
-                "historical_jobs table has no rows yet. Import historical jobs to populate the view."
-            )
+            empty_messages = {
+                "historical": (
+                    "historical_jobs table has no rows yet. Import historical jobs to populate the view."
+                ),
+                "live": "jobs table has no rows yet. Add live jobs to populate the view.",
+            }
+            st.info(empty_messages.get(dataset_key, "No rows available for the selected dataset."))
             st.stop()
 
         date_column = "job_date" if "job_date" in df_all.columns else mapping.date
@@ -764,7 +780,7 @@ with connection_scope() as conn:
             st.success(f"Break-even updated to ${new_break_even:,.2f}")
             break_even_value = new_break_even
 
-    filtered_df, filtered_mapping = load_historical_jobs(
+    filtered_df, filtered_mapping = dataset_loader(
         conn,
         start_date=start_date,
         end_date=end_date,

@@ -23,6 +23,7 @@ from analytics.price_distribution import (
     create_m3_vs_km_figure,
     filter_metro_jobs,
     load_historical_jobs,
+    load_live_jobs,
     prepare_profitability_route_data,
     prepare_route_map_data,
     summarise_distribution,
@@ -67,6 +68,28 @@ def build_conn() -> sqlite3.Connection:
             final_cost REAL,
             FOREIGN KEY(origin_address_id) REFERENCES addresses(id),
             FOREIGN KEY(destination_address_id) REFERENCES addresses(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE jobs (
+            id INTEGER PRIMARY KEY,
+            job_date TEXT,
+            client TEXT,
+            origin TEXT,
+            destination TEXT,
+            volume_m3 REAL,
+            revenue_total REAL,
+            distance_km REAL,
+            final_cost REAL,
+            origin_postcode TEXT,
+            destination_postcode TEXT,
+            origin_lat REAL,
+            origin_lon REAL,
+            dest_lat REAL,
+            dest_lon REAL,
+            updated_at TEXT
         )
         """
     )
@@ -162,6 +185,72 @@ def build_conn() -> sqlite3.Connection:
         "INSERT INTO historical_jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         jobs,
     )
+    live_jobs = [
+        (
+            101,
+            "2024-02-12",
+            "Acme",
+            "Brisbane",
+            "Sydney",
+            48.0,
+            15600.0,
+            920.0,
+            12100.0,
+            "4000",
+            "2000",
+            -27.4705,
+            153.0260,
+            -33.8688,
+            151.2093,
+            "2024-02-15T03:15:00Z",
+        ),
+        (
+            102,
+            "2024-02-20",
+            "Beta",
+            "Cairns",
+            "Sydney",
+            30.0,
+            8700.0,
+            2400.0,
+            6000.0,
+            "4870",
+            "2000",
+            -16.9200,
+            145.7700,
+            -33.8688,
+            151.2093,
+            "2024-02-21T08:45:00Z",
+        ),
+        (
+            103,
+            "2024-03-05",
+            "Delta",
+            "Brisbane",
+            "Melbourne",
+            38.0,
+            11875.0,
+            1680.0,
+            9100.0,
+            "4000",
+            "3000",
+            -27.4705,
+            153.0260,
+            -37.8136,
+            144.9631,
+            "2024-03-06T11:30:00Z",
+        ),
+    ]
+    conn.executemany(
+        """
+        INSERT INTO jobs (
+            id, job_date, client, origin, destination, volume_m3, revenue_total,
+            distance_km, final_cost, origin_postcode, destination_postcode,
+            origin_lat, origin_lon, dest_lat, dest_lon, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        live_jobs,
+    )
     conn.commit()
     set_parameter_value(conn, FUEL_COST_KEY, 1.0, "Test fuel per km")
     set_parameter_value(conn, DRIVER_COST_KEY, 4.0, "Test driver per km")
@@ -224,6 +313,29 @@ def test_load_historical_jobs_filters_by_client_and_corridor():
 
         df_postcode, _ = load_historical_jobs(conn, postcode_prefix="48")
         assert set(df_postcode["origin"].unique()) == {"Cairns"}
+    finally:
+        conn.close()
+
+
+def test_load_live_jobs_supports_filters():
+    conn = build_conn()
+    try:
+        df, mapping = load_live_jobs(
+            conn,
+            start_date=pd.Timestamp("2024-02-01"),
+            end_date=pd.Timestamp("2024-02-28"),
+            clients=["Acme"],
+            corridor="Brisbane → Sydney",
+        )
+        assert not df.empty
+        assert mapping.volume == "volume_m3"
+        assert set(df["client_display"]) == {"Acme"}
+        assert all(df["corridor_display"] == "Brisbane → Sydney")
+        assert "price_per_m3" in df.columns
+        assert "break_even_per_m3" in df.columns
+
+        df_postcode, _ = load_live_jobs(conn, postcode_prefix="48")
+        assert set(df_postcode["client_display"].unique()) == {"Beta"}
     finally:
         conn.close()
 
