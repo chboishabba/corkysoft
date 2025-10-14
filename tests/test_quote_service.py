@@ -14,10 +14,24 @@ if "openrouteservice" not in sys.modules:
             pass
 
 
-    sys.modules["openrouteservice"] = types.SimpleNamespace(Client=_DummyORSClient)
+    class _DummyApiError(Exception):
+        pass
+
+    ors_module = types.ModuleType("openrouteservice")
+    ors_module.Client = _DummyORSClient
+
+    exceptions_module = types.ModuleType("openrouteservice.exceptions")
+    exceptions_module.ApiError = _DummyApiError
+
+    ors_module.exceptions = exceptions_module
+
+    sys.modules["openrouteservice"] = ors_module
+    sys.modules["openrouteservice.exceptions"] = exceptions_module
 
 from analytics.db import ensure_dashboard_tables
 from analytics.price_distribution import load_quotes
+import corkysoft.quote_service as quote_service
+
 from corkysoft.quote_service import (
     PRICING_MODELS,
     QuoteInput,
@@ -26,6 +40,7 @@ from corkysoft.quote_service import (
     calculate_quote,
     ensure_schema,
     persist_quote,
+    route_distance,
 )
 from corkysoft.au_address import GeocodeResult
 
@@ -181,6 +196,151 @@ def test_calculate_quote_applies_margin(monkeypatch: pytest.MonkeyPatch) -> None
     )
 
     conn.close()
+
+
+def test_route_distance_snaps_and_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = sqlite3.connect(":memory:")
+
+    origin_geo = GeocodeResult(lon=134.0, lat=-23.9, label="Origin label")
+    dest_geo = GeocodeResult(lon=134.5, lat=-24.2, label="Dest label")
+
+    class _ApiError(Exception):
+        def __init__(self) -> None:
+            super().__init__(
+                {
+                    "error": {
+                        "code": 2010,
+                        "message": "Could not find routable point within a radius",
+                    }
+                }
+            )
+            self.status_code = 404
+
+    class _Client:
+        def __init__(self) -> None:
+            self.calls: list[list[list[float]]] = []
+
+        def directions(self, *, coordinates, profile, format):  # noqa: D401
+            self.calls.append(coordinates)
+            if len(self.calls) == 1:
+                raise _ApiError()
+            return {"routes": [{"summary": {"distance": 1500.0, "duration": 1800.0}}]}
+
+        def nearest(self, *, coordinates, number):  # noqa: D401
+            lon, lat = coordinates[0]
+            return {
+                "features": [
+                    {
+                        "geometry": {
+                            "coordinates": [lon + 0.01, lat + 0.01],
+                        }
+                    }
+                ]
+            }
+
+    def _fake_geocode(
+        _conn: sqlite3.Connection,
+        place: str,
+        _country: str,
+        *,
+        client: object | None = None,
+    ) -> GeocodeResult:
+        if place == "Origin":
+            return GeocodeResult(
+                lon=origin_geo.lon,
+                lat=origin_geo.lat,
+                label=origin_geo.label,
+            )
+        return GeocodeResult(
+            lon=dest_geo.lon,
+            lat=dest_geo.lat,
+            label=dest_geo.label,
+        )
+
+    client_instance = _Client()
+    monkeypatch.setattr(
+        "corkysoft.quote_service.get_ors_client",
+        lambda client=None: client_instance,
+    )
+    monkeypatch.setattr("corkysoft.quote_service.geocode_cached", _fake_geocode)
+
+    distance_km, duration_hr, resolved_origin, resolved_dest = route_distance(
+        conn,
+        "Origin",
+        "Destination",
+        "Australia",
+    )
+
+    assert client_instance.calls and len(client_instance.calls) == 2
+    assert pytest.approx(distance_km, rel=1e-6) == 1.5
+    assert pytest.approx(duration_hr, rel=1e-6) == 0.5
+    assert resolved_origin.lon == pytest.approx(origin_geo.lon + 0.01)
+    assert resolved_origin.lat == pytest.approx(origin_geo.lat + 0.01)
+    assert "Snapped to nearest routable road" in resolved_origin.suggestions
+    assert resolved_dest.lon == pytest.approx(dest_geo.lon + 0.01)
+    assert resolved_dest.lat == pytest.approx(dest_geo.lat + 0.01)
+    assert "Snapped to nearest routable road" in resolved_dest.suggestions
+
+
+def test_route_distance_falls_back_to_haversine(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = sqlite3.connect(":memory:")
+
+    class _ApiError(Exception):
+        def __init__(self) -> None:
+            super().__init__(
+                {
+                    "error": {
+                        "code": 2010,
+                        "message": "Could not find routable point within a radius",
+                    }
+                }
+            )
+            self.status_code = 404
+
+    class _Client:
+        def directions(self, *_, **__):
+            raise _ApiError()
+
+        def nearest(self, *_, **__):
+            return {"features": []}
+
+    origin = GeocodeResult(lon=133.88, lat=-23.7, label="Origin")
+    dest = GeocodeResult(lon=134.01, lat=-24.0, label="Dest")
+
+    def _fake_geocode(
+        _conn: sqlite3.Connection,
+        place: str,
+        _country: str,
+        *,
+        client: object | None = None,
+    ) -> GeocodeResult:
+        return origin if place == "Origin" else dest
+
+    monkeypatch.setattr("corkysoft.quote_service.get_ors_client", lambda client=None: _Client())
+    monkeypatch.setattr("corkysoft.quote_service.geocode_cached", _fake_geocode)
+
+    distance_km, duration_hr, resolved_origin, resolved_dest = route_distance(
+        conn,
+        "Origin",
+        "Destination",
+        "Australia",
+    )
+
+    expected_distance = quote_service._haversine_km(
+        origin.lat,
+        origin.lon,
+        dest.lat,
+        dest.lon,
+    )
+    assert distance_km == pytest.approx(expected_distance)
+    expected_duration = (
+        expected_distance / quote_service.FALLBACK_SPEED_KMH
+        if expected_distance > 0
+        else 0.0
+    )
+    assert duration_hr == pytest.approx(expected_duration)
+    assert "Used straight-line estimate due to missing road network" in resolved_origin.suggestions
+    assert "Used straight-line estimate due to missing road network" in resolved_dest.suggestions
 
 
 def test_load_quotes_returns_saved_quote() -> None:

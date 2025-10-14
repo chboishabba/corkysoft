@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import math
 import os
 import sqlite3
 import time
@@ -11,19 +13,26 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple, TYPE_CHECKIN
 
 try:  # pragma: no cover - exercised indirectly via integration paths
     import openrouteservice as _ors
+    from openrouteservice import exceptions as _ors_exceptions
 except ModuleNotFoundError:  # pragma: no cover - behaviour verified via unit tests
     _ors = None
+    _ors_exceptions = None
 
 if TYPE_CHECKING:  # pragma: no cover - hints for type-checkers only
     import openrouteservice as ors
+    from openrouteservice import exceptions as ors_exceptions
 else:
     ors = _ors  # type: ignore[assignment]
+    ors_exceptions = _ors_exceptions  # type: ignore[assignment]
 
 from corkysoft.au_address import GeocodeResult, geocode_with_normalization
 
 COUNTRY_DEFAULT = os.environ.get("ORS_COUNTRY", "Australia")
 GEOCODE_BACKOFF = 0.2
 ROUTE_BACKOFF = 0.2
+FALLBACK_SPEED_KMH = 65.0
+
+logger = logging.getLogger(__name__)
 
 _ORS_CLIENT: Optional["ors.Client"] = None
 
@@ -392,16 +401,179 @@ def route_distance(
         conn, destination, country, client=resolved_client
     )
 
-    route = resolved_client.directions(
-        coordinates=[[origin_geo.lon, origin_geo.lat], [dest_geo.lon, dest_geo.lat]],
-        profile="driving-car",
-        format="json",
+    coordinates = [
+        [origin_geo.lon, origin_geo.lat],
+        [dest_geo.lon, dest_geo.lat],
+    ]
+
+    try:
+        route = resolved_client.directions(
+            coordinates=coordinates,
+            profile="driving-car",
+            format="json",
+        )
+        summary = route["routes"][0]["summary"]
+        meters = float(summary["distance"])
+        seconds = float(summary["duration"])
+        time.sleep(ROUTE_BACKOFF)
+        return meters / 1000.0, seconds / 3600.0, origin_geo, dest_geo
+    except Exception as exc:  # pragma: no cover - fallback behaviour tested below
+        if not _is_routable_point_error(exc):
+            raise
+        logger.warning(
+            "ORS could not find a routable point for %s → %s: %s", origin, destination, exc
+        )
+
+    snapped = _snap_to_road(resolved_client, origin_geo, dest_geo)
+    if snapped is not None:
+        snapped_coords, snap_notes = snapped
+        coordinates = snapped_coords
+        _note_geocode(origin_geo, snap_notes.get("origin"))
+        _note_geocode(dest_geo, snap_notes.get("destination"))
+        try:
+            route = resolved_client.directions(
+                coordinates=coordinates,
+                profile="driving-car",
+                format="json",
+            )
+            summary = route["routes"][0]["summary"]
+            meters = float(summary["distance"])
+            seconds = float(summary["duration"])
+            time.sleep(ROUTE_BACKOFF)
+            return meters / 1000.0, seconds / 3600.0, origin_geo, dest_geo
+        except Exception as exc:
+            if not _is_routable_point_error(exc):
+                raise
+            logger.warning(
+                "Snapped routing still failed for %s → %s: %s", origin, destination, exc
+            )
+
+    logger.warning(
+        "Falling back to haversine estimate for %s → %s", origin, destination
     )
-    summary = route["routes"][0]["summary"]
-    meters = float(summary["distance"])
-    seconds = float(summary["duration"])
-    time.sleep(ROUTE_BACKOFF)
-    return meters / 1000.0, seconds / 3600.0, origin_geo, dest_geo
+    distance_km = _haversine_km(
+        origin_geo.lat,
+        origin_geo.lon,
+        dest_geo.lat,
+        dest_geo.lon,
+    )
+    duration_hr = distance_km / FALLBACK_SPEED_KMH if distance_km > 0 else 0.0
+    _note_geocode(origin_geo, "Used straight-line estimate due to missing road network")
+    _note_geocode(dest_geo, "Used straight-line estimate due to missing road network")
+    return distance_km, duration_hr, origin_geo, dest_geo
+
+
+def _note_geocode(geo: GeocodeResult, note: Optional[str]) -> None:
+    if not note:
+        return
+    if not hasattr(geo, "suggestions") or geo.suggestions is None:
+        geo.suggestions = []  # type: ignore[assignment]
+    if note not in geo.suggestions:
+        geo.suggestions.append(note)
+
+
+def _snap_to_road(
+    client: "ors.Client",
+    origin_geo: GeocodeResult,
+    dest_geo: GeocodeResult,
+) -> Optional[Tuple[List[List[float]], Dict[str, str]]]:
+    """Attempt to snap unroutable coordinates to the nearest road.
+
+    Returns snapped coordinates and notes describing adjustments when
+    successful.  When snapping fails ``None`` is returned.
+    """
+
+    if not hasattr(client, "nearest"):
+        return None
+
+    def _snap_single(lon: float, lat: float) -> Optional[Tuple[float, float]]:
+        try:
+            response = client.nearest(coordinates=[[lon, lat]], number=1)
+        except Exception:  # pragma: no cover - upstream failure handled by fallback
+            return None
+        features = None
+        if isinstance(response, dict):
+            features = response.get("features")
+        if not features and isinstance(response, list):
+            features = response
+        if not features:
+            return None
+        feature = features[0]
+        geometry = feature.get("geometry") if isinstance(feature, dict) else None
+        coords = geometry.get("coordinates") if isinstance(geometry, dict) else None
+        if not coords or len(coords) < 2:
+            return None
+        snapped_lon, snapped_lat = coords[0], coords[1]
+        if snapped_lon == lon and snapped_lat == lat:
+            return None
+        return float(snapped_lon), float(snapped_lat)
+
+    notes: Dict[str, str] = {}
+    snapped_origin = _snap_single(origin_geo.lon, origin_geo.lat)
+    snapped_dest = _snap_single(dest_geo.lon, dest_geo.lat)
+
+    changed = False
+    if snapped_origin is not None:
+        origin_geo.lon, origin_geo.lat = snapped_origin
+        notes["origin"] = "Snapped to nearest routable road"
+        changed = True
+    if snapped_dest is not None:
+        dest_geo.lon, dest_geo.lat = snapped_dest
+        notes["destination"] = "Snapped to nearest routable road"
+        changed = True
+
+    if not changed:
+        return None
+    return [
+        [origin_geo.lon, origin_geo.lat],
+        [dest_geo.lon, dest_geo.lat],
+    ], notes
+
+
+def _haversine_km(
+    lat1: float,
+    lon1: float,
+    lat2: float,
+    lon2: float,
+) -> float:
+    lat1_rad, lon1_rad = math.radians(lat1), math.radians(lon1)
+    lat2_rad, lon2_rad = math.radians(lat2), math.radians(lon2)
+    dlat = lat2_rad - lat1_rad
+    dlon = lon2_rad - lon1_rad
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    earth_radius_km = 6371.0088
+    return earth_radius_km * c
+
+
+def _is_routable_point_error(exc: Exception) -> bool:
+    if ors_exceptions is not None and isinstance(exc, ors_exceptions.ApiError):
+        payload = None
+        if exc.args:
+            payload = exc.args[0]
+        if isinstance(payload, dict):
+            error = payload.get("error") or {}
+            message = str(error.get("message") or "").lower()
+            code = error.get("code")
+            if code == 2010 or "could not find routable point" in message:
+                return True
+        if getattr(exc, "status_code", None) == 404:
+            text = " ".join(str(arg) for arg in exc.args)
+            if "could not find routable point" in text.lower():
+                return True
+        return False
+
+    # Fallback check when openrouteservice is unavailable during tests.
+    args = " ".join(str(arg) for arg in getattr(exc, "args", ()))
+    text = (args or str(exc)).lower()
+    return (
+        "could not find routable point" in text
+        or "\"code\": 2010" in text
+        or "'code': 2010" in text
+    )
 
 
 def choose_pricing_model(distance_km: float) -> PricingModel:
