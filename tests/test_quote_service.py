@@ -22,9 +22,11 @@ from corkysoft.quote_service import (
     QuoteInput,
     QuoteResult,
     build_summary,
+    calculate_quote,
     ensure_schema,
     persist_quote,
 )
+from corkysoft.au_address import GeocodeResult
 
 
 def _quote_input() -> QuoteInput:
@@ -130,3 +132,41 @@ def test_build_summary_mentions_manual_amount() -> None:
 
     assert "Manual quote override" in summary
     assert "$950.00" in summary
+
+
+def test_calculate_quote_applies_margin(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    ensure_dashboard_tables(conn)
+
+    inputs = _quote_input()
+
+    origin_geo = GeocodeResult(
+        lon=153.01,
+        lat=-27.67,
+        label="Origin label",
+    )
+    dest_geo = GeocodeResult(
+        lon=153.06,
+        lat=-27.50,
+        label="Destination label",
+    )
+
+    def _fake_route_distance(
+        *_args: object, **_kwargs: object
+    ) -> tuple[float, float, GeocodeResult, GeocodeResult]:
+        return 28.3, 0.5, origin_geo, dest_geo
+
+    monkeypatch.setattr(
+        "corkysoft.quote_service.route_distance",
+        _fake_route_distance,
+    )
+
+    result = calculate_quote(conn, inputs)
+
+    assert result.margin_percent == pytest.approx(inputs.target_margin_percent)
+    assert result.final_quote == pytest.approx(
+        result.total_before_margin * (1 + inputs.target_margin_percent / 100.0)
+    )
+
+    conn.close()
