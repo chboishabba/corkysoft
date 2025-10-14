@@ -88,6 +88,24 @@ streamlit run streamlit_price_distribution.py
 
 By default it reads from `routes.db`. Set `CORKYSOFT_DB` or `ROUTES_DB` to point at a different SQLite database.
 
+### Export profitability summaries
+
+Generate a CSV-ready snapshot of the current profitability filters using the
+analytics helper:
+
+```python
+from analytics.db import get_connection
+from analytics.price_distribution import build_profitability_export, load_historical_jobs
+
+with get_connection() as conn:
+    df, _ = load_historical_jobs(conn)
+    export_df = build_profitability_export(df, break_even=250.0)
+    export_df.to_csv("profitability_summary.csv", index=False)
+```
+
+The export includes the key distribution statistics, profitability bands, and
+top/bottom corridor opportunities used throughout the dashboard for easy
+reporting or spreadsheet analysis.
 ### Corridor analytics
 
 Use `aggregate_corridor_performance` to collapse the filtered dataset into bidirectional lanes and surface systemic KPIs:
