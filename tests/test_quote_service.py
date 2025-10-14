@@ -17,6 +17,7 @@ if "openrouteservice" not in sys.modules:
     sys.modules["openrouteservice"] = types.SimpleNamespace(Client=_DummyORSClient)
 
 from analytics.db import ensure_dashboard_tables
+from analytics.price_distribution import load_quotes
 from corkysoft.quote_service import (
     PRICING_MODELS,
     QuoteInput,
@@ -167,6 +168,36 @@ def test_calculate_quote_applies_margin(monkeypatch: pytest.MonkeyPatch) -> None
     assert result.margin_percent == pytest.approx(inputs.target_margin_percent)
     assert result.final_quote == pytest.approx(
         result.total_before_margin * (1 + inputs.target_margin_percent / 100.0)
+    )
+
+    conn.close()
+
+
+def test_load_quotes_returns_saved_quote() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    ensure_dashboard_tables(conn)
+
+    inputs = _quote_input()
+    result = _quote_result()
+    result.manual_quote = 1100.0
+    result.summary_text = build_summary(inputs, result)
+
+    persist_quote(conn, inputs, result)
+
+    df, mapping = load_quotes(conn)
+
+    assert not df.empty
+    assert mapping.price == "price_per_m3"
+    assert mapping.volume in {"volume_m3", "volume"}
+
+    row = df.iloc[0]
+    assert row["client_display"] == "Quote builder"
+    assert row["corridor_display"] == "Origin → Destination"
+    assert row["price_per_m3"] == pytest.approx(result.manual_quote / inputs.cubic_m)
+    assert row["final_cost_total"] == pytest.approx(result.total_before_margin)
+    assert row["margin_total"] == pytest.approx(
+        result.manual_quote - result.total_before_margin
     )
 
     conn.close()

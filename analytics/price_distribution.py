@@ -97,6 +97,7 @@ DATE_COLUMNS = [
     "created_at",
     "updated_at",
     "date",
+    "quote_date",
 ]
 CLIENT_COLUMNS = [
     "client",
@@ -110,6 +111,7 @@ VOLUME_COLUMNS = [
     "cbm",
     "cubic_meters",
     "m3",
+    "cubic_m",
 ]
 REVENUE_COLUMNS = [
     "revenue_total",
@@ -117,6 +119,7 @@ REVENUE_COLUMNS = [
     "total_revenue",
     "price_total",
     "quoted_sell",
+    "final_quote",
 ]
 PRICE_COLUMNS = [
     "revenue_per_m3",
@@ -167,6 +170,7 @@ FINAL_COST_COLUMNS = [
     "total_cost",
     "final_price",
     "final_amount",
+    "total_before_margin",
 ]
 
 ORIGIN_POSTCODE_CANDIDATES = [
@@ -340,6 +344,25 @@ def _infer_postcode_columns(df: pd.DataFrame) -> tuple[Optional[str], Optional[s
         None,
     )
     return origin_column, destination_column
+
+
+def _coalesce_string_columns(
+    df: pd.DataFrame, primary: str, fallback: str, target: str
+) -> None:
+    """Populate ``target`` by preferring ``primary`` and falling back to ``fallback``."""
+
+    primary_series = (
+        df[primary].astype(str).str.strip()
+        if primary in df.columns
+        else pd.Series("", index=df.index)
+    )
+    fallback_series = (
+        df[fallback].astype(str).str.strip()
+        if fallback in df.columns
+        else pd.Series("", index=df.index)
+    )
+    combined = primary_series.where(primary_series != "", fallback_series)
+    df[target] = combined.replace("", np.nan)
 
 
 def import_historical_jobs_from_dataframe(
@@ -750,6 +773,110 @@ def load_historical_jobs(
             raise RuntimeError("historical_jobs table is required for this view") from exc
 
     df = _deduplicate_columns(df)
+    mapping = infer_columns(df)
+    return _prepare_loaded_jobs(
+        df,
+        mapping,
+        base_costs,
+        start_date=start_date,
+        end_date=end_date,
+        clients=clients,
+        corridor=corridor,
+        postcode_prefix=postcode_prefix,
+    )
+
+
+def load_quotes(
+    conn,
+    start_date: Optional[pd.Timestamp] = None,
+    end_date: Optional[pd.Timestamp] = None,
+    clients: Optional[Sequence[str]] = None,
+    corridor: Optional[str] = None,
+    postcode_prefix: Optional[str] = None,
+) -> tuple[pd.DataFrame, ColumnMapping]:
+    """Load saved quick quote data from the ``quotes`` table."""
+
+    ensure_global_parameters_table(conn)
+    base_costs = ensure_base_cost_parameters(conn)
+
+    try:
+        df = pd.read_sql_query(
+            """
+            SELECT
+                id,
+                created_at,
+                quote_date,
+                origin_input,
+                destination_input,
+                origin_resolved,
+                destination_resolved,
+                origin_lon,
+                origin_lat,
+                dest_lon,
+                dest_lat,
+                distance_km,
+                duration_hr,
+                cubic_m,
+                pricing_model,
+                base_subtotal,
+                base_components,
+                modifiers_applied,
+                modifiers_total,
+                seasonal_multiplier,
+                seasonal_label,
+                total_before_margin,
+                margin_percent,
+                manual_quote,
+                final_quote,
+                summary
+            FROM quotes
+            ORDER BY quote_date DESC, created_at DESC
+            """,
+            conn,
+        )
+    except Exception as exc:  # pragma: no cover - surfaces friendly error in UI
+        raise RuntimeError("quotes table is required for this view") from exc
+
+    if df.empty:
+        mapping = infer_columns(df)
+        return df, mapping
+
+    df = _deduplicate_columns(df)
+
+    if "quote_date" in df.columns:
+        df["job_date"] = df["quote_date"]
+
+    _coalesce_string_columns(df, "origin_resolved", "origin_input", "origin")
+    _coalesce_string_columns(
+        df, "destination_resolved", "destination_input", "destination"
+    )
+
+    quote_total = df["manual_quote"].where(df["manual_quote"].notna(), df["final_quote"])
+    quote_total = pd.to_numeric(quote_total, errors="coerce")
+    df["quote_total"] = quote_total
+    df["revenue_total"] = quote_total
+    df["revenue"] = quote_total
+
+    if "cubic_m" in df.columns:
+        volume_series = pd.to_numeric(df["cubic_m"], errors="coerce")
+    else:  # pragma: no cover - quotes schema always includes cubic_m
+        volume_series = pd.Series(np.nan, index=df.index, dtype=float)
+    df["volume_m3"] = volume_series
+    df["volume"] = volume_series
+
+    if "distance_km" in df.columns:
+        distance_series = pd.to_numeric(df["distance_km"], errors="coerce")
+        df["distance_km"] = distance_series
+
+    if "total_before_margin" in df.columns:
+        final_cost_series = pd.to_numeric(df["total_before_margin"], errors="coerce")
+        df["final_cost"] = final_cost_series
+
+    safe_volume = volume_series.replace({0: np.nan})
+    df["price_per_m3"] = quote_total / safe_volume
+
+    df["client"] = "Quote builder"
+
     mapping = infer_columns(df)
     return _prepare_loaded_jobs(
         df,
