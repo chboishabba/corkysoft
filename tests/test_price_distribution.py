@@ -26,6 +26,7 @@ from analytics.price_distribution import (
     build_profitability_export,
     filter_jobs_by_distance,
     filter_metro_jobs,
+    filter_routes_by_country,
     import_historical_jobs_from_dataframe,
     load_historical_jobs,
     load_live_jobs,
@@ -466,6 +467,22 @@ def test_filter_jobs_by_distance_gracefully_handles_missing_column():
     assert list(alternative_filtered["value"]) == [1]
     assert "distance_km" in alternative_filtered.columns
     assert alternative_filtered["distance_km"].iloc[0] == pytest.approx(50.0)
+
+
+def test_filter_routes_by_country_matches_any_known_country_column():
+    routes = pd.DataFrame(
+        {
+            "origin_country": ["Australia", "New Zealand", None],
+            "destination_country": ["Australia", "Australia", "New Zealand"],
+            "label": ["AUS-AUS", "NZ-AUS", "Unknown"],
+        }
+    )
+
+    filtered_au = filter_routes_by_country(routes, "Australia")
+    assert list(filtered_au["label"]) == ["AUS-AUS", "NZ-AUS"]
+
+    filtered_nz = filter_routes_by_country(routes, "New Zealand")
+    assert list(filtered_nz["label"]) == ["NZ-AUS", "Unknown"]
 
 
 def test_summarise_distribution_and_histogram():

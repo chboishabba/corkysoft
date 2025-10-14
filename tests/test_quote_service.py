@@ -150,6 +150,41 @@ def test_persist_quote_creates_historical_job_entry() -> None:
     assert address_count == 2
 
 
+def test_persist_quote_records_postcodes() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    ensure_dashboard_tables(conn)
+
+    inputs = QuoteInput(
+        origin="123 Example Street, Brisbane QLD 4000",
+        destination="456 Demo Road, Sydney NSW 2000",
+        cubic_m=30.0,
+        quote_date=date(2024, 1, 15),
+        modifiers=[],
+        target_margin_percent=10.0,
+        country="Australia",
+    )
+    result = _quote_result()
+    result.origin_resolved = "Brisbane QLD 4000"
+    result.destination_resolved = "Sydney NSW 2000"
+    result.summary_text = build_summary(inputs, result)
+
+    persist_quote(conn, inputs, result)
+
+    stored_postcodes = conn.execute(
+        "SELECT origin_postcode, destination_postcode FROM historical_jobs"
+    ).fetchone()
+    assert stored_postcodes == ("4000", "2000")
+
+    address_postcodes = [
+        row[0]
+        for row in conn.execute(
+            "SELECT postcode FROM addresses ORDER BY id"
+        ).fetchall()
+    ]
+    assert address_postcodes == ["4000", "2000"]
+
+
 def test_build_summary_mentions_manual_amount() -> None:
     inputs = _quote_input()
     result = _quote_result()
@@ -197,6 +232,46 @@ def test_calculate_quote_applies_margin(monkeypatch: pytest.MonkeyPatch) -> None
     )
 
     conn.close()
+
+
+def test_is_routable_point_error_handles_dict_in_second_arg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeApiError(Exception):
+        def __init__(self, *args: object, status_code: Optional[int] = None) -> None:
+            super().__init__(*args)
+            self.status_code = status_code
+
+    fake_exceptions = types.SimpleNamespace(ApiError=FakeApiError)
+    monkeypatch.setattr(quote_service, "ors_exceptions", fake_exceptions)
+
+    exc = FakeApiError(
+        404,
+        {
+            "error": {
+                "code": 2010,
+                "message": "Could not find routable point within radius",
+            }
+        },
+    )
+
+    assert quote_service._is_routable_point_error(exc)
+
+
+def test_is_routable_point_error_handles_string_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeApiError(Exception):
+        def __init__(self, *args: object, status_code: Optional[int] = None) -> None:
+            super().__init__(*args)
+            self.status_code = status_code
+
+    fake_exceptions = types.SimpleNamespace(ApiError=FakeApiError)
+    monkeypatch.setattr(quote_service, "ors_exceptions", fake_exceptions)
+
+    exc = FakeApiError(404, "Could not find routable point within a radius")
+
+    assert quote_service._is_routable_point_error(exc)
 
 
 def test_route_distance_snaps_and_retries(monkeypatch: pytest.MonkeyPatch) -> None:

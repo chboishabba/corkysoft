@@ -601,6 +601,41 @@ def _historical_jobs_query() -> str:
     """
 
 
+def filter_routes_by_country(
+    routes: pd.DataFrame, country: Optional[str]
+) -> pd.DataFrame:
+    """Return ``routes`` limited to rows that match ``country`` when metadata exists."""
+
+    if routes.empty:
+        return routes.copy()
+
+    if country is None:
+        return routes.copy()
+
+    normalized = str(country).strip().lower()
+    if not normalized:
+        return routes.copy()
+
+    candidate_columns = [
+        column for column in ("origin_country", "destination_country") if column in routes.columns
+    ]
+    if not candidate_columns:
+        return routes.copy()
+
+    mask = pd.Series(False, index=routes.index)
+    for column in candidate_columns:
+        values = (
+            routes[column]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+        mask = mask | (values == normalized)
+
+    return routes.loc[mask].copy()
+
+
 def _prepare_loaded_jobs(
     df: pd.DataFrame,
     mapping: ColumnMapping,
