@@ -7,9 +7,17 @@ import sqlite3
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
-import openrouteservice as ors
+try:  # pragma: no cover - exercised indirectly via integration paths
+    import openrouteservice as _ors
+except ModuleNotFoundError:  # pragma: no cover - behaviour verified via unit tests
+    _ors = None
+
+if TYPE_CHECKING:  # pragma: no cover - hints for type-checkers only
+    import openrouteservice as ors
+else:
+    ors = _ors  # type: ignore[assignment]
 
 from corkysoft.au_address import GeocodeResult, geocode_with_normalization
 
@@ -17,7 +25,7 @@ COUNTRY_DEFAULT = os.environ.get("ORS_COUNTRY", "Australia")
 GEOCODE_BACKOFF = 0.2
 ROUTE_BACKOFF = 0.2
 
-_ORS_CLIENT: Optional[ors.Client] = None
+_ORS_CLIENT: Optional["ors.Client"] = None
 
 
 def get_ors_client(client: Optional[ors.Client] = None) -> ors.Client:
@@ -32,6 +40,12 @@ def get_ors_client(client: Optional[ors.Client] = None) -> ors.Client:
 
     if client is not None:
         return client
+
+    if ors is None:
+        raise RuntimeError(
+            "openrouteservice client is unavailable. Install the 'openrouteservice' package "
+            "to enable routing features."
+        )
 
     global _ORS_CLIENT
     if _ORS_CLIENT is None:

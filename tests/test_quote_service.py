@@ -69,6 +69,16 @@ def _quote_result() -> QuoteResult:
     )
 
 
+def test_get_ors_client_requires_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
+    import corkysoft.quote_service as quote_service
+
+    monkeypatch.setattr(quote_service, "ors", None)
+    monkeypatch.setattr(quote_service, "_ORS_CLIENT", None)
+
+    with pytest.raises(RuntimeError, match="openrouteservice client is unavailable"):
+        quote_service.get_ors_client()
+
+
 def test_persist_quote_stores_manual_override() -> None:
     conn = sqlite3.connect(":memory:")
     ensure_schema(conn)
