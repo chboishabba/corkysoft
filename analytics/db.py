@@ -10,6 +10,72 @@ from typing import Iterable, Optional, Sequence
 DEFAULT_DB_PATH = os.environ.get("CORKYSOFT_DB", os.environ.get("ROUTES_DB", "routes.db"))
 
 
+_DASHBOARD_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS addresses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    raw_input TEXT NOT NULL,
+    normalized TEXT,
+    street_number TEXT,
+    street_name TEXT,
+    street_type TEXT,
+    unit_number TEXT,
+    city TEXT,
+    state TEXT,
+    postcode TEXT,
+    country TEXT,
+    lon REAL,
+    lat REAL,
+    UNIQUE(normalized, country)
+);
+
+CREATE TABLE IF NOT EXISTS historical_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_date TEXT,
+    client TEXT,
+    corridor_display TEXT,
+    price_per_m3 REAL,
+    revenue_total REAL,
+    revenue REAL,
+    volume_m3 REAL,
+    volume REAL,
+    distance_km REAL,
+    final_cost REAL,
+    origin TEXT,
+    destination TEXT,
+    origin_postcode TEXT,
+    destination_postcode TEXT,
+    origin_address_id INTEGER,
+    destination_address_id INTEGER,
+    created_at TEXT,
+    updated_at TEXT,
+    FOREIGN KEY(origin_address_id) REFERENCES addresses(id),
+    FOREIGN KEY(destination_address_id) REFERENCES addresses(id)
+);
+
+CREATE TABLE IF NOT EXISTS jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_date TEXT,
+    client TEXT,
+    origin TEXT,
+    destination TEXT,
+    price_per_m3 REAL,
+    revenue_total REAL,
+    revenue REAL,
+    volume_m3 REAL,
+    volume REAL,
+    distance_km REAL,
+    final_cost REAL,
+    origin_postcode TEXT,
+    destination_postcode TEXT,
+    origin_lat REAL,
+    origin_lon REAL,
+    dest_lat REAL,
+    dest_lon REAL,
+    updated_at TEXT
+);
+"""
+
+
 def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
     """Return a SQLite connection using WAL mode for better concurrency."""
     path = db_path or DEFAULT_DB_PATH
@@ -91,6 +157,14 @@ def bootstrap_parameters(
         current = get_parameter_value(conn, key)
         if current is None:
             set_parameter_value(conn, key, value, description)
+
+
+def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
+    """Create empty dashboard tables so the UI can load before data imports."""
+
+    conn.executescript(_DASHBOARD_SCHEMA_SQL)
+    ensure_historical_job_routes_table(conn)
+    conn.commit()
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> Sequence[str]:
