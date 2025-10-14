@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS quotes (
   seasonal_label TEXT NOT NULL,
   total_before_margin REAL NOT NULL,
   margin_percent REAL,
+  manual_quote REAL,
   final_quote REAL NOT NULL,
   summary TEXT NOT NULL
 );
@@ -87,6 +88,12 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     """Ensure the quote tables exist in *conn*."""
 
     conn.executescript(SCHEMA_SQL)
+    columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(quotes)")
+    }
+    if "manual_quote" not in columns:
+        conn.execute("ALTER TABLE quotes ADD COLUMN manual_quote REAL")
     conn.commit()
 
 
@@ -369,6 +376,7 @@ class QuoteResult:
     destination_suggestions: List[str] = field(default_factory=list)
     origin_ambiguities: Dict[str, Sequence[str]] = field(default_factory=dict)
     destination_ambiguities: Dict[str, Sequence[str]] = field(default_factory=dict)
+    manual_quote: Optional[float] = None
 
 
 def format_currency(amount: float) -> str:
@@ -413,6 +421,10 @@ def build_summary(inputs: QuoteInput, result: QuoteResult) -> str:
     lines.append("")
     lines.append(f"Total before margin: {format_currency(result.total_before_margin)}")
     lines.append(f"Final quote: {format_currency(result.final_quote)}")
+    if result.manual_quote is not None:
+        lines.append(
+            f"Manual quote override: {format_currency(result.manual_quote)}"
+        )
     return "\n".join(lines)
 
 
@@ -529,8 +541,16 @@ def calculate_quote(
 
 
 def persist_quote(
-    conn: sqlite3.Connection, inputs: QuoteInput, result: QuoteResult
+    conn: sqlite3.Connection,
+    inputs: QuoteInput,
+    result: QuoteResult,
+    manual_quote: Optional[float] = None,
 ) -> None:
+    manual_value = (
+        manual_quote
+        if manual_quote is not None
+        else result.manual_quote
+    )
     conn.execute(
         """
         INSERT INTO quotes (
@@ -543,8 +563,8 @@ def persist_quote(
             modifiers_applied, modifiers_total,
             seasonal_multiplier, seasonal_label,
             total_before_margin, margin_percent,
-            final_quote, summary
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            manual_quote, final_quote, summary
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             datetime.now(timezone.utc).isoformat(),
@@ -569,6 +589,7 @@ def persist_quote(
             result.seasonal_label,
             result.total_before_margin,
             result.margin_percent,
+            manual_value,
             result.final_quote,
             result.summary_text,
         ),

@@ -47,6 +47,7 @@ from analytics.live_data import (
 from corkysoft.quote_service import (
     COUNTRY_DEFAULT,
     DEFAULT_MODIFIERS,
+    build_summary,
     QuoteInput,
     QuoteResult,
     calculate_quote,
@@ -1320,6 +1321,10 @@ with connection_scope() as conn:
                 else:
                     st.session_state["quote_inputs"] = quote_inputs
                     st.session_state["quote_result"] = result
+                    st.session_state["quote_manual_override_enabled"] = False
+                    st.session_state["quote_manual_override_amount"] = float(
+                        result.final_quote
+                    )
                     _set_query_params(view="Quote builder")
                     st.success("Quote calculated. Review the breakdown below.")
                     stored_inputs = quote_inputs
@@ -1330,6 +1335,32 @@ with connection_scope() as conn:
 
         if quote_result and stored_inputs:
             st.markdown("#### Quote output")
+            manual_enabled_key = "quote_manual_override_enabled"
+            manual_amount_key = "quote_manual_override_amount"
+            if manual_enabled_key not in st.session_state:
+                st.session_state[manual_enabled_key] = (
+                    quote_result.manual_quote is not None
+                )
+            if manual_amount_key not in st.session_state:
+                st.session_state[manual_amount_key] = float(
+                    quote_result.manual_quote
+                    if quote_result.manual_quote is not None
+                    else quote_result.final_quote
+                )
+            manual_override_enabled = bool(
+                st.session_state.get(manual_enabled_key, False)
+            )
+            manual_override_amount = float(
+                st.session_state.get(
+                    manual_amount_key, quote_result.final_quote
+                )
+            )
+            if manual_override_enabled:
+                quote_result.manual_quote = manual_override_amount
+            else:
+                quote_result.manual_quote = None
+            quote_result.summary_text = build_summary(stored_inputs, quote_result)
+            st.session_state["quote_result"] = quote_result
             st.write(
                 f"**Route:** {quote_result.origin_resolved} → {quote_result.destination_resolved}"
             )
@@ -1474,18 +1505,65 @@ with connection_scope() as conn:
             with st.expander("Copyable summary"):
                 st.code(quote_result.summary_text)
 
+            st.markdown("#### Submit quote")
+            st.caption(
+                "Optionally override the calculated quote amount before saving."
+            )
+            manual_override_enabled = st.checkbox(
+                "Apply manual quote override",
+                help=(
+                    "Enable to store a different quote amount alongside the calculated value."
+                ),
+                key=manual_enabled_key,
+            )
+            manual_override_amount = st.number_input(
+                "Manual quote amount",
+                min_value=0.0,
+                step=50.0,
+                format="%.2f",
+                key=manual_amount_key,
+                disabled=not manual_override_enabled,
+                help=(
+                    "Enter the agreed quote to store in addition to the calculated amount."
+                ),
+            )
             action_cols = st.columns(2)
-            if action_cols[0].button("Persist quote", type="primary"):
-                try:
-                    persist_quote(conn, stored_inputs, quote_result)
-                    rowid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-                except Exception as exc:  # pragma: no cover - UI feedback path
-                    st.error(f"Failed to persist quote: {exc}")
+            if action_cols[0].button("Submit quote", type="primary"):
+                manual_to_store: Optional[float]
+                if manual_override_enabled:
+                    manual_to_store = float(manual_override_amount)
+                    if not math.isfinite(manual_to_store) or manual_to_store <= 0:
+                        st.error("Manual quote must be a positive number.")
+                        manual_to_store = None
+                    else:
+                        quote_result.manual_quote = manual_to_store
                 else:
-                    st.success(f"Quote saved as record #{rowid}.")
+                    manual_to_store = None
+                    quote_result.manual_quote = None
+                quote_result.summary_text = build_summary(stored_inputs, quote_result)
+                st.session_state["quote_result"] = quote_result
+                if manual_override_enabled and manual_to_store is None:
+                    pass
+                else:
+                    try:
+                        persist_quote(
+                            conn,
+                            stored_inputs,
+                            quote_result,
+                            manual_quote=manual_to_store,
+                        )
+                        rowid = conn.execute(
+                            "SELECT last_insert_rowid()"
+                        ).fetchone()[0]
+                    except Exception as exc:  # pragma: no cover - UI feedback path
+                        st.error(f"Failed to persist quote: {exc}")
+                    else:
+                        st.success(f"Quote saved as record #{rowid}.")
             if action_cols[1].button("Reset quote builder"):
                 st.session_state.pop("quote_result", None)
                 st.session_state.pop("quote_inputs", None)
+                st.session_state.pop("quote_manual_override_enabled", None)
+                st.session_state.pop("quote_manual_override_amount", None)
                 _set_query_params(view="Quote builder")
                 _rerun_app()
 
