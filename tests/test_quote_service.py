@@ -3,6 +3,7 @@ import sys
 from datetime import date
 from pathlib import Path
 import types
+from typing import List, Optional
 
 import pytest
 
@@ -280,6 +281,61 @@ def test_route_distance_snaps_and_retries(monkeypatch: pytest.MonkeyPatch) -> No
     assert resolved_dest.lon == pytest.approx(dest_geo.lon + 0.01)
     assert resolved_dest.lat == pytest.approx(dest_geo.lat + 0.01)
     assert "Snapped to nearest routable road" in resolved_dest.suggestions
+
+
+def test_route_distance_manual_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = sqlite3.connect(":memory:")
+
+    class _Client:
+        def __init__(self) -> None:
+            self.last_coordinates: Optional[List[List[float]]] = None
+
+        def directions(self, *, coordinates, profile, format):  # type: ignore[override]
+            self.last_coordinates = coordinates
+            return {"routes": [{"summary": {"distance": 4200.0, "duration": 600.0}}]}
+
+    def _fake_geocode(
+        _conn: sqlite3.Connection,
+        place: str,
+        _country: str,
+        *,
+        client: object | None = None,
+    ) -> GeocodeResult:
+        if place == "Origin":
+            return GeocodeResult(lon=150.0, lat=-33.0, label="Origin label")
+        return GeocodeResult(lon=151.0, lat=-34.0, label="Destination label")
+
+    client_instance = _Client()
+    monkeypatch.setattr(
+        "corkysoft.quote_service.get_ors_client",
+        lambda client=None: client_instance,
+    )
+    monkeypatch.setattr("corkysoft.quote_service.geocode_cached", _fake_geocode)
+
+    origin_override = (153.02, -27.45)
+    destination_override = (153.10, -27.48)
+
+    distance_km, duration_hr, resolved_origin, resolved_dest = quote_service.route_distance(
+        conn,
+        "Origin",
+        "Destination",
+        "Australia",
+        origin_override=origin_override,
+        destination_override=destination_override,
+    )
+
+    assert distance_km == pytest.approx(4.2)
+    assert duration_hr == pytest.approx(0.1666666, rel=1e-6)
+    assert client_instance.last_coordinates == [
+        [origin_override[0], origin_override[1]],
+        [destination_override[0], destination_override[1]],
+    ]
+    assert resolved_origin.lon == pytest.approx(origin_override[0])
+    assert resolved_origin.lat == pytest.approx(origin_override[1])
+    assert resolved_dest.lon == pytest.approx(destination_override[0])
+    assert resolved_dest.lat == pytest.approx(destination_override[1])
+    assert "Manual pin override used for routing" in resolved_origin.suggestions
+    assert "Manual pin override used for routing" in resolved_dest.suggestions
 
 
 def test_route_distance_falls_back_to_haversine(monkeypatch: pytest.MonkeyPatch) -> None:
