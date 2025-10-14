@@ -97,6 +97,122 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table,),
+    ).fetchone()
+    return row is not None
+
+
+def _ensure_address_record(
+    conn: sqlite3.Connection,
+    raw_input: str,
+    resolved: str,
+    lon: Optional[float],
+    lat: Optional[float],
+    country: str,
+) -> Optional[int]:
+    if not _table_exists(conn, "addresses"):
+        return None
+
+    normalized = normalize_place(resolved or raw_input)
+    if not normalized:
+        normalized = normalize_place(raw_input)
+
+    row = conn.execute(
+        """
+        SELECT id, lon, lat
+        FROM addresses
+        WHERE normalized = ? AND (country = ? OR (country IS NULL AND ? IS NULL))
+        """,
+        (normalized, country, country),
+    ).fetchone()
+    if row is not None:
+        address_id = int(row[0])
+        conn.execute(
+            "UPDATE addresses SET lon = COALESCE(?, lon), lat = COALESCE(?, lat) WHERE id = ?",
+            (lon, lat, address_id),
+        )
+        return address_id
+
+    cursor = conn.execute(
+        """
+        INSERT INTO addresses (
+            raw_input, normalized, city, country, lon, lat
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            raw_input,
+            normalized,
+            resolved or normalized,
+            country,
+            lon,
+            lat,
+        ),
+    )
+    return int(cursor.lastrowid)
+
+
+def _insert_historical_job(
+    conn: sqlite3.Connection,
+    inputs: QuoteInput,
+    result: QuoteResult,
+    stored_amount: float,
+    created_at: str,
+    origin_address_id: Optional[int],
+    destination_address_id: Optional[int],
+) -> None:
+    if not _table_exists(conn, "historical_jobs"):
+        return
+
+    cubic_m = inputs.cubic_m
+    price_per_m3: Optional[float]
+    if cubic_m and cubic_m > 0:
+        price_per_m3 = stored_amount / cubic_m
+    else:
+        price_per_m3 = None
+
+    origin_label = result.origin_resolved or normalize_place(inputs.origin)
+    destination_label = result.destination_resolved or normalize_place(
+        inputs.destination
+    )
+    corridor_display = f"{origin_label} → {destination_label}"
+
+    conn.execute(
+        """
+        INSERT INTO historical_jobs (
+            job_date, client, corridor_display,
+            price_per_m3, revenue_total, revenue,
+            volume_m3, volume, distance_km, final_cost,
+            origin, destination, origin_postcode, destination_postcode,
+            origin_address_id, destination_address_id,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            inputs.quote_date.isoformat(),
+            None,
+            corridor_display,
+            price_per_m3,
+            stored_amount,
+            stored_amount,
+            cubic_m,
+            cubic_m,
+            result.distance_km,
+            result.total_before_margin,
+            origin_label,
+            destination_label,
+            None,
+            None,
+            origin_address_id,
+            destination_address_id,
+            created_at,
+            created_at,
+        ),
+    )
+
+
 def normalize_place(place: str) -> str:
     return " ".join(place.strip().split())
 
@@ -545,13 +661,14 @@ def persist_quote(
     inputs: QuoteInput,
     result: QuoteResult,
     manual_quote: Optional[float] = None,
-) -> None:
+) -> int:
     manual_value = (
         manual_quote
         if manual_quote is not None
         else result.manual_quote
     )
-    conn.execute(
+    created_at = datetime.now(timezone.utc).isoformat()
+    cursor = conn.execute(
         """
         INSERT INTO quotes (
             created_at, quote_date,
@@ -567,7 +684,7 @@ def persist_quote(
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            datetime.now(timezone.utc).isoformat(),
+            created_at,
             inputs.quote_date.isoformat(),
             inputs.origin,
             inputs.destination,
@@ -594,7 +711,41 @@ def persist_quote(
             result.summary_text,
         ),
     )
+    quote_rowid = int(cursor.lastrowid)
+
+    stored_amount = (
+        float(manual_value)
+        if manual_value is not None
+        else result.final_quote
+    )
+
+    origin_address_id = _ensure_address_record(
+        conn,
+        inputs.origin,
+        result.origin_resolved,
+        result.origin_lon,
+        result.origin_lat,
+        inputs.country,
+    )
+    destination_address_id = _ensure_address_record(
+        conn,
+        inputs.destination,
+        result.destination_resolved,
+        result.dest_lon,
+        result.dest_lat,
+        inputs.country,
+    )
+    _insert_historical_job(
+        conn,
+        inputs,
+        result,
+        stored_amount,
+        created_at,
+        origin_address_id,
+        destination_address_id,
+    )
     conn.commit()
+    return quote_rowid
 
 
 __all__ = [

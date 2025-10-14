@@ -16,6 +16,7 @@ if "openrouteservice" not in sys.modules:
 
     sys.modules["openrouteservice"] = types.SimpleNamespace(Client=_DummyORSClient)
 
+from analytics.db import ensure_dashboard_tables
 from corkysoft.quote_service import (
     PRICING_MODELS,
     QuoteInput,
@@ -69,13 +70,14 @@ def _quote_result() -> QuoteResult:
 def test_persist_quote_stores_manual_override() -> None:
     conn = sqlite3.connect(":memory:")
     ensure_schema(conn)
+    ensure_dashboard_tables(conn)
 
     inputs = _quote_input()
     result = _quote_result()
     result.manual_quote = 1100.0
     result.summary_text = build_summary(inputs, result)
 
-    persist_quote(conn, inputs, result)
+    rowid = persist_quote(conn, inputs, result)
 
     stored = conn.execute(
         "SELECT final_quote, manual_quote FROM quotes"
@@ -84,6 +86,39 @@ def test_persist_quote_stores_manual_override() -> None:
     final_quote, manual_quote = stored
     assert final_quote == pytest.approx(1200.0)
     assert manual_quote == pytest.approx(1100.0)
+    assert rowid == 1
+
+
+def test_persist_quote_creates_historical_job_entry() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    ensure_dashboard_tables(conn)
+
+    inputs = _quote_input()
+    result = _quote_result()
+    result.summary_text = build_summary(inputs, result)
+
+    persist_quote(conn, inputs, result)
+
+    hist_row = conn.execute(
+        """
+        SELECT job_date, corridor_display, price_per_m3, distance_km, final_cost,
+               origin_address_id, destination_address_id
+        FROM historical_jobs
+        """
+    ).fetchone()
+    assert hist_row is not None
+    job_date, corridor, price_per_m3, distance_km, final_cost, origin_id, dest_id = hist_row
+    assert job_date == inputs.quote_date.isoformat()
+    assert corridor == f"{result.origin_resolved} → {result.destination_resolved}"
+    assert price_per_m3 == pytest.approx(result.final_quote / inputs.cubic_m)
+    assert distance_km == pytest.approx(result.distance_km)
+    assert final_cost == pytest.approx(result.total_before_margin)
+    assert origin_id is not None
+    assert dest_id is not None
+
+    address_count = conn.execute("SELECT COUNT(*) FROM addresses").fetchone()[0]
+    assert address_count == 2
 
 
 def test_build_summary_mentions_manual_amount() -> None:

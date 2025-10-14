@@ -15,6 +15,7 @@ import textwrap
 from datetime import date, datetime
 from typing import List, Optional, Sequence
 
+from analytics.db import ensure_dashboard_tables
 from corkysoft.quote_service import (
     COUNTRY_DEFAULT,
     DEFAULT_MODIFIERS,
@@ -166,6 +167,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     conn = sqlite3.connect(DB_PATH)
     ensure_schema(conn)
+    ensure_dashboard_tables(conn)
 
     inputs = gather_inputs(args)
 
@@ -176,14 +178,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         conn.close()
         return 1
 
+    rowid: Optional[int] = None
     if not args.no_save:
-        persist_quote(conn, inputs, result)
+        rowid = persist_quote(conn, inputs, result)
 
     print("\n--- Quote Summary ---")
     print(result.summary_text)
 
-    if not args.no_save:
-        rowid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    if rowid is not None:
         print(f"\nSaved quote #{rowid} to {DB_PATH}.")
     conn.close()
     return 0

@@ -924,7 +924,7 @@ with connection_scope() as conn:
     st.button(
         "Open quote builder",
         on_click=_activate_quote_tab,
-        disabled=not has_filtered_data,
+        disabled=dataset_error is not None,
         help="Jump to the quote builder tab to build a quick quote from a historical route.",
     )
 
@@ -1650,15 +1650,12 @@ with connection_scope() as conn:
                     pass
                 else:
                     try:
-                        persist_quote(
+                        rowid = persist_quote(
                             conn,
                             stored_inputs,
                             quote_result,
                             manual_quote=manual_to_store,
                         )
-                        rowid = conn.execute(
-                            "SELECT last_insert_rowid()"
-                        ).fetchone()[0]
                     except Exception as exc:  # pragma: no cover - UI feedback path
                         st.error(f"Failed to persist quote: {exc}")
                     else:
