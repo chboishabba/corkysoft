@@ -28,6 +28,7 @@ AMBIGUOUS_ABBREVIATIONS = {
 }
 
 POSTCODE_RE = re.compile(r"\b\d{4}\b")
+TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
 
 def _collapse_whitespace(value: str) -> str:
@@ -76,6 +77,95 @@ def _ensure_default_state(value: str) -> str:
     if trimmed.endswith(","):
         return f"{trimmed} {DEFAULT_STATE}"
     return f"{trimmed}, {DEFAULT_STATE}"
+
+
+def _tokenize_for_matching(value: Optional[str]) -> set[str]:
+    if not value:
+        return set()
+    return {match.group(0).lower() for match in TOKEN_RE.finditer(value)}
+
+
+def _build_target_token_sets(
+    normalization: Optional[AddressNormalization],
+    cleaned_input: str,
+    original_input: str,
+) -> list[set[str]]:
+    values: List[str] = []
+    if normalization is not None:
+        values.extend(normalization.candidates)
+        values.append(normalization.raw)
+    values.extend([cleaned_input, original_input])
+
+    seen: List[str] = []
+    for value in values:
+        cleaned = _collapse_whitespace(str(value)) if value else ""
+        if cleaned and cleaned not in seen:
+            seen.append(cleaned)
+
+    token_sets = [_tokenize_for_matching(value) for value in seen]
+    return [tokens for tokens in token_sets if tokens]
+
+
+def _score_feature_against_targets(
+    feature: dict,
+    target_token_sets: Sequence[set[str]],
+) -> float:
+    if not target_token_sets:
+        return 0.0
+
+    props = feature.get("properties") or {}
+    texts = [
+        props.get("label"),
+        props.get("name"),
+        props.get("street"),
+        props.get("locality"),
+        props.get("county"),
+        props.get("region"),
+    ]
+
+    best_score = 0.0
+    for text in texts:
+        tokens = _tokenize_for_matching(text)
+        if not tokens:
+            continue
+        for target_tokens in target_token_sets:
+            if not target_tokens:
+                continue
+            overlap = len(tokens & target_tokens)
+            if not overlap:
+                continue
+            score = overlap / len(target_tokens)
+            if overlap == len(target_tokens):
+                score += 1.0
+            if score > best_score:
+                best_score = score
+    return best_score
+
+
+def _choose_best_feature(
+    features: Sequence[dict],
+    normalization: Optional[AddressNormalization],
+    cleaned_input: str,
+    original_input: str,
+) -> dict:
+    if not features:
+        raise ValueError("No features provided")
+
+    target_token_sets = _build_target_token_sets(
+        normalization,
+        cleaned_input,
+        original_input,
+    )
+
+    best_feature = features[0]
+    best_score = -1.0
+    for feature in features:
+        score = _score_feature_against_targets(feature, target_token_sets)
+        if score > best_score:
+            best_score = score
+            best_feature = feature
+
+    return best_feature
 
 
 @dataclass
@@ -262,7 +352,7 @@ def geocode_with_normalization(
         if not features:
             raise ValueError(f"No geocode found for: {place}, {country}")
 
-    feat = features[0]
+    feat = _choose_best_feature(features, normalization, cleaned_input, place)
     lon, lat = feat["geometry"]["coordinates"]
     props = feat.get("properties") or {}
     label = (
