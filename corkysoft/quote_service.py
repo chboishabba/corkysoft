@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import os
+import re
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -35,6 +36,7 @@ FALLBACK_SPEED_KMH = 65.0
 logger = logging.getLogger(__name__)
 
 _ORS_CLIENT: Optional["ors.Client"] = None
+POSTCODE_RE = re.compile(r"\b(\d{4})\b")
 
 
 def get_ors_client(client: Optional[ors.Client] = None) -> ors.Client:
@@ -128,6 +130,24 @@ def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
     return row is not None
 
 
+def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table})")
+    except sqlite3.OperationalError:
+        return False
+    return any(row[1] == column for row in rows)
+
+
+def _extract_postcode(*values: Optional[str]) -> Optional[str]:
+    for value in values:
+        if not value:
+            continue
+        match = POSTCODE_RE.search(value)
+        if match:
+            return match.group(1)
+    return None
+
+
 def _ensure_address_record(
     conn: sqlite3.Connection,
     raw_input: str,
@@ -135,6 +155,8 @@ def _ensure_address_record(
     lon: Optional[float],
     lat: Optional[float],
     country: str,
+    *,
+    postcode: Optional[str] = None,
 ) -> Optional[int]:
     if not _table_exists(conn, "addresses"):
         return None
@@ -142,6 +164,8 @@ def _ensure_address_record(
     normalized = normalize_place(resolved or raw_input)
     if not normalized:
         normalized = normalize_place(raw_input)
+
+    has_postcode = _column_exists(conn, "addresses", "postcode")
 
     row = conn.execute(
         """
@@ -153,27 +177,57 @@ def _ensure_address_record(
     ).fetchone()
     if row is not None:
         address_id = int(row[0])
-        conn.execute(
-            "UPDATE addresses SET lon = COALESCE(?, lon), lat = COALESCE(?, lat) WHERE id = ?",
-            (lon, lat, address_id),
-        )
+        if has_postcode:
+            conn.execute(
+                """
+                UPDATE addresses
+                SET lon = COALESCE(?, lon),
+                    lat = COALESCE(?, lat),
+                    postcode = COALESCE(?, postcode)
+                WHERE id = ?
+                """,
+                (lon, lat, postcode, address_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE addresses SET lon = COALESCE(?, lon), lat = COALESCE(?, lat) WHERE id = ?",
+                (lon, lat, address_id),
+            )
         return address_id
 
-    cursor = conn.execute(
-        """
-        INSERT INTO addresses (
-            raw_input, normalized, city, country, lon, lat
-        ) VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            raw_input,
-            normalized,
-            resolved or normalized,
-            country,
-            lon,
-            lat,
-        ),
-    )
+    if has_postcode:
+        cursor = conn.execute(
+            """
+            INSERT INTO addresses (
+                raw_input, normalized, city, country, lon, lat, postcode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                raw_input,
+                normalized,
+                resolved or normalized,
+                country,
+                lon,
+                lat,
+                postcode,
+            ),
+        )
+    else:
+        cursor = conn.execute(
+            """
+            INSERT INTO addresses (
+                raw_input, normalized, city, country, lon, lat
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                raw_input,
+                normalized,
+                resolved or normalized,
+                country,
+                lon,
+                lat,
+            ),
+        )
     return int(cursor.lastrowid)
 
 
@@ -185,6 +239,8 @@ def _insert_historical_job(
     created_at: str,
     origin_address_id: Optional[int],
     destination_address_id: Optional[int],
+    origin_postcode: Optional[str],
+    destination_postcode: Optional[str],
 ) -> None:
     if not _table_exists(conn, "historical_jobs"):
         return
@@ -226,8 +282,8 @@ def _insert_historical_job(
             result.total_before_margin,
             origin_label,
             destination_label,
-            None,
-            None,
+            origin_postcode,
+            destination_postcode,
             origin_address_id,
             destination_address_id,
             created_at,
@@ -934,6 +990,19 @@ def persist_quote(
         else result.final_quote
     )
 
+    origin_postcode = _extract_postcode(
+        result.origin_resolved,
+        inputs.origin,
+        *(result.origin_candidates or []),
+        *(result.origin_suggestions or []),
+    )
+    destination_postcode = _extract_postcode(
+        result.destination_resolved,
+        inputs.destination,
+        *(result.destination_candidates or []),
+        *(result.destination_suggestions or []),
+    )
+
     origin_address_id = _ensure_address_record(
         conn,
         inputs.origin,
@@ -941,6 +1010,7 @@ def persist_quote(
         result.origin_lon,
         result.origin_lat,
         inputs.country,
+        postcode=origin_postcode,
     )
     destination_address_id = _ensure_address_record(
         conn,
@@ -949,6 +1019,7 @@ def persist_quote(
         result.dest_lon,
         result.dest_lat,
         inputs.country,
+        postcode=destination_postcode,
     )
     _insert_historical_job(
         conn,
@@ -958,6 +1029,8 @@ def persist_quote(
         created_at,
         origin_address_id,
         destination_address_id,
+        origin_postcode,
+        destination_postcode,
     )
     conn.commit()
     return quote_rowid
