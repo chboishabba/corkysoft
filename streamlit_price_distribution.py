@@ -26,6 +26,7 @@ from analytics.price_distribution import (
     PROFITABILITY_COLOURS,
     ColumnMapping,
     available_heatmap_weightings,
+    filter_routes_by_country,
     build_heatmap_source,
     create_histogram,
     create_metro_profitability_figure,
@@ -71,6 +72,7 @@ from corkysoft.schema import ensure_schema as ensure_core_schema
 DEFAULT_TARGET_MARGIN_PERCENT = 20.0
 _AUS_LAT_LON = (-25.2744, 133.7751)
 _PIN_NOTE = "Manual pin override used for routing"
+_QUOTE_COUNTRY_STATE_KEY = "quote_builder_country"
 
 
 def _initial_pin_state(result: QuoteResult) -> Dict[str, Any]:
@@ -1372,8 +1374,20 @@ with connection_scope() as conn:
         map_columns = {"origin_lon", "origin_lat", "dest_lon", "dest_lat"}
         selected_route: Optional[pd.Series] = None
 
+        if _QUOTE_COUNTRY_STATE_KEY not in st.session_state:
+            initial_country = (
+                session_inputs.country
+                if session_inputs and session_inputs.country
+                else COUNTRY_DEFAULT
+            )
+            st.session_state[_QUOTE_COUNTRY_STATE_KEY] = initial_country
+
+        active_country = st.session_state.get(_QUOTE_COUNTRY_STATE_KEY)
+
         if map_columns.issubset(filtered_df.columns):
             map_routes = filtered_df.dropna(subset=list(map_columns)).copy()
+            if isinstance(active_country, str) and active_country.strip():
+                map_routes = filter_routes_by_country(map_routes, active_country)
             if not map_routes.empty:
                 map_routes = map_routes.reset_index(drop=True)
                 map_routes["route_label"] = map_routes.apply(_format_route_label, axis=1)
@@ -1504,7 +1518,7 @@ with connection_scope() as conn:
             default_margin_percent: Optional[float] = DEFAULT_TARGET_MARGIN_PERCENT
         else:
             default_margin_percent = session_inputs.target_margin_percent
-        default_country = session_inputs.country if session_inputs else COUNTRY_DEFAULT
+        default_country = st.session_state.get(_QUOTE_COUNTRY_STATE_KEY, COUNTRY_DEFAULT)
 
         if selected_route is not None:
             default_origin = _first_non_empty(
@@ -1535,6 +1549,7 @@ with connection_scope() as conn:
                 selected_route, ["origin_country", "destination_country"]
             )
             if route_country:
+                st.session_state[_QUOTE_COUNTRY_STATE_KEY] = route_country
                 default_country = route_country
 
         modifier_options = [mod.id for mod in DEFAULT_MODIFIERS]
@@ -1546,7 +1561,9 @@ with connection_scope() as conn:
                 "Destination", value=default_destination
             )
             country_value = st.text_input(
-                "Country", value=default_country or COUNTRY_DEFAULT
+                "Country",
+                value=default_country or COUNTRY_DEFAULT,
+                key=_QUOTE_COUNTRY_STATE_KEY,
             )
             cubic_m_value = st.number_input(
                 "Volume (m³)",
