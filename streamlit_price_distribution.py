@@ -1177,6 +1177,10 @@ with connection_scope() as conn:
         )
 
     with tab_map["Quote builder"]:
+        saved_rowid = st.session_state.pop("quote_saved_rowid", None)
+        if saved_rowid is not None:
+            st.success(f"Quote saved as record #{saved_rowid}.")
+
         st.markdown("### Quote builder")
         st.caption(
             "Use a historical route to pre-fill the quick quote form, calculate pricing and optionally persist the result."
@@ -1659,7 +1663,9 @@ with connection_scope() as conn:
                     except Exception as exc:  # pragma: no cover - UI feedback path
                         st.error(f"Failed to persist quote: {exc}")
                     else:
-                        st.success(f"Quote saved as record #{rowid}.")
+                        st.session_state["quote_saved_rowid"] = rowid
+                        _set_query_params(view="Quote builder")
+                        _rerun_app()
             if action_cols[1].button("Reset quote builder"):
                 st.session_state.pop("quote_result", None)
                 st.session_state.pop("quote_inputs", None)
