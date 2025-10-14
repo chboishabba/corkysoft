@@ -58,6 +58,9 @@ from corkysoft.quote_service import (
 )
 from corkysoft.schema import ensure_schema as ensure_core_schema
 
+
+DEFAULT_TARGET_MARGIN_PERCENT = 20.0
+
 # -----------------------------------------------------------------------------
 # Compatibility shim for metro-distance filtering across branches/modules
 # -----------------------------------------------------------------------------
@@ -1323,9 +1326,10 @@ with connection_scope() as conn:
         default_volume = session_inputs.cubic_m if session_inputs else 30.0
         default_date = session_inputs.quote_date if session_inputs else date.today()
         default_modifiers = list(session_inputs.modifiers) if session_inputs else []
-        default_margin_percent = (
-            session_inputs.target_margin_percent if session_inputs else None
-        )
+        if session_inputs is None:
+            default_margin_percent: Optional[float] = DEFAULT_TARGET_MARGIN_PERCENT
+        else:
+            default_margin_percent = session_inputs.target_margin_percent
         default_country = session_inputs.country if session_inputs else COUNTRY_DEFAULT
 
         if selected_route is not None:
@@ -1394,7 +1398,9 @@ with connection_scope() as conn:
                 min_value=0.0,
                 max_value=100.0,
                 value=float(
-                    default_margin_percent if default_margin_percent is not None else 20.0
+                    default_margin_percent
+                    if default_margin_percent is not None
+                    else DEFAULT_TARGET_MARGIN_PERCENT
                 ),
                 step=1.0,
                 help=(
