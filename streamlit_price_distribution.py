@@ -12,6 +12,13 @@ import plotly.graph_objects as go
 import pydeck as pdk
 import streamlit as st
 
+try:
+    import folium
+    from streamlit_folium import st_folium
+except ModuleNotFoundError:  # pragma: no cover - optional dependency for pin UI
+    folium = None  # type: ignore[assignment]
+    st_folium = None  # type: ignore[assignment]
+
 from analytics.db import connection_scope, ensure_dashboard_tables
 from analytics.price_distribution import (
     DistributionSummary,
@@ -62,6 +69,102 @@ from corkysoft.schema import ensure_schema as ensure_core_schema
 
 
 DEFAULT_TARGET_MARGIN_PERCENT = 20.0
+_AUS_LAT_LON = (-25.2744, 133.7751)
+_PIN_NOTE = "Manual pin override used for routing"
+
+
+def _initial_pin_state(result: QuoteResult) -> Dict[str, Any]:
+    return {
+        "origin": {
+            "lon": float(result.origin_lon),
+            "lat": float(result.origin_lat),
+        },
+        "destination": {
+            "lon": float(result.dest_lon),
+            "lat": float(result.dest_lat),
+        },
+        "enabled": False,
+    }
+
+
+def _ensure_pin_state(result: QuoteResult) -> Dict[str, Any]:
+    state: Dict[str, Any] = st.session_state.get("quote_pin_override", {})
+    if not state or "origin" not in state or "destination" not in state:
+        state = _initial_pin_state(result)
+    else:
+        state.setdefault("enabled", False)
+        # When result coordinates change, refresh defaults so pins move with them
+        origin_state = state.get("origin") or {}
+        dest_state = state.get("destination") or {}
+        if not origin_state:
+            origin_state = {}
+        if not dest_state:
+            dest_state = {}
+        origin_state.setdefault("lon", float(result.origin_lon))
+        origin_state.setdefault("lat", float(result.origin_lat))
+        dest_state.setdefault("lon", float(result.dest_lon))
+        dest_state.setdefault("lat", float(result.dest_lat))
+        state["origin"] = origin_state
+        state["destination"] = dest_state
+    st.session_state["quote_pin_override"] = state
+    return state
+
+
+def _pin_coordinates(entry: Dict[str, Any]) -> tuple[float, float]:
+    lon = entry.get("lon")
+    lat = entry.get("lat")
+    if lon is None or lat is None:
+        return (_AUS_LAT_LON[1], _AUS_LAT_LON[0])
+    return (float(lon), float(lat))
+
+
+def _render_pin_picker(
+    label: str,
+    *,
+    map_key: str,
+    entry: Dict[str, Any],
+) -> tuple[float, float]:
+    if folium is None or st_folium is None:
+        st.warning(
+            "Install 'folium' and 'streamlit-folium' to drop pins interactively. Enter coordinates manually instead."
+        )
+        lon, lat = _pin_coordinates(entry)
+        lat_input = st.number_input(
+            f"{label} latitude",
+            value=float(lat),
+            format="%.6f",
+            key=f"{map_key}_lat",
+        )
+        lon_input = st.number_input(
+            f"{label} longitude",
+            value=float(lon),
+            format="%.6f",
+            key=f"{map_key}_lon",
+        )
+        entry["lon"] = float(lon_input)
+        entry["lat"] = float(lat_input)
+        return float(lon_input), float(lat_input)
+
+    lon, lat = _pin_coordinates(entry)
+    zoom = 12 if entry.get("lon") is not None and entry.get("lat") is not None else 4
+    map_obj = folium.Map(location=[lat, lon], zoom_start=zoom)
+    folium.Marker(
+        [lat, lon],
+        tooltip=f"{label} pin",
+        icon=folium.Icon(color="blue" if label == "Origin" else "red"),
+    ).add_to(map_obj)
+    click_result = st_folium(map_obj, height=320, key=map_key, returned_objects=[])
+
+    new_lon, new_lat = lon, lat
+    if isinstance(click_result, dict):
+        last_clicked = click_result.get("last_clicked") or {}
+        if "lat" in last_clicked and "lng" in last_clicked:
+            new_lat = float(last_clicked["lat"])
+            new_lon = float(last_clicked["lng"])
+    entry["lon"] = new_lon
+    entry["lat"] = new_lat
+    st.session_state["quote_pin_override"] = st.session_state.get("quote_pin_override", {})
+    return new_lon, new_lat
 
 # -----------------------------------------------------------------------------
 # Compatibility shim for metro-distance filtering across branches/modules
@@ -1510,6 +1613,7 @@ with connection_scope() as conn:
                     st.session_state["quote_manual_override_amount"] = float(
                         result.final_quote
                     )
+                    st.session_state["quote_pin_override"] = _initial_pin_state(result)
                     _set_query_params(view="Quote builder")
                     st.success("Quote calculated. Review the breakdown below.")
                     stored_inputs = quote_inputs
@@ -1611,6 +1715,90 @@ with connection_scope() as conn:
                 quote_result.destination_suggestions,
                 quote_result.destination_ambiguities,
             )
+
+            pin_state = _ensure_pin_state(quote_result)
+            pin_related_notes = []
+            for notes in (
+                quote_result.origin_suggestions,
+                quote_result.destination_suggestions,
+            ):
+                for note in notes or []:
+                    if not note:
+                        continue
+                    lowered = note.lower()
+                    if _PIN_NOTE.lower() in lowered or "straight-line" in lowered:
+                        pin_related_notes.append(note)
+
+            st.markdown("#### Manual pins for routing")
+            if pin_related_notes and not pin_state.get("enabled", False):
+                st.warning(
+                    "Routing relied on snapping or a straight-line fallback. Drop pins below to improve accuracy."
+                )
+            else:
+                st.caption(
+                    "Drop a pin for each address when ORS cannot find a routable point within 350 m."
+                )
+
+            pin_cols = st.columns(2)
+            with pin_cols[0]:
+                origin_lon, origin_lat = _render_pin_picker(
+                    "Origin", map_key="quote_origin_pin_map", entry=pin_state["origin"]
+                )
+                st.caption(f"Origin pin: {origin_lat:.5f}, {origin_lon:.5f}")
+            with pin_cols[1]:
+                dest_lon, dest_lat = _render_pin_picker(
+                    "Destination",
+                    map_key="quote_destination_pin_map",
+                    entry=pin_state["destination"],
+                )
+                st.caption(f"Destination pin: {dest_lat:.5f}, {dest_lon:.5f}")
+
+            pin_state["origin"] = {"lon": origin_lon, "lat": origin_lat}
+            pin_state["destination"] = {"lon": dest_lon, "lat": dest_lat}
+            use_manual_pins = st.checkbox(
+                "Use these pins for the next calculation",
+                value=pin_state.get("enabled", False),
+                key="quote_use_pin_overrides",
+                help="Enable to re-run the quote using the pins above.",
+            )
+            pin_state["enabled"] = use_manual_pins
+            st.session_state["quote_pin_override"] = pin_state
+
+            if st.button(
+                "Recalculate with manual pins",
+                type="secondary",
+                disabled=not use_manual_pins,
+            ):
+                manual_inputs = QuoteInput(
+                    origin=stored_inputs.origin,
+                    destination=stored_inputs.destination,
+                    cubic_m=stored_inputs.cubic_m,
+                    quote_date=stored_inputs.quote_date,
+                    modifiers=list(stored_inputs.modifiers),
+                    target_margin_percent=stored_inputs.target_margin_percent,
+                    country=stored_inputs.country,
+                    origin_coordinates=(origin_lon, origin_lat),
+                    destination_coordinates=(dest_lon, dest_lat),
+                )
+                try:
+                    manual_result = calculate_quote(conn, manual_inputs)
+                except RuntimeError as exc:
+                    st.error(str(exc))
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.session_state["quote_inputs"] = manual_inputs
+                    st.session_state["quote_result"] = manual_result
+                    st.session_state["quote_manual_override_enabled"] = False
+                    st.session_state["quote_manual_override_amount"] = float(
+                        manual_result.final_quote
+                    )
+                    pin_override_state = _initial_pin_state(manual_result)
+                    pin_override_state["enabled"] = True
+                    st.session_state["quote_pin_override"] = pin_override_state
+                    st.success("Quote recalculated using manual pins.")
+                    _set_query_params(view="Quote builder")
+                    _rerun_app()
 
             metric_cols = st.columns(4)
             metric_cols[0].metric(
@@ -1748,6 +1936,7 @@ with connection_scope() as conn:
                 st.session_state.pop("quote_inputs", None)
                 st.session_state.pop("quote_manual_override_enabled", None)
                 st.session_state.pop("quote_manual_override_amount", None)
+                st.session_state.pop("quote_pin_override", None)
                 _set_query_params(view="Quote builder")
                 _rerun_app()
 

@@ -3,3 +3,5 @@ numpy>=1.25
 plotly>=5.20
 streamlit>=1.36
 pydeck>=0.8
+folium>=0.15
+streamlit-folium>=0.18

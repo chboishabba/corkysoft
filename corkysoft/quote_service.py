@@ -392,6 +392,8 @@ def route_distance(
     country: str,
     *,
     client: Optional[ors.Client] = None,
+    origin_override: Optional[Tuple[float, float]] = None,
+    destination_override: Optional[Tuple[float, float]] = None,
 ) -> Tuple[float, float, GeocodeResult, GeocodeResult]:
     resolved_client = get_ors_client(client)
     origin_geo = geocode_cached(
@@ -400,6 +402,26 @@ def route_distance(
     dest_geo = geocode_cached(
         conn, destination, country, client=resolved_client
     )
+
+    if origin_override is not None:
+        try:
+            override_lon, override_lat = origin_override
+        except (TypeError, ValueError):
+            override_lon, override_lat = origin_override or (None, None)
+        else:
+            origin_geo.lon = float(override_lon)
+            origin_geo.lat = float(override_lat)
+            _note_geocode(origin_geo, "Manual pin override used for routing")
+
+    if destination_override is not None:
+        try:
+            dest_override_lon, dest_override_lat = destination_override
+        except (TypeError, ValueError):
+            dest_override_lon, dest_override_lat = destination_override or (None, None)
+        else:
+            dest_geo.lon = float(dest_override_lon)
+            dest_geo.lat = float(dest_override_lat)
+            _note_geocode(dest_geo, "Manual pin override used for routing")
 
     coordinates = [
         [origin_geo.lon, origin_geo.lat],
@@ -649,6 +671,8 @@ class QuoteInput:
     modifiers: List[str]
     target_margin_percent: Optional[float]
     country: str = COUNTRY_DEFAULT
+    origin_coordinates: Optional[Tuple[float, float]] = None
+    destination_coordinates: Optional[Tuple[float, float]] = None
 
 
 @dataclass
@@ -742,6 +766,8 @@ def calculate_quote(
         inputs.destination,
         inputs.country,
         client=client,
+        origin_override=inputs.origin_coordinates,
+        destination_override=inputs.destination_coordinates,
     )
 
     def resolved_label(geo: GeocodeResult, fallback: str) -> str:
