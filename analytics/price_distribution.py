@@ -248,6 +248,26 @@ def _infer_datetime_parse_kwargs(series: pd.Series) -> dict[str, Any]:
     return {}
 
 
+def _deduplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Return ``df`` with duplicate column labels removed.
+
+    When importing legacy exports the ``historical_jobs`` table may already
+    contain denormalised location columns (``origin``, ``destination`` etc.).
+    The default dashboard query joins the addresses table and aliases the
+    enriched columns using the same names which results in duplicate column
+    labels. Pandas returns a :class:`~pandas.DataFrame` rather than a
+    :class:`~pandas.Series` when selecting a column with duplicate labels which
+    later breaks string/arithmetical operations with ``Columns must be same
+    length as key`` errors.  Keeping the last occurrence (the enriched join
+    columns) matches the behaviour of the old dashboard and avoids the
+    ambiguity.
+    """
+
+    if df.columns.duplicated().any():
+        return df.loc[:, ~df.columns.duplicated(keep="last")]
+    return df
+
+
 def infer_columns(df: pd.DataFrame) -> ColumnMapping:
     cols = df.columns
     return ColumnMapping(
@@ -504,6 +524,7 @@ def load_historical_jobs(
         except Exception as exc:  # pragma: no cover - surfaces friendly error in UI
             raise RuntimeError("historical_jobs table is required for this view") from exc
 
+    df = _deduplicate_columns(df)
     mapping = infer_columns(df)
     return _prepare_loaded_jobs(
         df,
@@ -534,6 +555,8 @@ def load_live_jobs(
         df = pd.read_sql_query("SELECT * FROM jobs", conn)
     except Exception as exc:
         raise RuntimeError("jobs table is required for live monitoring") from exc
+
+    df = _deduplicate_columns(df)
 
     mapping = infer_columns(df)
     return _prepare_loaded_jobs(
