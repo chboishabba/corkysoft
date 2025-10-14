@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 import sqlite3
 import warnings
 
@@ -315,6 +316,21 @@ def test_load_historical_jobs_filters_by_client_and_corridor():
 
         df_postcode, _ = load_historical_jobs(conn, postcode_prefix="48")
         assert set(df_postcode["origin"].unique()) == {"Cairns"}
+    finally:
+        conn.close()
+
+
+def test_load_historical_jobs_accepts_python_date_objects():
+    conn = build_conn()
+    try:
+        df, _ = load_historical_jobs(
+            conn,
+            start_date=date(2024, 2, 1),
+            end_date=date(2024, 2, 28),
+        )
+        assert len(df) == 2
+        assert df["job_date"].min() >= pd.Timestamp("2024-02-01")
+        assert df["job_date"].max() <= pd.Timestamp("2024-02-28")
     finally:
         conn.close()
 
