@@ -5,7 +5,7 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Iterable, Literal, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -1921,6 +1921,283 @@ def prepare_profitability_map_data(
     else:
         map_df["map_colour_value"] = colour_values.fillna(placeholder).astype(str)
     return map_df
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    """Return ``value`` as a float when possible, otherwise ``None``."""
+
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(numeric):
+        return None
+    return numeric
+
+
+def _route_display_name(route: pd.Series) -> str:
+    """Return a readable corridor label for *route*.
+
+    This mirrors the presentation used in the Streamlit dashboard when naming
+    routes, preferring corridor-specific columns before falling back to origin
+    and destination combinations.
+    """
+
+    for column in (
+        "corridor_display",
+        "corridor",
+        "lane",
+    ):
+        if column in route and isinstance(route[column], str):
+            value = route[column].strip()
+            if value:
+                return value
+
+    origin = None
+    for column in (
+        "origin",
+        "origin_city",
+        "origin_normalized",
+        "origin_raw",
+    ):
+        if column in route and isinstance(route[column], str):
+            raw = route[column].strip()
+            if raw:
+                origin = raw
+                break
+
+    destination = None
+    for column in (
+        "destination",
+        "destination_city",
+        "destination_normalized",
+        "destination_raw",
+    ):
+        if column in route and isinstance(route[column], str):
+            raw = route[column].strip()
+            if raw:
+                destination = raw
+                break
+
+    if origin and destination:
+        return f"{origin} → {destination}"
+    if origin:
+        return origin
+    if destination:
+        return destination
+    return "Unknown corridor"
+
+
+def _circle_coordinates(
+    lat: float,
+    lon: float,
+    radius_km: float,
+    *,
+    points: int = 60,
+) -> tuple[list[float], list[float]]:
+    """Return an approximate circle around ``lat``/``lon`` with radius ``radius_km``.
+
+    The approximation assumes a spherical Earth and adjusts longitudinal degrees
+    for the latitude.  It is sufficient for visualisation purposes without
+    adding heavier geographic dependencies.
+    """
+
+    if radius_km <= 0 or not math.isfinite(radius_km):
+        return [], []
+
+    lat_rad = math.radians(lat)
+    cos_lat = math.cos(lat_rad)
+    if abs(cos_lat) < 1e-6:
+        cos_lat = 1e-6 if cos_lat >= 0 else -1e-6
+
+    lat_deg_per_km = 1.0 / 110.574
+    lon_deg_per_km = 1.0 / (111.320 * cos_lat)
+
+    angles = np.linspace(0.0, 2.0 * math.pi, points, endpoint=False)
+    lat_offsets = radius_km * np.sin(angles)
+    lon_offsets = radius_km * np.cos(angles)
+
+    latitudes = (lat + lat_offsets * lat_deg_per_km).tolist()
+    longitudes = (lon + lon_offsets * lon_deg_per_km).tolist()
+
+    if latitudes and longitudes:
+        latitudes.append(latitudes[0])
+        longitudes.append(longitudes[0])
+
+    return latitudes, longitudes
+
+
+def build_isochrone_polygons(
+    df: pd.DataFrame,
+    *,
+    centre: Literal["origin", "destination"] = "origin",
+    horizon_hours: float = 4.0,
+    default_speed_kmh: float = 70.0,
+    max_routes: int = 50,
+    points: int = 60,
+) -> pd.DataFrame:
+    """Return approximate isochrone polygons for each route in ``df``.
+
+    Parameters
+    ----------
+    df:
+        DataFrame containing at least coordinate and distance information for
+        each route.  ``origin_lat``/``origin_lon`` or ``dest_lat``/``dest_lon``
+        columns are required depending on the selected ``centre``.  Distances are
+        sourced from ``distance_km``/``distance`` columns while travel durations
+        are taken from ``duration_hr``/``duration`` columns when available.
+    centre:
+        Which endpoint of the route anchors the isochrone.  ``"origin"`` draws
+        circles around origin coordinates, whereas ``"destination"`` uses the
+        destination coordinates.
+    horizon_hours:
+        Travel time horizon used to scale the isochrone radius.  The function
+        multiplies the inferred average speed (distance / duration) by this
+        value.  When no duration is available the ``default_speed_kmh`` is used
+        instead.
+    default_speed_kmh:
+        Fallback speed applied when a route does not provide usable duration
+        information.
+    max_routes:
+        Maximum number of routes to include.  This prevents map visualisations
+        from being overwhelmed by hundreds of polygons.
+    points:
+        Number of vertices used to approximate each circular polygon.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Dataframe with ``label``, ``centre_lat``, ``centre_lon``,
+        ``radius_km``, ``speed_kmh``, ``latitudes``, ``longitudes`` and
+        ``tooltip`` columns.  Each row describes one isochrone polygon.
+    """
+
+    if df.empty:
+        return pd.DataFrame(
+            columns=
+            [
+                "label",
+                "centre_lat",
+                "centre_lon",
+                "radius_km",
+                "speed_kmh",
+                "latitudes",
+                "longitudes",
+                "tooltip",
+            ]
+        )
+
+    centre_key = centre.lower()
+    if centre_key not in {"origin", "destination"}:
+        raise ValueError("centre must be 'origin' or 'destination'")
+
+    lat_column = "origin_lat" if centre_key == "origin" else "dest_lat"
+    lon_column = "origin_lon" if centre_key == "origin" else "dest_lon"
+    if lat_column not in df.columns or lon_column not in df.columns:
+        return pd.DataFrame(
+            columns=
+            [
+                "label",
+                "centre_lat",
+                "centre_lon",
+                "radius_km",
+                "speed_kmh",
+                "latitudes",
+                "longitudes",
+                "tooltip",
+            ]
+        )
+
+    distance_column = next(
+        (column for column in ("distance_km", "distance", "km", "kms") if column in df.columns),
+        None,
+    )
+    if distance_column is None:
+        return pd.DataFrame(
+            columns=
+            [
+                "label",
+                "centre_lat",
+                "centre_lon",
+                "radius_km",
+                "speed_kmh",
+                "latitudes",
+                "longitudes",
+                "tooltip",
+            ]
+        )
+
+    duration_column = next(
+        (
+            column
+            for column in ("duration_hr", "duration_hours", "travel_hours", "duration")
+            if column in df.columns
+        ),
+        None,
+    )
+
+    records: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        lat_value = _coerce_float(row.get(lat_column))
+        lon_value = _coerce_float(row.get(lon_column))
+        if lat_value is None or lon_value is None:
+            continue
+
+        distance_value = _coerce_float(row.get(distance_column))
+        if distance_value is None or distance_value <= 0:
+            continue
+
+        if duration_column is not None:
+            duration_value = _coerce_float(row.get(duration_column))
+        else:
+            duration_value = None
+
+        if duration_value is not None and duration_value > 0:
+            speed_kmh = distance_value / duration_value
+        else:
+            speed_kmh = default_speed_kmh
+
+        if not math.isfinite(speed_kmh) or speed_kmh <= 0:
+            speed_kmh = default_speed_kmh
+
+        radius_km = speed_kmh * horizon_hours
+        if radius_km <= 0 or not math.isfinite(radius_km):
+            continue
+
+        latitudes, longitudes = _circle_coordinates(
+            lat_value,
+            lon_value,
+            radius_km,
+            points=points,
+        )
+        if not latitudes or not longitudes:
+            continue
+
+        label = _route_display_name(row)
+        tooltip = (
+            f"{label} — {horizon_hours:.1f} hr reach ≈ {radius_km:.0f} km "
+            f"(avg {speed_kmh:.0f} km/h)"
+        )
+
+        records.append(
+            {
+                "label": label,
+                "centre_lat": lat_value,
+                "centre_lon": lon_value,
+                "radius_km": radius_km,
+                "speed_kmh": speed_kmh,
+                "latitudes": latitudes,
+                "longitudes": longitudes,
+                "tooltip": tooltip,
+            }
+        )
+
+        if len(records) >= max_routes:
+            break
+
+    return pd.DataFrame.from_records(records)
 
 
 def _band_styles():
