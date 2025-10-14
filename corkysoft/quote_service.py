@@ -573,17 +573,20 @@ def _haversine_km(
 
 def _is_routable_point_error(exc: Exception) -> bool:
     if ors_exceptions is not None and isinstance(exc, ors_exceptions.ApiError):
-        payload = None
-        if exc.args:
-            payload = exc.args[0]
-        if isinstance(payload, dict):
+        args = getattr(exc, "args", ())
+        for payload in (arg for arg in args if isinstance(arg, dict)):
             error = payload.get("error") or {}
             message = str(error.get("message") or "").lower()
             code = error.get("code")
             if code == 2010 or "could not find routable point" in message:
                 return True
+
+        for text_arg in (arg for arg in args if isinstance(arg, str)):
+            if "could not find routable point" in text_arg.lower():
+                return True
+
         if getattr(exc, "status_code", None) == 404:
-            text = " ".join(str(arg) for arg in exc.args)
+            text = " ".join(str(arg) for arg in args)
             if "could not find routable point" in text.lower():
                 return True
         return False

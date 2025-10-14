@@ -199,6 +199,46 @@ def test_calculate_quote_applies_margin(monkeypatch: pytest.MonkeyPatch) -> None
     conn.close()
 
 
+def test_is_routable_point_error_handles_dict_in_second_arg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeApiError(Exception):
+        def __init__(self, *args: object, status_code: Optional[int] = None) -> None:
+            super().__init__(*args)
+            self.status_code = status_code
+
+    fake_exceptions = types.SimpleNamespace(ApiError=FakeApiError)
+    monkeypatch.setattr(quote_service, "ors_exceptions", fake_exceptions)
+
+    exc = FakeApiError(
+        404,
+        {
+            "error": {
+                "code": 2010,
+                "message": "Could not find routable point within radius",
+            }
+        },
+    )
+
+    assert quote_service._is_routable_point_error(exc)
+
+
+def test_is_routable_point_error_handles_string_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeApiError(Exception):
+        def __init__(self, *args: object, status_code: Optional[int] = None) -> None:
+            super().__init__(*args)
+            self.status_code = status_code
+
+    fake_exceptions = types.SimpleNamespace(ApiError=FakeApiError)
+    monkeypatch.setattr(quote_service, "ors_exceptions", fake_exceptions)
+
+    exc = FakeApiError(404, "Could not find routable point within a radius")
+
+    assert quote_service._is_routable_point_error(exc)
+
+
 def test_route_distance_snaps_and_retries(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = sqlite3.connect(":memory:")
 
