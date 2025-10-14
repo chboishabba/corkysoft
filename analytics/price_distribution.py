@@ -44,11 +44,11 @@ PROFITABILITY_COLOURS = {
 }
 
 PROFITABILITY_WIDTHS = {
-    "Below break-even": 200,
-    "0-50 above break-even": 120,
-    "50-100 above break-even": 100,
-    "100+ above break-even": 80,
-    "Unknown": 80,
+    "Below break-even": 20,
+    "0-50 above break-even": 16,
+    "50-100 above break-even": 14,
+    "100+ above break-even": 12,
+    "Unknown": 12,
 }
 
 
@@ -1878,7 +1878,7 @@ def prepare_profitability_route_data(
     map_df["colour"] = map_df["colour"].apply(
         lambda value: value if isinstance(value, (list, tuple)) else [128, 128, 128]
     )
-    map_df["line_width"] = map_df["profit_band"].map(PROFITABILITY_WIDTHS).fillna(80)
+    map_df["line_width"] = map_df["profit_band"].map(PROFITABILITY_WIDTHS).fillna(12)
 
     def _format_tooltip(row: pd.Series) -> str:
         corridor = row.get("corridor_display", "Corridor")
