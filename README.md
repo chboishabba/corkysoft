@@ -75,6 +75,7 @@ The Streamlit app visualises historical jobs by $ per m³ with configurable brea
 Key visuals include:
 
 - A histogram with break-even bands, a fitted bell curve, and kurtosis/skewness call-outs for quick shape diagnostics.
+- A dataset selector for comparing imported history, saved quick quotes and live telemetry in a single workflow.
 - Optional profitability tabs that compare $/m³ against $/km and contrast quoted vs cost-derived $/m³, including margin outlier tables.
 - An interactive Mapbox view showing each route with selectable colouring (job, client, origin city, or destination city) and toggles to focus on lines or points when clusters get dense.
 - A live network map that blends historical job filters with real-time truck telemetry, colouring corridors by profitability band and highlighting active trucks/routes.
@@ -90,7 +91,8 @@ By default it reads from `routes.db`. Set `CORKYSOFT_DB` or `ROUTES_DB` to point
 
 Use the **Import historical jobs from CSV** expander in the sidebar to load data straight into the dashboard. The uploader
 accepts the same headers as the CLI importer (`date`, `origin`, `destination`, `m3`, `quoted_price`, `client`) and will
-calculate per-m³ rates automatically if only revenue and volume are provided.
+calculate per-m³ rates automatically if only revenue and volume are provided. Switch the dataset selector to **Saved quick
+quotes** to analyse submissions from the in-app quote builder alongside historical jobs.
 
 ### Export profitability summaries
 

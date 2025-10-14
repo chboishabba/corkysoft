@@ -27,6 +27,7 @@ from analytics.price_distribution import (
     ensure_break_even_parameter,
     import_historical_jobs_from_dataframe,
     load_historical_jobs,
+    load_quotes,
     load_live_jobs,
     prepare_profitability_map_data,
     prepare_profitability_route_data,
@@ -745,6 +746,7 @@ with connection_scope() as conn:
 
         dataset_options = {
             "Historical quotes": ("historical", load_historical_jobs),
+            "Saved quick quotes": ("quotes", load_quotes),
             "Live jobs": ("live", load_live_jobs),
         }
         dataset_label = st.radio(
@@ -902,6 +904,9 @@ with connection_scope() as conn:
             empty_messages = {
                 "historical": (
                     "historical_jobs table has no rows yet. Import historical jobs to populate the view."
+                ),
+                "quotes": (
+                    "quotes table has no rows yet. Save a quick quote to populate the view."
                 ),
                 "live": "jobs table has no rows yet. Add live jobs to populate the view.",
             }
