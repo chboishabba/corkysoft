@@ -12,11 +12,12 @@ import plotly.graph_objects as go
 import pydeck as pdk
 import streamlit as st
 
-from analytics.db import connection_scope
+from analytics.db import connection_scope, ensure_dashboard_tables
 from analytics.price_distribution import (
     DistributionSummary,
     ProfitabilitySummary,
     PROFITABILITY_COLOURS,
+    ColumnMapping,
     available_heatmap_weightings,
     build_heatmap_source,
     create_histogram,
@@ -25,11 +26,19 @@ from analytics.price_distribution import (
     create_m3_vs_km_figure,
     ensure_break_even_parameter,
     load_historical_jobs,
+    load_live_jobs,
     prepare_profitability_map_data,
     prepare_profitability_route_data,
     summarise_distribution,
     summarise_profitability,
     update_break_even,
+)
+from analytics.optimizer import (
+    OptimizerParameters,
+    OptimizerRun,
+    can_run_optimizer,
+    recommendations_to_frame,
+    run_margin_optimizer,
 )
 from analytics.live_data import (
     TRUCK_STATUS_COLOURS,
@@ -39,6 +48,7 @@ from analytics.live_data import (
 from corkysoft.quote_service import (
     COUNTRY_DEFAULT,
     DEFAULT_MODIFIERS,
+    build_summary,
     QuoteInput,
     QuoteResult,
     calculate_quote,
@@ -46,6 +56,7 @@ from corkysoft.quote_service import (
     format_currency,
     persist_quote,
 )
+from corkysoft.schema import ensure_schema as ensure_core_schema
 
 # -----------------------------------------------------------------------------
 # Compatibility shim for metro-distance filtering across branches/modules
@@ -113,6 +124,21 @@ st.title("Price distribution (Airbnb-style)")
 st.caption(
     "Visualise $ per m³ by corridor and client, with break-even bands to spot loss-leaders."
 )
+
+
+def _blank_column_mapping() -> ColumnMapping:
+    return ColumnMapping(
+        date=None,
+        client=None,
+        price=None,
+        revenue=None,
+        volume=None,
+        origin=None,
+        destination=None,
+        corridor=None,
+        distance=None,
+        final_cost=None,
+    )
 
 
 def _prepare_plotly_map_data(
@@ -312,7 +338,7 @@ def build_route_map(
                 lat_values.extend([row["origin_lat"], row["dest_lat"], None])
                 lon_values.extend([row["origin_lon"], row["dest_lon"], None])
             figure.add_trace(
-                go.Scattermapbox(
+                go.Scattermap(
                     lat=lat_values,
                     lon=lon_values,
                     mode="lines",
@@ -358,7 +384,7 @@ def build_route_map(
                 )
 
             figure.add_trace(
-                go.Scattermapbox(
+                go.Scattermap(
                     lat=marker_lat,
                     lon=marker_lon,
                     mode="markers",
@@ -407,6 +433,8 @@ def render_network_map(
     historical_routes: pd.DataFrame,
     trucks: pd.DataFrame,
     active_routes: pd.DataFrame,
+    *,
+    toggle_key: str = "network_map_live_overlay_toggle",
 ) -> None:
     st.markdown("### Live network overview")
 
@@ -417,6 +445,7 @@ def render_network_map(
             "Toggle the live overlay of active routes and truck telemetry without "
             "hiding the base map."
         ),
+        key=toggle_key,
     )
 
     if historical_routes.empty and trucks.empty and active_routes.empty:
@@ -459,7 +488,9 @@ def render_network_map(
     if show_live_overlay and not active_routes.empty:
         if "job_id" in active_routes.columns and not historical_routes.empty:
             enriched = active_routes.merge(
-                historical_routes[["id", "colour", "profit_band", "tooltip"]],
+                historical_routes[
+                    ["id", "colour", "profit_band", "profitability_status", "tooltip"]
+                ],
                 left_on="job_id",
                 right_on="id",
                 how="left",
@@ -469,19 +500,30 @@ def render_network_map(
                 enriched["colour"] = enriched["colour_hist"]
             if "profit_band" not in enriched.columns and "profit_band_hist" in enriched.columns:
                 enriched["profit_band"] = enriched["profit_band_hist"]
+            if (
+                "profitability_status" not in enriched.columns
+                and "profitability_status_hist" in enriched.columns
+            ):
+                enriched["profitability_status"] = enriched["profitability_status_hist"]
             if "tooltip" not in enriched.columns and "tooltip_hist" in enriched.columns:
                 enriched["tooltip"] = enriched["tooltip_hist"]
         else:
             enriched = active_routes.copy()
             enriched["colour"] = [PROFITABILITY_COLOURS["Unknown"]] * len(enriched)
             enriched["profit_band"] = "Unknown"
+            enriched["profitability_status"] = "Unknown"
             enriched["tooltip"] = "Active route"
 
         enriched["colour"] = enriched["colour"].apply(
             lambda value: value if isinstance(value, (list, tuple)) else [255, 255, 255]
         )
         enriched["tooltip"] = enriched.apply(
-            lambda row: f"Truck {row['truck_id']} ({row.get('profit_band', 'Unknown')})", axis=1
+            lambda row: "Truck {} ({})".format(
+                row["truck_id"],
+                row.get("profitability_status")
+                or row.get("profit_band", "Unknown"),
+            ),
+            axis=1,
         )
 
         active_layer = pdk.Layer(
@@ -667,30 +709,67 @@ with connection_scope() as conn:
     break_even_value = ensure_break_even_parameter(conn)
     ensure_quote_schema(conn)
 
+    df_all: pd.DataFrame = pd.DataFrame()
+    mapping: ColumnMapping = _blank_column_mapping()
+    dataset_loader = load_historical_jobs
+    dataset_key = "historical"
+    dataset_label = "Historical quotes"
+    dataset_error: Optional[str] = None
+    empty_dataset_message: Optional[str] = None
+
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    selected_corridor: Optional[str] = None
+    selected_clients: List[str] = []
+    postcode_prefix: Optional[str] = None
+
     with st.sidebar:
         st.header("Filters")
-        try:
-            df_all, mapping = load_historical_jobs(conn)
-        except RuntimeError as exc:
-            st.error(str(exc))
-            st.stop()
-
-        if df_all.empty:
-            st.info(
-                "historical_jobs table has no rows yet. Import historical jobs to populate the view."
+        if st.button(
+            "Initialise database tables",
+            help=(
+                "Create empty historical and live job tables so the dashboard can run "
+                "before data imports."
+            ),
+        ):
+            ensure_core_schema(conn)
+            ensure_dashboard_tables(conn)
+            ensure_quote_schema(conn)
+            st.success(
+                "Database tables initialised. Import data or start building quotes below."
             )
-            st.stop()
 
+        dataset_options = {
+            "Historical quotes": ("historical", load_historical_jobs),
+            "Live jobs": ("live", load_live_jobs),
+        }
+        dataset_label = st.radio(
+            "Dataset",
+            options=list(dataset_options.keys()),
+            format_func=lambda label: label,
+        )
+        dataset_key, dataset_loader = dataset_options[dataset_label]
+
+        try:
+            df_all, mapping = dataset_loader(conn)
+        except RuntimeError as exc:
+            dataset_error = str(exc)
+        except Exception as exc:
+            dataset_error = f"Failed to load {dataset_label.lower()} data: {exc}"
+
+        data_available = dataset_error is None and not df_all.empty
+
+        today_value = date.today()
         date_column = "job_date" if "job_date" in df_all.columns else mapping.date
-        if date_column and date_column in df_all.columns:
+        if data_available and date_column and date_column in df_all.columns:
             df_all[date_column] = pd.to_datetime(df_all[date_column], errors="coerce")
             min_date = df_all[date_column].min()
             max_date = df_all[date_column].max()
             default_start = (
-                min_date.date() if isinstance(min_date, pd.Timestamp) else date.today()
+                min_date.date() if isinstance(min_date, pd.Timestamp) else today_value
             )
             default_end = (
-                max_date.date() if isinstance(max_date, pd.Timestamp) else date.today()
+                max_date.date() if isinstance(max_date, pd.Timestamp) else today_value
             )
             date_range = st.date_input(
                 "Date range",
@@ -704,29 +783,63 @@ with connection_scope() as conn:
                 start_date = default_start
                 end_date = default_end
         else:
-            start_date = end_date = None
+            st.date_input(
+                "Date range",
+                value=(today_value, today_value),
+                disabled=True,
+            )
+            start_date = None
+            end_date = None
 
-        corridor_options = sorted(df_all["corridor_display"].dropna().unique())
-        selected_corridor: Optional[str] = st.selectbox(
+        corridor_options: List[str] = []
+        if data_available:
+            corridor_series = df_all.get("corridor_display")
+            if corridor_series is not None:
+                corridor_options = sorted(
+                    pd.Series(corridor_series).dropna().astype(str).unique().tolist()
+                )
+        corridor_selection = st.selectbox(
             "Corridor",
             options=["All corridors"] + corridor_options,
             index=0,
+            disabled=not data_available,
         )
-        if selected_corridor == "All corridors":
-            selected_corridor = None
+        selected_corridor = None if corridor_selection == "All corridors" else corridor_selection
 
-        client_options = sorted(df_all["client_display"].dropna().unique())
-        default_clients = client_options if client_options else []
+        client_options: List[str] = []
+        if data_available:
+            client_series = df_all.get("client_display")
+            if client_series is not None:
+                client_options = sorted(
+                    pd.Series(client_series).dropna().astype(str).unique().tolist()
+                )
         selected_clients = st.multiselect(
             "Client",
             options=client_options,
-            default=default_clients,
+            default=client_options if client_options else [],
+            disabled=not data_available,
         )
 
         postcode_prefix = st.text_input(
             "Corridor contains postcode prefix",
+            value=postcode_prefix or "",
+            disabled=not data_available,
             help="Match origin or destination postcode prefixes (e.g. 40 to match 4000-4099).",
-        )
+        ) or None
+
+        if dataset_error:
+            st.error(dataset_error)
+        elif not data_available:
+            empty_messages = {
+                "historical": (
+                    "historical_jobs table has no rows yet. Import historical jobs to populate the view."
+                ),
+                "live": "jobs table has no rows yet. Add live jobs to populate the view.",
+            }
+            empty_dataset_message = empty_messages.get(
+                dataset_key, "No rows available for the selected dataset."
+            )
+            st.info(empty_dataset_message)
 
         st.subheader("Break-even model")
         new_break_even = st.number_input(
@@ -741,51 +854,77 @@ with connection_scope() as conn:
             st.success(f"Break-even updated to ${new_break_even:,.2f}")
             break_even_value = new_break_even
 
-    filtered_df, filtered_mapping = load_historical_jobs(
-        conn,
-        start_date=start_date,
-        end_date=end_date,
-        clients=selected_clients or None,
-        corridor=selected_corridor,
-        postcode_prefix=postcode_prefix,
-    )
+    data_available = dataset_error is None and not df_all.empty
 
-    if filtered_df.empty:
-        st.warning("No jobs match the selected filters.")
-        st.stop()
+    filtered_df = pd.DataFrame()
+    filtered_mapping = mapping
+    has_filtered_data = False
+    if data_available:
+        try:
+            filtered_df, filtered_mapping = dataset_loader(
+                conn,
+                start_date=start_date,
+                end_date=end_date,
+                clients=selected_clients or None,
+                corridor=selected_corridor,
+                postcode_prefix=postcode_prefix,
+            )
+            has_filtered_data = not filtered_df.empty
+        except RuntimeError as exc:
+            dataset_error = str(exc)
+        except Exception as exc:
+            dataset_error = f"Failed to apply filters: {exc}"
 
-    summary = summarise_distribution(filtered_df, break_even_value)
-    profitability_summary = summarise_profitability(filtered_df)
+    if dataset_error:
+        st.error(dataset_error)
+    elif not data_available:
+        st.info(
+            empty_dataset_message
+            or "No rows available for the selected dataset. Use the initialise button to create empty tables."
+        )
+    elif not has_filtered_data:
+        st.warning("No jobs match the selected filters. Quote builder remains available below.")
 
+    summary: Optional[DistributionSummary] = None
+    profitability_summary: Optional[ProfitabilitySummary] = None
+    metro_summary: Optional[DistributionSummary] = None
+    metro_profitability: Optional[ProfitabilitySummary] = None
     metro_distance_km = 100.0
-    metro_df = _filter_by_distance(filtered_df, metro_only=True, max_distance_km=metro_distance_km)
-    metro_summary = (
-        summarise_distribution(metro_df, break_even_value)
-        if not metro_df.empty
-        else None
-    )
-    metro_profitability = (
-        summarise_profitability(metro_df) if not metro_df.empty else None
-    )
+    if has_filtered_data:
+        summary = summarise_distribution(filtered_df, break_even_value)
+        profitability_summary = summarise_profitability(filtered_df)
 
-    render_summary(
-        summary,
-        break_even_value,
-        profitability_summary,
-        metro_summary=metro_summary,
-        metro_profitability=metro_profitability,
-        metro_distance_km=metro_distance_km,
-    )
+        metro_df = _filter_by_distance(
+            filtered_df, metro_only=True, max_distance_km=metro_distance_km
+        )
+        if not metro_df.empty:
+            metro_summary = summarise_distribution(metro_df, break_even_value)
+            metro_profitability = summarise_profitability(metro_df)
+
+        render_summary(
+            summary,
+            break_even_value,
+            profitability_summary,
+            metro_summary=metro_summary,
+            metro_profitability=metro_profitability,
+            metro_distance_km=metro_distance_km,
+        )
 
     truck_positions = load_truck_positions(conn)
     active_routes = load_active_routes(conn)
     map_routes = prepare_profitability_route_data(filtered_df, break_even_value)
 
-    render_network_map(map_routes, truck_positions, active_routes)
+    render_network_map(
+        map_routes,
+        truck_positions,
+        active_routes,
+        toggle_key="network_map_live_overlay_toggle_overview",
+    )
 
     st.button(
         "Open quote builder",
         on_click=_activate_quote_tab,
+        disabled=not has_filtered_data,
         help="Jump to the quote builder tab to build a quick quote from a historical route.",
     )
 
@@ -794,6 +933,7 @@ with connection_scope() as conn:
         "Profitability insights",
         "Route maps",
         "Quote builder",
+        "Optimizer",
     ]
     params = _get_query_params()
     requested_tab = params.get("view", [tab_labels[0]])[0]
@@ -813,62 +953,72 @@ with connection_scope() as conn:
     }
 
     with tab_map["Histogram"]:
-        histogram = create_histogram(filtered_df, break_even_value)
-        st.plotly_chart(histogram, use_container_width=True)
-        st.caption(
-            "Histogram overlays include the normal distribution fit plus kurtosis and dispersion markers for context."
-        )
+        if has_filtered_data:
+            histogram = create_histogram(filtered_df, break_even_value)
+            st.plotly_chart(histogram, use_container_width=True)
+            st.caption(
+                "Histogram overlays include the normal distribution fit plus kurtosis and dispersion markers for context."
+            )
+        elif dataset_error:
+            st.error("Unable to load jobs — initialise the database and retry.")
+        else:
+            st.info("Import historical jobs to plot the price distribution histogram.")
 
     with tab_map["Profitability insights"]:
-        st.markdown("### Profitability insights")
-        view_options = {
-            "m³ vs km profitability": create_m3_vs_km_figure,
-            "Quoted vs calculated $/m³": create_m3_margin_figure,
-            "Metro profitability spotlight": lambda data: create_metro_profitability_figure(
-                data, max_distance_km=metro_distance_km
-            ),
-        }
-        selected_view = st.radio(
-            "Choose a view",
-            list(view_options.keys()),
-            horizontal=True,
-            help="Switch between per-kilometre earnings and quoted-versus-cost comparisons.",
-            key="profitability_view",
-        )
-        fig = view_options[selected_view](filtered_df)
-        st.plotly_chart(fig, use_container_width=True)
-
-        if selected_view == "Metro profitability spotlight":
-            st.caption(
-                "Metro view highlights close-in routes with margin and cost sensitivity overlays."
+        if has_filtered_data:
+            st.markdown("### Profitability insights")
+            view_options = {
+                "m³ vs km profitability": create_m3_vs_km_figure,
+                "Quoted vs calculated $/m³": create_m3_margin_figure,
+                "Metro profitability spotlight": lambda data: create_metro_profitability_figure(
+                    data, max_distance_km=metro_distance_km
+                ),
+            }
+            selected_view = st.radio(
+                "Choose a view",
+                list(view_options.keys()),
+                horizontal=True,
+                help="Switch between per-kilometre earnings and quoted-versus-cost comparisons.",
+                key="profitability_view",
             )
+            fig = view_options[selected_view](filtered_df)
+            st.plotly_chart(fig, use_container_width=True)
 
-        if "margin_per_m3" in filtered_df.columns:
-            st.markdown("#### Margin outliers")
-            ranked = (
-                filtered_df.dropna(subset=["margin_per_m3"]).sort_values("margin_per_m3")
-            )
-            if not ranked.empty:
-                low_cols, high_cols = st.columns(2)
-                display_fields = [
-                    col
-                    for col in [
-                        "job_date",
-                        "client_display",
-                        "corridor_display",
-                        "price_per_m3",
-                        "final_cost_per_m3",
-            "margin_per_m3",
-                        "margin_per_m3_pct",
+            if selected_view == "Metro profitability spotlight":
+                st.caption(
+                    "Metro view highlights close-in routes with margin and cost sensitivity overlays."
+                )
+
+            if "margin_per_m3" in filtered_df.columns:
+                st.markdown("#### Margin outliers")
+                ranked = (
+                    filtered_df.dropna(subset=["margin_per_m3"]).sort_values("margin_per_m3")
+                )
+                if not ranked.empty:
+                    low_cols, high_cols = st.columns(2)
+                    display_fields = [
+                        col
+                        for col in [
+                            "job_date",
+                            "client_display",
+                            "corridor_display",
+                            "price_per_m3",
+                            "final_cost_per_m3",
+                            "margin_per_m3",
+                            "margin_per_m3_pct",
+                        ]
+                        if col in ranked.columns
                     ]
-                    if col in ranked.columns
-                ]
-                low_cols.write("Lowest margin jobs")
-                low_cols.dataframe(ranked.head(5)[display_fields])
-                high_cols.write("Highest margin jobs")
-                high_cols.dataframe(ranked.tail(5).iloc[::-1][display_fields])
-            else:
-                st.info("No margin data available to highlight outliers yet.")
+                    low_cols.write("Lowest margin jobs")
+                    low_cols.dataframe(ranked.head(5)[display_fields])
+                    high_cols.write("Highest margin jobs")
+                    high_cols.dataframe(ranked.tail(5).iloc[::-1][display_fields])
+                else:
+                    st.info("No margin data available to highlight outliers yet.")
+        elif dataset_error:
+            st.error("Unable to calculate profitability without job data.")
+        else:
+            st.info("Import jobs with price and cost data to unlock profitability insights.")
 
     truck_positions = load_truck_positions(conn)
     active_routes = load_active_routes(conn)
@@ -1019,7 +1169,12 @@ with connection_scope() as conn:
                     st.plotly_chart(heatmap_fig, use_container_width=True)
 
         network_routes = prepare_profitability_map_data(scoped_df, break_even_value)
-        render_network_map(network_routes, truck_positions, active_routes)
+        render_network_map(
+            network_routes,
+            truck_positions,
+            active_routes,
+            toggle_key="network_map_live_overlay_toggle_tab",
+        )
 
     with tab_map["Quote builder"]:
         st.markdown("### Quote builder")
@@ -1270,6 +1425,10 @@ with connection_scope() as conn:
                 else:
                     st.session_state["quote_inputs"] = quote_inputs
                     st.session_state["quote_result"] = result
+                    st.session_state["quote_manual_override_enabled"] = False
+                    st.session_state["quote_manual_override_amount"] = float(
+                        result.final_quote
+                    )
                     _set_query_params(view="Quote builder")
                     st.success("Quote calculated. Review the breakdown below.")
                     stored_inputs = quote_inputs
@@ -1280,6 +1439,32 @@ with connection_scope() as conn:
 
         if quote_result and stored_inputs:
             st.markdown("#### Quote output")
+            manual_enabled_key = "quote_manual_override_enabled"
+            manual_amount_key = "quote_manual_override_amount"
+            if manual_enabled_key not in st.session_state:
+                st.session_state[manual_enabled_key] = (
+                    quote_result.manual_quote is not None
+                )
+            if manual_amount_key not in st.session_state:
+                st.session_state[manual_amount_key] = float(
+                    quote_result.manual_quote
+                    if quote_result.manual_quote is not None
+                    else quote_result.final_quote
+                )
+            manual_override_enabled = bool(
+                st.session_state.get(manual_enabled_key, False)
+            )
+            manual_override_amount = float(
+                st.session_state.get(
+                    manual_amount_key, quote_result.final_quote
+                )
+            )
+            if manual_override_enabled:
+                quote_result.manual_quote = manual_override_amount
+            else:
+                quote_result.manual_quote = None
+            quote_result.summary_text = build_summary(stored_inputs, quote_result)
+            st.session_state["quote_result"] = quote_result
             st.write(
                 f"**Route:** {quote_result.origin_resolved} → {quote_result.destination_resolved}"
             )
@@ -1424,20 +1609,188 @@ with connection_scope() as conn:
             with st.expander("Copyable summary"):
                 st.code(quote_result.summary_text)
 
+            st.markdown("#### Submit quote")
+            st.caption(
+                "Optionally override the calculated quote amount before saving."
+            )
+            manual_override_enabled = st.checkbox(
+                "Apply manual quote override",
+                help=(
+                    "Enable to store a different quote amount alongside the calculated value."
+                ),
+                key=manual_enabled_key,
+            )
+            manual_override_amount = st.number_input(
+                "Manual quote amount",
+                min_value=0.0,
+                step=50.0,
+                format="%.2f",
+                key=manual_amount_key,
+                disabled=not manual_override_enabled,
+                help=(
+                    "Enter the agreed quote to store in addition to the calculated amount."
+                ),
+            )
             action_cols = st.columns(2)
-            if action_cols[0].button("Persist quote", type="primary"):
-                try:
-                    persist_quote(conn, stored_inputs, quote_result)
-                    rowid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-                except Exception as exc:  # pragma: no cover - UI feedback path
-                    st.error(f"Failed to persist quote: {exc}")
+            if action_cols[0].button("Submit quote", type="primary"):
+                manual_to_store: Optional[float]
+                if manual_override_enabled:
+                    manual_to_store = float(manual_override_amount)
+                    if not math.isfinite(manual_to_store) or manual_to_store <= 0:
+                        st.error("Manual quote must be a positive number.")
+                        manual_to_store = None
+                    else:
+                        quote_result.manual_quote = manual_to_store
                 else:
-                    st.success(f"Quote saved as record #{rowid}.")
+                    manual_to_store = None
+                    quote_result.manual_quote = None
+                quote_result.summary_text = build_summary(stored_inputs, quote_result)
+                st.session_state["quote_result"] = quote_result
+                if manual_override_enabled and manual_to_store is None:
+                    pass
+                else:
+                    try:
+                        persist_quote(
+                            conn,
+                            stored_inputs,
+                            quote_result,
+                            manual_quote=manual_to_store,
+                        )
+                        rowid = conn.execute(
+                            "SELECT last_insert_rowid()"
+                        ).fetchone()[0]
+                    except Exception as exc:  # pragma: no cover - UI feedback path
+                        st.error(f"Failed to persist quote: {exc}")
+                    else:
+                        st.success(f"Quote saved as record #{rowid}.")
             if action_cols[1].button("Reset quote builder"):
                 st.session_state.pop("quote_result", None)
                 st.session_state.pop("quote_inputs", None)
+                st.session_state.pop("quote_manual_override_enabled", None)
+                st.session_state.pop("quote_manual_override_amount", None)
                 _set_query_params(view="Quote builder")
                 _rerun_app()
+
+    with tab_map["Optimizer"]:
+        st.markdown("### Margin optimizer")
+        st.caption(
+            "Generate corridor-level price uplift suggestions using the filtered job set."
+        )
+
+        optimizer_state: Dict[str, Any] = st.session_state.setdefault(
+            "optimizer_state", {}
+        )
+
+        if not can_run_optimizer(filtered_df):
+            st.info(
+                "Optimizer requires price and cost per m³ columns. Import jobs with "
+                "$ / m³ and cost data to enable recommendations."
+            )
+        else:
+            defaults = optimizer_state.get(
+                "defaults",
+                {
+                    "target_margin": 120.0,
+                    "max_uplift": 25.0,
+                    "min_job_count": 3,
+                },
+            )
+            with st.form("optimizer_form"):
+                target_margin = st.number_input(
+                    "Target margin per m³",
+                    min_value=0.0,
+                    value=float(defaults.get("target_margin", 120.0)),
+                    step=5.0,
+                    help="Desired margin buffer applied to each corridor's historical median.",
+                )
+                max_uplift_pct = st.slider(
+                    "Cap uplift %",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(defaults.get("max_uplift", 25.0)),
+                    help="Limit how far the optimizer can move prices above the historical median.",
+                )
+                min_job_count = st.slider(
+                    "Minimum jobs per corridor",
+                    min_value=1,
+                    max_value=10,
+                    value=int(defaults.get("min_job_count", 3)),
+                    help="Require a minimum number of jobs before trusting a recommendation.",
+                )
+                submitted = st.form_submit_button(
+                    "Run optimizer", help="Recalculate uplifts for the current filters."
+                )
+
+            if submitted:
+                params = OptimizerParameters(
+                    target_margin_per_m3=target_margin,
+                    max_uplift_pct=max_uplift_pct,
+                    min_job_count=min_job_count,
+                )
+                run = run_margin_optimizer(filtered_df, params)
+                optimizer_state["last_run"] = run
+                optimizer_state["defaults"] = {
+                    "target_margin": target_margin,
+                    "max_uplift": max_uplift_pct,
+                    "min_job_count": min_job_count,
+                }
+                st.session_state["optimizer_state"] = optimizer_state
+                if run.recommendations:
+                    st.success("Optimizer complete — review the suggested uplifts below.")
+                else:
+                    st.warning(
+                        "Optimizer finished but no corridors met the criteria. Try lowering the minimum job count."
+                    )
+
+            last_run: Optional[OptimizerRun] = optimizer_state.get("last_run")
+            if last_run:
+                run_time = last_run.executed_at.strftime("%Y-%m-%d %H:%M UTC")
+                st.caption(
+                    f"Last run: {run_time} · Target margin ${last_run.parameters.target_margin_per_m3:,.0f}/m³ · "
+                    f"Max uplift {last_run.parameters.max_uplift_pct:.0f}%"
+                )
+                recommendations_df = recommendations_to_frame(last_run.recommendations)
+                if recommendations_df.empty:
+                    st.info(
+                        "No eligible corridors were found — adjust parameters or widen the dashboard filters."
+                    )
+                else:
+                    metric_cols = st.columns(3)
+                    metric_cols[0].metric(
+                        "Corridors analysed", len(recommendations_df)
+                    )
+                    metric_cols[1].metric(
+                        "Median uplift $/m³",
+                        f"${recommendations_df['Uplift $/m³'].median():,.2f}",
+                    )
+                    metric_cols[2].metric(
+                        "Highest uplift %",
+                        f"{recommendations_df['Uplift %'].max():.1f}%",
+                    )
+
+                    chart = px.bar(
+                        recommendations_df,
+                        x="Corridor",
+                        y="Uplift $/m³",
+                        hover_data=["Recommended $/m³", "Uplift %", "Notes"],
+                        title="Recommended uplift by corridor",
+                    )
+                    chart.update_layout(margin={"l": 0, "r": 0, "t": 40, "b": 0})
+                    st.plotly_chart(chart, use_container_width=True)
+
+                    st.dataframe(recommendations_df, use_container_width=True)
+
+                    csv_data = recommendations_df.to_csv(index=False)
+                    st.download_button(
+                        "Download optimizer report",
+                        csv_data,
+                        file_name="optimizer_recommendations.csv",
+                        mime="text/csv",
+                    )
+
+        st.info(
+            "Optimizer works on the same filters applied across the dashboard, making it safe for non-technical teams to explore 'what if' pricing scenarios."
+        )
 
     st.subheader("Filtered jobs")
     display_columns = [

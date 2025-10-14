@@ -80,3 +80,37 @@ def test_geocode_with_normalization_normalises_string_parameters() -> None:
     first_call = fake_client.calls[0]
     assert first_call["layers"] == ["address", "street", "locality"]
     assert first_call["sources"] == ["osm", "wof"]
+
+
+def test_geocode_prefers_feature_matching_input_tokens() -> None:
+    fake_client = FakePeliasClient(
+        {
+            "Alice Springs, Australia": {
+                "features": [
+                    {
+                        "geometry": {"coordinates": [146.66, -19.29]},
+                        "properties": {
+                            "label": "Alice River, QLD, Australia",
+                            "name": "Alice River",
+                            "locality": "Alice River",
+                        },
+                    },
+                    {
+                        "geometry": {"coordinates": [133.88, -23.7]},
+                        "properties": {
+                            "label": "Alice Springs NT, Australia",
+                            "name": "Alice Springs",
+                            "locality": "Alice Springs",
+                            "region": "Northern Territory",
+                        },
+                    },
+                ]
+            }
+        }
+    )
+
+    result = geocode_with_normalization(fake_client, "Alice Springs", "Australia")
+
+    assert result.label == "Alice Springs NT, Australia"
+    assert abs(result.lon - 133.88) < 1e-6
+    assert abs(result.lat - (-23.7)) < 1e-6
