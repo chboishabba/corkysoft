@@ -97,6 +97,43 @@ def _quote_result() -> QuoteResult:
     )
 
 
+def test_build_summary_includes_corrections() -> None:
+    inputs = _quote_input()
+    inputs.client_details = ClientDetails(company_name="JBWEB")
+
+    result = _quote_result()
+    result.origin_candidates = [
+        "50 Tucker Street Chapel Hill",
+        "50 Tucker Street Chapel Hill",
+    ]
+    result.origin_suggestions = [
+        "50 Tucker Street, Chapel Hill, QLD, Australia",
+        "50 Tucker Street",
+        "Tucker Street",
+    ]
+    result.destination_candidates = [
+        "12 Carlton Street Toowoomba*** (should be the correct destination)",
+    ]
+    result.destination_suggestions = [
+        "Toowoomba, QLD, Australia",
+        "Toowoomba",
+        "Queensland",
+    ]
+    result.origin_ambiguities = {"Street": ["St", "Street"]}
+
+    summary = build_summary(inputs, result)
+
+    assert summary.startswith("Quote output")
+    assert "Client: JBWEB" in summary
+    assert "Origin corrections & suggestions" in summary
+    assert "50 Tucker Street Chapel Hill" in summary
+    assert "Autocorrected place names from geocoding:" in summary
+    assert "Destination corrections & suggestions" in summary
+    assert "12 Carlton Street Toowoomba***" in summary
+    assert "Toowoomba, QLD, Australia" in summary
+    assert "Ambiguous tokens detected:" in summary
+
+
 def test_choose_pricing_model_progression() -> None:
     assert choose_pricing_model(50.0) == PRICING_MODELS[0]
     assert choose_pricing_model(200.0) == PRICING_MODELS[1]
