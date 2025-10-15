@@ -243,6 +243,10 @@ def _pick_candidate_routes(conn: sqlite3.Connection) -> list[dict[str, float]]:
                 except (TypeError, ValueError):
                     candidate["distance_km"] = None
             candidates.append(candidate)
+
+        with_geometry = [candidate for candidate in candidates if candidate.get("route_geometry")]
+        if with_geometry:
+            return with_geometry
         return candidates
 
     # Fall back to depot zones so the mock telemetry still functions when
