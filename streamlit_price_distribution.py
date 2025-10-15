@@ -2440,9 +2440,12 @@ with connection_scope() as conn:
             destination_value = st.text_input(
                 "Destination", value=default_destination
             )
+            if _QUOTE_COUNTRY_STATE_KEY not in st.session_state:
+                st.session_state[_QUOTE_COUNTRY_STATE_KEY] = (
+                    default_country or COUNTRY_DEFAULT
+                )
             country_value = st.text_input(
                 "Country",
-                value=default_country or COUNTRY_DEFAULT,
                 key=_QUOTE_COUNTRY_STATE_KEY,
             )
             cubic_m_value = st.number_input(
