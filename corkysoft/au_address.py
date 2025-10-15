@@ -8,6 +8,25 @@ from typing import Iterable, List, Optional, Sequence
 
 
 STATE_CODES = {"ACT", "NSW", "NT", "QLD", "SA", "TAS", "VIC", "WA"}
+STATE_NAME_TO_CODE = {
+    "australian capital territory": "ACT",
+    "act": "ACT",
+    "new south wales": "NSW",
+    "south wales": "NSW",
+    "nsw": "NSW",
+    "northern territory": "NT",
+    "nt": "NT",
+    "queensland": "QLD",
+    "qld": "QLD",
+    "south australia": "SA",
+    "sa": "SA",
+    "tasmania": "TAS",
+    "tas": "TAS",
+    "victoria": "VIC",
+    "vic": "VIC",
+    "western australia": "WA",
+    "wa": "WA",
+}
 DEFAULT_STATE = "QLD"
 
 UNAMBIGUOUS_ABBREVIATIONS = {
@@ -257,6 +276,11 @@ class GeocodeResult:
     search_candidates: List[str] = field(default_factory=list)
     suggestions: List[str] = field(default_factory=list)
     query_used: Optional[str] = None
+    postalcode: Optional[str] = None
+    region: Optional[str] = None
+    region_code: Optional[str] = None
+    locality: Optional[str] = None
+    county: Optional[str] = None
 
     def __iter__(self):
         """Allow tuple unpacking compatibility (lon, lat, label)."""
@@ -355,11 +379,38 @@ def geocode_with_normalization(
     feat = _choose_best_feature(features, normalization, cleaned_input, place)
     lon, lat = feat["geometry"]["coordinates"]
     props = feat.get("properties") or {}
+
+    def _clean_component(raw: object) -> Optional[str]:
+        if raw is None:
+            return None
+        cleaned = str(raw).strip()
+        return cleaned or None
+
     label = (
         props.get("label")
         or props.get("name")
         or (normalization.canonical if normalization else cleaned_input)
     )
+
+    postalcode = _clean_component(props.get("postalcode"))
+    locality = _clean_component(props.get("locality"))
+    county = _clean_component(props.get("county"))
+    region = _clean_component(props.get("region"))
+    region_code = _clean_component(
+        props.get("region_a")
+        or props.get("macroregion_a")
+        or props.get("state_a")
+    )
+    if region_code and "-" in region_code:
+        region_code = region_code.split("-")[-1]
+    if region_code:
+        region_code = region_code.upper()
+    if not region_code:
+        fallback_code = _clean_component(props.get("county_a"))
+        if fallback_code and "-" in fallback_code:
+            fallback_code = fallback_code.split("-")[-1]
+        if fallback_code:
+            region_code = fallback_code.upper()
 
     suggestions = _collect_autocorrect_suggestions(features)
     if normalization is not None:
@@ -373,5 +424,10 @@ def geocode_with_normalization(
         search_candidates=list(dict.fromkeys(candidates)),
         suggestions=suggestions,
         query_used=chosen_query,
+        postalcode=postalcode,
+        region=region,
+        region_code=region_code,
+        locality=locality,
+        county=county,
     )
 

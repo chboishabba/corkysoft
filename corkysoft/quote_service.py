@@ -85,6 +85,10 @@ class QuoteResult:
     origin_lat: float
     dest_lon: float
     dest_lat: float
+    origin_postcode_hint: Optional[str] = None
+    destination_postcode_hint: Optional[str] = None
+    origin_state_hint: Optional[str] = None
+    destination_state_hint: Optional[str] = None
     summary_text: str = ""
     origin_candidates: List[str] = field(default_factory=list)
     destination_candidates: List[str] = field(default_factory=list)
@@ -244,6 +248,18 @@ def calculate_quote(
         origin_lat=float(origin_geo.lat),
         dest_lon=float(dest_geo.lon),
         dest_lat=float(dest_geo.lat),
+        origin_postcode_hint=getattr(origin_geo, "postalcode", None),
+        destination_postcode_hint=getattr(dest_geo, "postalcode", None),
+        origin_state_hint=(
+            getattr(origin_geo, "region_code", None)
+            or getattr(origin_geo, "region", None)
+            or getattr(origin_geo, "county", None)
+        ),
+        destination_state_hint=(
+            getattr(dest_geo, "region_code", None)
+            or getattr(dest_geo, "region", None)
+            or getattr(dest_geo, "county", None)
+        ),
         origin_candidates=list(origin_candidates or []),
         destination_candidates=list(destination_candidates or []),
         origin_suggestions=list(origin_suggestions or []),

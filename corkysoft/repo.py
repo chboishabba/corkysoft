@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
+from corkysoft.au_address import STATE_NAME_TO_CODE
 from corkysoft.routing import normalize_place
 
 if TYPE_CHECKING:  # pragma: no cover - import for type checkers only
@@ -21,6 +22,11 @@ CREATE TABLE IF NOT EXISTS geocode_cache (
   place TEXT PRIMARY KEY,
   lon REAL NOT NULL,
   lat REAL NOT NULL,
+  postalcode TEXT,
+  region_code TEXT,
+  region TEXT,
+  locality TEXT,
+  county TEXT,
   ts  TEXT NOT NULL
 );
 
@@ -218,6 +224,11 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     """Ensure the quote tables exist in *conn*."""
 
     conn.executescript(SCHEMA_SQL)
+    _ensure_column(conn, "geocode_cache", "postalcode", "TEXT")
+    _ensure_column(conn, "geocode_cache", "region_code", "TEXT")
+    _ensure_column(conn, "geocode_cache", "region", "TEXT")
+    _ensure_column(conn, "geocode_cache", "locality", "TEXT")
+    _ensure_column(conn, "geocode_cache", "county", "TEXT")
     columns = {
         row[1]
         for row in conn.execute("PRAGMA table_info(quotes)")
@@ -245,9 +256,15 @@ def _extract_state(*values: Optional[str]) -> Optional[str]:
     for value in values:
         if not value:
             continue
-        match = STATE_RE.search(value)
+        text = str(value)
+        match = STATE_RE.search(text)
         if match:
             return match.group(1).upper()
+        lowered = f" {text.strip().lower()} "
+        for name, code in STATE_NAME_TO_CODE.items():
+            target = f" {name} "
+            if target in lowered:
+                return code
     return None
 
 
@@ -696,12 +713,14 @@ def persist_quote(
     )
 
     origin_postcode = _extract_postcode(
+        result.origin_postcode_hint,
         result.origin_resolved,
         inputs.origin,
         *(result.origin_candidates or []),
         *(result.origin_suggestions or []),
     )
     destination_postcode = _extract_postcode(
+        result.destination_postcode_hint,
         result.destination_resolved,
         inputs.destination,
         *(result.destination_candidates or []),
@@ -709,12 +728,14 @@ def persist_quote(
     )
 
     origin_state = _extract_state(
+        result.origin_state_hint,
         result.origin_resolved,
         inputs.origin,
         *(result.origin_candidates or []),
         *(result.origin_suggestions or []),
     )
     destination_state = _extract_state(
+        result.destination_state_hint,
         result.destination_resolved,
         inputs.destination,
         *(result.destination_candidates or []),
