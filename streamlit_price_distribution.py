@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import json
 import math
 from datetime import date
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -506,6 +507,58 @@ def build_route_map(
     show_points: bool,
 ) -> go.Figure:
     """Construct a Plotly Mapbox figure showing coloured routes and points."""
+
+    def _row_route_points(row: pd.Series) -> List[Tuple[float, float]]:
+        """Return the ordered ``(lat, lon)`` points for ``row`` when available."""
+
+        geojson_value = row.get("route_geojson")
+        if isinstance(geojson_value, str) and geojson_value.strip():
+            try:
+                return extract_route_path(geojson_value)
+            except Exception:
+                pass
+
+        path_value = row.get("route_path")
+        if isinstance(path_value, str):
+            raw = path_value.strip()
+            if not raw:
+                return []
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = None
+            else:
+                path_value = parsed
+
+        if isinstance(path_value, dict):
+            try:
+                return extract_route_path(json.dumps(path_value))
+            except Exception:
+                return []
+
+        if isinstance(path_value, (list, tuple)):
+            coords: List[Tuple[float, float]] = []
+            for point in path_value:
+                lon: Optional[float]
+                lat: Optional[float]
+                if isinstance(point, dict):
+                    lon = point.get("lon") or point.get("lng") or point.get("longitude")
+                    lat = point.get("lat") or point.get("latitude")
+                elif isinstance(point, (list, tuple)) and len(point) >= 2:
+                    lon, lat = point[0], point[1]
+                else:
+                    continue
+
+                try:
+                    coords.append((float(lat), float(lon)))
+                except (TypeError, ValueError):
+                    continue
+
+            if coords:
+                return coords
+
+        return []
+
     palette = px.colors.qualitative.Bold or [
         "#636EFA",
         "#EF553B",
@@ -532,8 +585,26 @@ def build_route_map(
             lat_values: list[float] = []
             lon_values: list[float] = []
             for _, row in category_df.iterrows():
-                lat_values.extend([row["origin_lat"], row["dest_lat"], None])
-                lon_values.extend([row["origin_lon"], row["dest_lon"], None])
+                route_points = _row_route_points(row)
+                if route_points:
+                    for lat, lon in route_points:
+                        lat_values.append(lat)
+                        lon_values.append(lon)
+                    lat_values.append(None)
+                    lon_values.append(None)
+                    continue
+
+                try:
+                    origin_lat = float(row["origin_lat"])
+                    dest_lat = float(row["dest_lat"])
+                    origin_lon = float(row["origin_lon"])
+                    dest_lon = float(row["dest_lon"])
+                except (TypeError, ValueError):
+                    continue
+
+                lat_values.extend([origin_lat, dest_lat, None])
+                lon_values.extend([origin_lon, dest_lon, None])
+
             figure.add_trace(
                 go.Scattermap(
                     lat=lat_values,
@@ -569,16 +640,33 @@ def build_route_map(
                     or row.get("destination_raw")
                     or "Destination"
                 )
-                marker_lat.append(row["origin_lat"])
-                marker_lon.append(row["origin_lon"])
-                marker_text.append(
-                    f"{colour_label}: {value}<br>Origin: {origin_label}<br>Job ID: {job_id}"
-                )
-                marker_lat.append(row["dest_lat"])
-                marker_lon.append(row["dest_lon"])
-                marker_text.append(
-                    f"{colour_label}: {value}<br>Destination: {destination_label}<br>Job ID: {job_id}"
-                )
+
+                try:
+                    origin_lat = float(row["origin_lat"])
+                    origin_lon = float(row["origin_lon"])
+                except (TypeError, ValueError):
+                    pass
+                else:
+                    marker_lat.append(origin_lat)
+                    marker_lon.append(origin_lon)
+                    marker_text.append(
+                        f"{colour_label}: {value}<br>Origin: {origin_label}<br>Job ID: {job_id}"
+                    )
+
+                try:
+                    dest_lat = float(row["dest_lat"])
+                    dest_lon = float(row["dest_lon"])
+                except (TypeError, ValueError):
+                    pass
+                else:
+                    marker_lat.append(dest_lat)
+                    marker_lon.append(dest_lon)
+                    marker_text.append(
+                        f"{colour_label}: {value}<br>Destination: {destination_label}<br>Job ID: {job_id}"
+                    )
+
+            if not marker_lat or not marker_lon:
+                continue
 
             figure.add_trace(
                 go.Scattermap(
