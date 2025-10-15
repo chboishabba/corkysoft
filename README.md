@@ -101,6 +101,10 @@ client so you can reuse or update the right record without losing context. If yo
 section blank (or enter partial contact info) and the quote will still be saved without forcing a client record to be created.
 client so you can reuse or update the right record without losing context.
 
+### Live Network Overview map
+
+The functional specification for the profitability-focused network map lives in [`docs/live_network_overview.md`](docs/live_network_overview.md). It covers the required SQLite tables, the profitability colour scale, interaction patterns, and the processing pipeline that powers the lane bands and live overlays inside Streamlit.
+
 ### Export profitability summaries
 
 Generate a CSV-ready snapshot of the current profitability filters using the
