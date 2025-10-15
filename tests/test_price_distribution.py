@@ -38,6 +38,7 @@ from analytics.price_distribution import (
     summarise_distribution,
     summarise_profitability,
 )
+from streamlit_price_distribution import build_route_map
 
 
 def build_conn() -> sqlite3.Connection:
@@ -738,6 +739,46 @@ def test_prepare_metric_route_map_data_requires_numeric_values():
     assert len(result) == 1
     assert result.iloc[0]["map_colour_value"] == 2500.0
     assert result.iloc[0]["map_colour_display"] == "$2,500.00"
+
+
+def test_build_route_map_uses_route_path_for_continuous_mode():
+    df = pd.DataFrame(
+        [
+            {
+                "id": 1,
+                "map_colour_value": 75.0,
+                "map_colour_display": "75%",
+                "origin_lat": -37.8136,
+                "origin_lon": 144.9631,
+                "dest_lat": -33.8688,
+                "dest_lon": 151.2093,
+                "route_path": [
+                    {"lat": -37.8136, "lon": 144.9631},
+                    {"lat": -35.5, "lon": 148.0},
+                    {"lat": -33.8688, "lon": 151.2093},
+                ],
+            }
+        ]
+    )
+
+    figure = build_route_map(
+        df,
+        "Margin %",
+        show_routes=True,
+        show_points=False,
+        colour_mode="continuous",
+    )
+
+    line_traces = [trace for trace in figure.data if getattr(trace, "mode", "") == "lines"]
+    assert line_traces, "Expected a line trace for the routed path"
+    route_trace = line_traces[0]
+    lat_values = list(route_trace.lat)
+    lon_values = list(route_trace.lon)
+
+    assert lat_values[3] is None
+    assert lon_values[3] is None
+    assert lat_values[:3] == pytest.approx([-37.8136, -35.5, -33.8688])
+    assert lon_values[:3] == pytest.approx([144.9631, 148.0, 151.2093])
 
 
 def test_import_historical_jobs_from_dataframe_inserts_rows(tmp_path):
