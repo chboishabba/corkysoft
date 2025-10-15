@@ -30,14 +30,15 @@ from .db import (
 
 try:  # pragma: no cover - availability exercised via tests
     from corkysoft.routing import (
-        geocode_cached,
         get_ors_client as _get_ors_client,
+        geocode_cached as _geocode_cached,
     )
 except Exception:  # pragma: no cover - optional dependency
     _get_ors_client = None
     geocode_cached = None  # type: ignore[assignment]
-
-_QUOTE_COUNTRY_DEFAULT = "Australia"
+    _QUOTE_COUNTRY_DEFAULT = "Australia"
+else:
+    geocode_cached = _geocode_cached
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from openrouteservice import Client as ORSClient
