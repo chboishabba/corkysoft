@@ -53,6 +53,7 @@ from analytics.optimizer import (
 )
 from analytics.live_data import (
     TRUCK_STATUS_COLOURS,
+    build_live_heatmap_source,
     load_active_routes,
     load_truck_positions,
 )
@@ -587,18 +588,22 @@ def render_network_map(
 ) -> None:
     st.markdown("### Live network overview")
 
-    show_live_overlay = st.toggle(
-        "Show live network overlay",
-        value=True,
-        help=(
-            "Toggle the live overlay of active routes and truck telemetry without "
-            "hiding the base map."
-        ),
-        key=toggle_key,
+    view_mode = st.radio(
+        "Map view",
+        ("Overlay", "Heatmap"),
+        horizontal=True,
+        key=f"{toggle_key}_view_mode",
+        help="Switch between the layered network overlay and an aggregated density heatmap.",
     )
 
-    if historical_routes.empty and trucks.empty and active_routes.empty:
-        st.info("No geocoded historical jobs or live telemetry available to plot yet.")
+    base_map_layer = pdk.Layer(
+        "TileLayer",
+        data="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        min_zoom=0,
+        max_zoom=19,
+        tile_size=256,
+        attribution="© OpenStreetMap contributors",
+    )
 
     truck_data = trucks.copy()
     if not truck_data.empty:
@@ -610,145 +615,208 @@ def render_network_map(
             lambda row: f"{row['truck_id']} ({row['status']})", axis=1
         )
 
-    base_map_layer = pdk.Layer(
-        "TileLayer",
-        data="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-        min_zoom=0,
-        max_zoom=19,
-        tile_size=256,
-        attribution="© OpenStreetMap contributors",
-    )
-
-    overlay_layers: list[pdk.Layer] = []
-
-    if show_live_overlay and not historical_routes.empty:
-        history_layer = pdk.Layer(
-            "LineLayer",
-            data=historical_routes,
-            get_source_position="[origin_lon, origin_lat]",
-            get_target_position="[dest_lon, dest_lat]",
-            get_color="colour",
-            get_width="line_width",
-            pickable=True,
-            opacity=0.4,
-        )
-        overlay_layers.append(history_layer)
-
-    if show_live_overlay and not active_routes.empty:
-        if "job_id" in active_routes.columns and not historical_routes.empty:
-            enriched = active_routes.merge(
-                historical_routes[
-                    ["id", "colour", "profit_band", "profitability_status", "tooltip"]
-                ],
-                left_on="job_id",
-                right_on="id",
-                how="left",
-                suffixes=("", "_hist"),
-            )
-            if "colour" not in enriched.columns and "colour_hist" in enriched.columns:
-                enriched["colour"] = enriched["colour_hist"]
-            if "profit_band" not in enriched.columns and "profit_band_hist" in enriched.columns:
-                enriched["profit_band"] = enriched["profit_band_hist"]
-            if (
-                "profitability_status" not in enriched.columns
-                and "profitability_status_hist" in enriched.columns
-            ):
-                enriched["profitability_status"] = enriched["profitability_status_hist"]
-            if "tooltip" not in enriched.columns and "tooltip_hist" in enriched.columns:
-                enriched["tooltip"] = enriched["tooltip_hist"]
-        else:
-            enriched = active_routes.copy()
-            enriched["colour"] = [PROFITABILITY_COLOURS["Unknown"]] * len(enriched)
-            enriched["profit_band"] = "Unknown"
-            enriched["profitability_status"] = "Unknown"
-            enriched["tooltip"] = "Active route"
-
-        enriched["colour"] = enriched["colour"].apply(
-            lambda value: value if isinstance(value, (list, tuple)) else [255, 255, 255]
-        )
-        enriched["tooltip"] = enriched.apply(
-            lambda row: "Truck {} ({})".format(
-                row["truck_id"],
-                row.get("profitability_status")
-                or row.get("profit_band", "Unknown"),
+    if view_mode == "Overlay":
+        show_live_overlay = st.toggle(
+            "Show live network overlay",
+            value=True,
+            help=(
+                "Toggle the live overlay of active routes and truck telemetry without "
+                "hiding the base map."
             ),
-            axis=1,
+            key=toggle_key,
         )
 
-        active_layer = pdk.Layer(
-            "LineLayer",
-            data=enriched,
-            get_source_position="[origin_lon, origin_lat]",
-            get_target_position="[dest_lon, dest_lat]",
-            get_color="colour",
-            get_width=5,
-            pickable=True,
-            opacity=0.9,
-        )
-        overlay_layers.append(active_layer)
+        if historical_routes.empty and trucks.empty and active_routes.empty:
+            st.info("No geocoded historical jobs or live telemetry available to plot yet.")
 
-    if show_live_overlay and not truck_data.empty:
-        trucks_layer = pdk.Layer(
-            "ScatterplotLayer",
-            data=truck_data,
-            get_position="[lon, lat]",
-            get_fill_color="colour",
-            get_radius=800,
-            pickable=True,
-        )
-        overlay_layers.append(trucks_layer)
+        overlay_layers: list[pdk.Layer] = []
 
-        text_layer = pdk.Layer(
-            "TextLayer",
-            data=truck_data,
-            get_position="[lon, lat]",
-            get_text="truck_id",
-            get_color="colour",
-            get_size=12,
-            size_units="meters",
-            size_scale=16,
-            get_alignment_baseline="bottom",
-        )
-        overlay_layers.append(text_layer)
-
-    view_df_candidates: list[pd.DataFrame] = []
-    if not historical_routes.empty:
-        view_df_candidates.append(
-            historical_routes.rename(columns={"origin_lat": "lat", "origin_lon": "lon"})[
-                ["lat", "lon"]
-            ]
-        )
-    if not truck_data.empty:
-        view_df_candidates.append(truck_data[["lat", "lon"]])
-    if not active_routes.empty:
-        view_df_candidates.append(
-            active_routes.rename(columns={"origin_lat": "lat", "origin_lon": "lon"})[
-                ["lat", "lon"]
-            ]
-        )
-    view_df = pd.concat(view_df_candidates) if view_df_candidates else pd.DataFrame()
-
-    tooltip = None
-    if show_live_overlay and overlay_layers:
-        tooltip = {"html": "<b>{tooltip}</b>", "style": {"color": "white"}}
-
-    st.pydeck_chart(
-        pdk.Deck(
-            layers=[base_map_layer, *overlay_layers],
-            initial_view_state=_initial_view_state(view_df),
-            tooltip=tooltip,
-            map_style=None,
-        )
-    )
-
-    if show_live_overlay and overlay_layers:
-        legend_cols = st.columns(len(PROFITABILITY_COLOURS))
-        for (band, colour), column in zip(PROFITABILITY_COLOURS.items(), legend_cols):
-            colour_hex = "#" + "".join(f"{int(c):02x}" for c in colour)
-            column.markdown(
-                f"<div style='color:{colour_hex}; font-weight:bold'>{band}</div>",
-                unsafe_allow_html=True,
+        if show_live_overlay and not historical_routes.empty:
+            history_layer = pdk.Layer(
+                "LineLayer",
+                data=historical_routes,
+                get_source_position="[origin_lon, origin_lat]",
+                get_target_position="[dest_lon, dest_lat]",
+                get_color="colour",
+                get_width="line_width",
+                pickable=True,
+                opacity=0.4,
             )
+            overlay_layers.append(history_layer)
+
+        if show_live_overlay and not active_routes.empty:
+            if "job_id" in active_routes.columns and not historical_routes.empty:
+                enriched = active_routes.merge(
+                    historical_routes[
+                        ["id", "colour", "profit_band", "profitability_status", "tooltip"]
+                    ],
+                    left_on="job_id",
+                    right_on="id",
+                    how="left",
+                    suffixes=("", "_hist"),
+                )
+                if "colour" not in enriched.columns and "colour_hist" in enriched.columns:
+                    enriched["colour"] = enriched["colour_hist"]
+                if (
+                    "profit_band" not in enriched.columns
+                    and "profit_band_hist" in enriched.columns
+                ):
+                    enriched["profit_band"] = enriched["profit_band_hist"]
+                if (
+                    "profitability_status" not in enriched.columns
+                    and "profitability_status_hist" in enriched.columns
+                ):
+                    enriched["profitability_status"] = enriched["profitability_status_hist"]
+                if "tooltip" not in enriched.columns and "tooltip_hist" in enriched.columns:
+                    enriched["tooltip"] = enriched["tooltip_hist"]
+            else:
+                enriched = active_routes.copy()
+                enriched["colour"] = [PROFITABILITY_COLOURS["Unknown"]] * len(enriched)
+                enriched["profit_band"] = "Unknown"
+                enriched["profitability_status"] = "Unknown"
+                enriched["tooltip"] = "Active route"
+
+            enriched["colour"] = enriched["colour"].apply(
+                lambda value: value if isinstance(value, (list, tuple)) else [255, 255, 255]
+            )
+            enriched["tooltip"] = enriched.apply(
+                lambda row: "Truck {} ({})".format(
+                    row["truck_id"],
+                    row.get("profitability_status")
+                    or row.get("profit_band", "Unknown"),
+                ),
+                axis=1,
+            )
+
+            active_layer = pdk.Layer(
+                "LineLayer",
+                data=enriched,
+                get_source_position="[origin_lon, origin_lat]",
+                get_target_position="[dest_lon, dest_lat]",
+                get_color="colour",
+                get_width=5,
+                pickable=True,
+                opacity=0.9,
+            )
+            overlay_layers.append(active_layer)
+
+        if show_live_overlay and not truck_data.empty:
+            trucks_layer = pdk.Layer(
+                "ScatterplotLayer",
+                data=truck_data,
+                get_position="[lon, lat]",
+                get_fill_color="colour",
+                get_radius=800,
+                pickable=True,
+            )
+            overlay_layers.append(trucks_layer)
+
+            text_layer = pdk.Layer(
+                "TextLayer",
+                data=truck_data,
+                get_position="[lon, lat]",
+                get_text="truck_id",
+                get_color="colour",
+                get_size=12,
+                size_units="meters",
+                size_scale=16,
+                get_alignment_baseline="bottom",
+            )
+            overlay_layers.append(text_layer)
+
+        view_df_candidates: list[pd.DataFrame] = []
+        if not historical_routes.empty:
+            view_df_candidates.append(
+                historical_routes.rename(columns={"origin_lat": "lat", "origin_lon": "lon"})[
+                    ["lat", "lon"]
+                ]
+            )
+        if not truck_data.empty:
+            view_df_candidates.append(truck_data[["lat", "lon"]])
+        if not active_routes.empty:
+            view_df_candidates.append(
+                active_routes.rename(columns={"origin_lat": "lat", "origin_lon": "lon"})[
+                    ["lat", "lon"]
+                ]
+            )
+        view_df = pd.concat(view_df_candidates) if view_df_candidates else pd.DataFrame()
+
+        tooltip = None
+        if show_live_overlay and overlay_layers:
+            tooltip = {"html": "<b>{tooltip}</b>", "style": {"color": "white"}}
+
+        st.pydeck_chart(
+            pdk.Deck(
+                layers=[base_map_layer, *overlay_layers],
+                initial_view_state=_initial_view_state(view_df),
+                tooltip=tooltip,
+                map_style=None,
+            )
+        )
+
+        if show_live_overlay and overlay_layers:
+            legend_cols = st.columns(len(PROFITABILITY_COLOURS))
+            for (band, colour), column in zip(PROFITABILITY_COLOURS.items(), legend_cols):
+                colour_hex = "#" + "".join(f"{int(c):02x}" for c in colour)
+                column.markdown(
+                    f"<div style='color:{colour_hex}; font-weight:bold'>{band}</div>",
+                    unsafe_allow_html=True,
+                )
+    else:
+        if historical_routes.empty and trucks.empty and active_routes.empty:
+            st.info("No geocoded historical jobs or live telemetry available to plot yet.")
+            return
+
+        radius_pixels = st.slider(
+            "Heatmap radius",
+            min_value=20,
+            max_value=150,
+            value=60,
+            step=10,
+            key=f"{toggle_key}_heatmap_radius",
+            help="Adjust how far each point influence spreads across the heatmap.",
+        )
+        intensity = st.slider(
+            "Heatmap intensity",
+            min_value=0.2,
+            max_value=4.0,
+            value=1.0,
+            step=0.2,
+            key=f"{toggle_key}_heatmap_intensity",
+            help="Increase to emphasise clusters of live activity.",
+        )
+
+        heatmap_source = build_live_heatmap_source(historical_routes, active_routes, truck_data)
+
+        if heatmap_source.empty:
+            st.info(
+                "Live heatmap requires geocoded historical routes, active routes, or truck telemetry."
+            )
+            return
+
+        heatmap_layer = pdk.Layer(
+            "HeatmapLayer",
+            data=heatmap_source,
+            get_position="[lon, lat]",
+            aggregation="SUM",
+            get_weight="weight",
+            radiusPixels=radius_pixels,
+            intensity=intensity,
+        )
+
+        st.pydeck_chart(
+            pdk.Deck(
+                layers=[base_map_layer, heatmap_layer],
+                initial_view_state=_initial_view_state(heatmap_source),
+                tooltip=None,
+                map_style=None,
+            )
+        )
+
+        st.caption(
+            "Historical endpoints provide the base density, active routes carry more weight, "
+            "and live trucks are boosted the most so current activity shines through."
+        )
 
 
 def _set_query_params(**params: str) -> None:

@@ -4,7 +4,12 @@ import sqlite3
 
 import pandas as pd
 
-from analytics.live_data import MockTelemetryIngestor, load_active_routes, load_truck_positions
+from analytics.live_data import (
+    MockTelemetryIngestor,
+    build_live_heatmap_source,
+    load_active_routes,
+    load_truck_positions,
+)
 from analytics.price_distribution import (
     PROFITABILITY_COLOURS,
     classify_profit_band,
@@ -97,6 +102,69 @@ def test_mock_ingestor_populates_live_tables():
         assert set(mapped["profitability_status"]) <= {"Profitable", "Break-even"}
     finally:
         conn.close()
+
+
+def test_build_live_heatmap_source_emphasises_live_points():
+    historical_routes = pd.DataFrame(
+        [
+            {
+                "origin_lat": -27.47,
+                "origin_lon": 153.026,
+                "dest_lat": -33.8688,
+                "dest_lon": 151.2093,
+            }
+        ]
+    )
+    active_routes = pd.DataFrame(
+        [
+            {
+                "origin_lat": -37.8136,
+                "origin_lon": 144.9631,
+                "dest_lat": -34.9285,
+                "dest_lon": 138.6007,
+            }
+        ]
+    )
+    trucks = pd.DataFrame(
+        [
+            {
+                "truck_id": "TRK-1",
+                "lat": -35.308,
+                "lon": 149.124,
+            }
+        ]
+    )
+
+    heatmap_df = build_live_heatmap_source(historical_routes, active_routes, trucks)
+
+    assert set(heatmap_df["source"]) == {
+        "Historical origin",
+        "Historical destination",
+        "Active origin",
+        "Active destination",
+        "Active truck",
+    }
+
+    def _weights_for(source: str) -> set[float]:
+        return set(heatmap_df.loc[heatmap_df["source"] == source, "weight"])
+
+    assert _weights_for("Historical origin") == {1.0}
+    assert _weights_for("Historical destination") == {1.0}
+    assert _weights_for("Active origin") == {3.0}
+    assert _weights_for("Active destination") == {3.0}
+    assert _weights_for("Active truck") == {5.0}
+
+    numeric_coords = heatmap_df[["lat", "lon"]].apply(pd.to_numeric, errors="coerce")
+    assert numeric_coords.notna().all().all()
+
+    empty_heatmap = build_live_heatmap_source(
+        pd.DataFrame(columns=["origin_lat", "origin_lon", "dest_lat", "dest_lon"]),
+        pd.DataFrame(columns=["origin_lat", "origin_lon", "dest_lat", "dest_lon"]),
+        pd.DataFrame(columns=["lat", "lon"]),
+    )
+
+    assert empty_heatmap.empty
+    assert list(empty_heatmap.columns) == ["lat", "lon", "weight", "source"]
 
 
 def test_classify_profit_band_edges():
