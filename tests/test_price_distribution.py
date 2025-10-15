@@ -32,6 +32,7 @@ from analytics.price_distribution import (
     import_historical_jobs_from_dataframe,
     load_historical_jobs,
     load_live_jobs,
+    prepare_metric_route_map_data,
     prepare_profitability_route_data,
     prepare_route_map_data,
     summarise_distribution,
@@ -690,6 +691,53 @@ def test_prepare_route_map_data_filters_missing_coordinates():
     assert len(result) == 1
     assert result.iloc[0]["id"] == 1
     assert result.iloc[0]["map_colour_value"] == "1"
+    assert result.iloc[0]["map_colour_display"] == "1"
+
+
+def test_prepare_metric_route_map_data_filters_and_formats_values():
+    df = pd.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "origin_lat": [-27.0, -33.0, -23.0],
+            "origin_lon": [153.0, 151.0, 150.0],
+            "dest_lat": [-33.0, -35.0, -37.0],
+            "dest_lon": [151.0, 149.0, 144.0],
+            "margin_per_m3": [120.0, None, 85.5],
+        }
+    )
+
+    result = prepare_metric_route_map_data(
+        df,
+        "margin_per_m3",
+        format_spec="currency_per_m3",
+    )
+
+    assert set(result.columns) >= {
+        "map_colour_value",
+        "map_colour_display",
+    }
+    assert len(result) == 2
+    values = result["map_colour_value"].tolist()
+    assert values == [120.0, 85.5]
+    displays = result["map_colour_display"].tolist()
+    assert displays == ["$120.00/m³", "$85.50/m³"]
+
+
+def test_prepare_metric_route_map_data_requires_numeric_values():
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.0, -33.0],
+            "origin_lon": [153.0, 151.0],
+            "dest_lat": [-33.0, -35.0],
+            "dest_lon": [151.0, 149.0],
+            "margin_total": [2500.0, "not-a-number"],
+        }
+    )
+
+    result = prepare_metric_route_map_data(df, "margin_total", format_spec="currency")
+    assert len(result) == 1
+    assert result.iloc[0]["map_colour_value"] == 2500.0
+    assert result.iloc[0]["map_colour_display"] == "$2,500.00"
 
 
 def test_import_historical_jobs_from_dataframe_inserts_rows(tmp_path):

@@ -1276,8 +1276,9 @@ def prepare_route_map_data(
     Returns
     -------
     pandas.DataFrame
-        Copy of ``df`` filtered to rows containing coordinates with an extra
-        ``map_colour_value`` column suitable for categorical colouring.
+        Copy of ``df`` filtered to rows containing coordinates with extra
+        ``map_colour_value`` and ``map_colour_display`` columns suitable for
+        categorical colouring on the route map.
     """
 
     if colour_column not in df.columns:
@@ -1292,6 +1293,79 @@ def prepare_route_map_data(
     filtered = df.dropna(subset=required_columns).copy()
     colour_series = filtered[colour_column].fillna(placeholder)
     filtered["map_colour_value"] = colour_series.astype(str)
+    filtered["map_colour_display"] = filtered["map_colour_value"]
+    return filtered
+
+
+def _format_metric_value(value: float, format_spec: str) -> str:
+    """Return a human-friendly string for ``value`` based on ``format_spec``."""
+
+    if value is None or (isinstance(value, float) and (math.isnan(value) or math.isinf(value))):
+        return "n/a"
+
+    if format_spec == "currency":
+        return f"${value:,.2f}"
+    if format_spec == "currency_per_m3":
+        return f"${value:,.2f}/m³"
+    if format_spec == "percentage":
+        return f"{value * 100:.1f}%"
+    if format_spec == "volume":
+        return f"{value:,.1f} m³"
+    if format_spec == "distance":
+        return f"{value:,.1f} km"
+    if format_spec == "hours":
+        return f"{value:,.1f} hr"
+
+    return f"{value:,.2f}"
+
+
+def prepare_metric_route_map_data(
+    df: pd.DataFrame,
+    metric_column: str,
+    *,
+    format_spec: str = "number",
+) -> pd.DataFrame:
+    """Return map rows with numeric metrics for continuous colouring.
+
+    Parameters
+    ----------
+    df:
+        Source dataframe containing the historical job data.
+    metric_column:
+        Name of the numeric column used to drive the colour scale.
+    format_spec:
+        Formatting hint used when presenting the metric values in hover labels.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy of ``df`` filtered to rows containing coordinates and numeric values
+        in ``metric_column``. The dataframe includes ``map_colour_value`` as a
+        ``float`` and ``map_colour_display`` for formatted hover labels.
+    """
+
+    if metric_column not in df.columns:
+        raise KeyError(f"'{metric_column}' column is required to colour the map")
+
+    required_columns = ["origin_lat", "origin_lon", "dest_lat", "dest_lon"]
+    missing_required = [col for col in required_columns if col not in df.columns]
+    if missing_required:
+        missing_str = ", ".join(missing_required)
+        raise KeyError(f"Dataframe is missing required coordinate columns: {missing_str}")
+
+    filtered = df.dropna(subset=required_columns).copy()
+    numeric_series = pd.to_numeric(filtered[metric_column], errors="coerce")
+    numeric_series = numeric_series.replace([math.inf, -math.inf], pd.NA)
+    valid_mask = numeric_series.notna()
+    filtered = filtered.loc[valid_mask].copy()
+    if filtered.empty:
+        return filtered
+
+    numeric_values = numeric_series.loc[valid_mask].astype(float)
+    filtered["map_colour_value"] = numeric_values
+    filtered["map_colour_display"] = numeric_values.apply(
+        lambda value: _format_metric_value(value, format_spec)
+    )
     return filtered
 
 

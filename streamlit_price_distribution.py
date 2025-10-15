@@ -42,6 +42,8 @@ from analytics.price_distribution import (
     load_historical_jobs,
     load_quotes,
     load_live_jobs,
+    prepare_metric_route_map_data,
+    prepare_route_map_data,
     prepare_profitability_map_data,
     prepare_profitability_route_data,
     summarise_distribution,
@@ -339,34 +341,6 @@ def _blank_column_mapping() -> ColumnMapping:
     )
 
 
-def _prepare_plotly_map_data(
-    df: pd.DataFrame,
-    colour_column: str,
-    *,
-    placeholder: str = "Unknown",
-) -> pd.DataFrame:
-    """Return a dataframe suitable for categorical colouring on a Plotly map."""
-    required_columns = ["origin_lat", "origin_lon", "dest_lat", "dest_lon"]
-    missing = [column for column in required_columns if column not in df.columns]
-    if missing:
-        missing_str = ", ".join(missing)
-        raise KeyError(
-            f"Dataframe is missing required coordinate columns: {missing_str}"
-        )
-
-    if colour_column not in df.columns:
-        raise KeyError(f"'{colour_column}' column is required to colour the map")
-
-    filtered = df.dropna(subset=required_columns).copy()
-    if filtered.empty:
-        return filtered
-
-    filtered["map_colour_value"] = (
-        filtered[colour_column].fillna(placeholder).astype(str)
-    )
-    return filtered
-
-
 def render_summary(
     summary: DistributionSummary,
     break_even: float,
@@ -505,6 +479,9 @@ def build_route_map(
     *,
     show_routes: bool,
     show_points: bool,
+    colour_mode: str = "categorical",
+    colour_scale: Optional[Sequence[str]] = None,
+    colorbar_tickformat: Optional[str] = None,
 ) -> go.Figure:
     """Construct a Plotly Mapbox figure showing coloured routes and points."""
 
@@ -576,7 +553,32 @@ def build_route_map(
     }
 
     figure = go.Figure()
+    plot_df = df.copy()
 
+    if colour_mode == "categorical":
+        palette = px.colors.qualitative.Bold or [
+            "#636EFA",
+            "#EF553B",
+            "#00CC96",
+            "#AB63FA",
+        ]
+        colour_values = list(dict.fromkeys(plot_df["map_colour_value"].tolist()))
+        if not palette:
+            palette = ["#636EFA"]
+        if len(colour_values) > len(palette):
+            repeats = (len(colour_values) // len(palette)) + 1
+            palette = (palette * repeats)[: len(colour_values)]
+        colour_map = {
+            value: palette[idx % len(palette)] for idx, value in enumerate(colour_values)
+        }
+
+        if show_routes:
+            for value in colour_values:
+                category_df = plot_df[plot_df["map_colour_value"] == value]
+                if category_df.empty:
+                    continue
+                display_value = (
+                    category_df.get("map_colour_display", pd.Series([value])).iloc[0]
     if show_routes:
         for value in colour_values:
             category_df = df[df["map_colour_value"] == value]
@@ -616,31 +618,76 @@ def build_route_map(
                     showlegend=False,
                     hoverinfo="skip",
                 )
-            )
-
-    if show_points:
-        for value in colour_values:
-            category_df = df[df["map_colour_value"] == value]
-            if category_df.empty:
-                continue
-            marker_lat: list[float] = []
-            marker_lon: list[float] = []
-            marker_text: list[str] = []
-            for _, row in category_df.iterrows():
-                job_id = row.get("id", "n/a")
-                origin_label = (
-                    row.get("origin_city")
-                    or row.get("origin")
-                    or row.get("origin_raw")
-                    or "Origin"
-                )
-                destination_label = (
-                    row.get("destination_city")
-                    or row.get("destination")
-                    or row.get("destination_raw")
-                    or "Destination"
+                lat_values: list[float] = []
+                lon_values: list[float] = []
+                for _, row in category_df.iterrows():
+                    lat_values.extend([row["origin_lat"], row["dest_lat"], None])
+                    lon_values.extend([row["origin_lon"], row["dest_lon"], None])
+                figure.add_trace(
+                    go.Scattermap(
+                        lat=lat_values,
+                        lon=lon_values,
+                        mode="lines",
+                        line={"width": 2, "color": colour_map[value]},
+                        name=str(display_value),
+                        legendgroup=str(value),
+                        showlegend=False,
+                        hoverinfo="skip",
+                    )
                 )
 
+        if show_points:
+            for value in colour_values:
+                category_df = plot_df[plot_df["map_colour_value"] == value]
+                if category_df.empty:
+                    continue
+                display_value = (
+                    category_df.get("map_colour_display", pd.Series([value])).iloc[0]
+                )
+                marker_lat: list[float] = []
+                marker_lon: list[float] = []
+                marker_text: list[str] = []
+                for _, row in category_df.iterrows():
+                    job_id = row.get("id", "n/a")
+                    origin_label = (
+                        row.get("origin_city")
+                        or row.get("origin")
+                        or row.get("origin_raw")
+                        or "Origin"
+                    )
+                    destination_label = (
+                        row.get("destination_city")
+                        or row.get("destination")
+                        or row.get("destination_raw")
+                        or "Destination"
+                    )
+                    marker_lat.append(row["origin_lat"])
+                    marker_lon.append(row["origin_lon"])
+                    marker_text.append(
+                        f"{colour_label}: {display_value}<br>Origin: {origin_label}<br>Job ID: {job_id}"
+                    )
+                    marker_lat.append(row["dest_lat"])
+                    marker_lon.append(row["dest_lon"])
+                    marker_text.append(
+                        f"{colour_label}: {display_value}<br>Destination: {destination_label}<br>Job ID: {job_id}"
+                    )
+
+                figure.add_trace(
+                    go.Scattermap(
+                        lat=marker_lat,
+                        lon=marker_lon,
+                        mode="markers",
+                        marker={
+                            "size": 9,
+                            "color": colour_map[value],
+                            "opacity": 0.85,
+                        },
+                        text=marker_text,
+                        hovertemplate="%{text}<extra></extra>",
+                        name=str(display_value),
+                        legendgroup=str(value),
+                    )
+                )
                 try:
                     origin_lat = float(row["origin_lat"])
                     origin_lon = float(row["origin_lon"])
@@ -668,25 +715,123 @@ def build_route_map(
             if not marker_lat or not marker_lon:
                 continue
 
-            figure.add_trace(
-                go.Scattermap(
-                    lat=marker_lat,
-                    lon=marker_lon,
-                    mode="markers",
-                    marker={
-                        "size": 9,
-                        "color": colour_map[value],
-                        "opacity": 0.85,
-                    },
-                    text=marker_text,
-                    hovertemplate="%{text}<extra></extra>",
-                    name=value,
-                    legendgroup=value,
-                )
-            )
+    elif colour_mode == "continuous":
+        numeric_series = pd.to_numeric(plot_df["map_colour_value"], errors="coerce")
+        numeric_series = numeric_series.replace([math.inf, -math.inf], pd.NA)
+        valid_mask = numeric_series.notna()
+        plot_df = plot_df.loc[valid_mask].copy()
+        if not plot_df.empty:
+            numeric_values = numeric_series.loc[valid_mask].astype(float)
+            plot_df["map_colour_value"] = numeric_values
+            colour_scale = colour_scale or px.colors.sequential.Viridis
+            min_value = float(numeric_values.min())
+            max_value = float(numeric_values.max())
+            span = max_value - min_value
 
-    all_lat = pd.concat([df["origin_lat"], df["dest_lat"]])
-    all_lon = pd.concat([df["origin_lon"], df["dest_lon"]])
+            def _to_colour(value: float) -> str:
+                if not span or math.isclose(span, 0.0):
+                    position = 0.5
+                else:
+                    position = (value - min_value) / span if span else 0.5
+                position = min(max(position, 0.0), 1.0)
+                return px.colors.sample_colorscale(colour_scale, [position])[0]
+
+            colorbar_dict = {"title": colour_label}
+            if colorbar_tickformat:
+                colorbar_dict["tickformat"] = colorbar_tickformat
+
+            if show_routes:
+                for _, row in plot_df.iterrows():
+                    value = float(row["map_colour_value"])
+                    colour = _to_colour(value)
+                    lat_values = [row["origin_lat"], row["dest_lat"], None]
+                    lon_values = [row["origin_lon"], row["dest_lon"], None]
+                    figure.add_trace(
+                        go.Scattermap(
+                            lat=lat_values,
+                            lon=lon_values,
+                            mode="lines",
+                            line={"width": 3, "color": colour},
+                            showlegend=False,
+                            hoverinfo="skip",
+                        )
+                    )
+
+            if show_points:
+                marker_lat: list[float] = []
+                marker_lon: list[float] = []
+                marker_text: list[str] = []
+                marker_values: list[float] = []
+                for _, row in plot_df.iterrows():
+                    value = float(row["map_colour_value"])
+                    display_value = row.get(
+                        "map_colour_display",
+                        f"{value:,.2f}",
+                    )
+                    job_id = row.get("id", "n/a")
+                    origin_label = (
+                        row.get("origin_city")
+                        or row.get("origin")
+                        or row.get("origin_raw")
+                        or "Origin"
+                    )
+                    destination_label = (
+                        row.get("destination_city")
+                        or row.get("destination")
+                        or row.get("destination_raw")
+                        or "Destination"
+                    )
+                    marker_lat.extend([row["origin_lat"], row["dest_lat"]])
+                    marker_lon.extend([row["origin_lon"], row["dest_lon"]])
+                    marker_text.append(
+                        f"{colour_label}: {display_value}<br>Origin: {origin_label}<br>Job ID: {job_id}"
+                    )
+                    marker_text.append(
+                        f"{colour_label}: {display_value}<br>Destination: {destination_label}<br>Job ID: {job_id}"
+                    )
+                    marker_values.extend([value, value])
+
+                figure.add_trace(
+                    go.Scattermap(
+                        lat=marker_lat,
+                        lon=marker_lon,
+                        mode="markers",
+                        marker={
+                            "size": 9,
+                            "color": marker_values,
+                            "colorscale": colour_scale,
+                            "cmin": min_value,
+                            "cmax": max_value,
+                            "opacity": 0.85,
+                            "colorbar": colorbar_dict,
+                        },
+                        text=marker_text,
+                        hovertemplate="%{text}<extra></extra>",
+                        showlegend=False,
+                    )
+                )
+            else:
+                figure.add_trace(
+                    go.Scattermap(
+                        lat=plot_df["origin_lat"].tolist(),
+                        lon=plot_df["origin_lon"].tolist(),
+                        mode="markers",
+                        marker={
+                            "size": 0.0001,
+                            "color": numeric_values.tolist(),
+                            "colorscale": colour_scale,
+                            "cmin": min_value,
+                            "cmax": max_value,
+                            "colorbar": colorbar_dict,
+                            "opacity": 0.0,
+                        },
+                        hoverinfo="skip",
+                        showlegend=False,
+                    )
+                )
+
+    all_lat = pd.concat([plot_df.get("origin_lat", pd.Series(dtype=float)), plot_df.get("dest_lat", pd.Series(dtype=float))])
+    all_lon = pd.concat([plot_df.get("origin_lon", pd.Series(dtype=float)), plot_df.get("dest_lon", pd.Series(dtype=float))])
     center_lat = float(all_lat.mean()) if not all_lat.empty else 0.0
     center_lon = float(all_lon.mean()) if not all_lon.empty else 0.0
 
@@ -1686,52 +1831,188 @@ with connection_scope() as conn:
         )
 
         if map_mode == "Routes/points":
-            colour_dimensions = {
-                "Job ID": "id",
-                "Client": "client_display",
-                "Destination city": "destination_city",
-                "Origin city": "origin_city",
-            }
-            available_colour_dimensions = {
-                label: column
-                for label, column in colour_dimensions.items()
-                if column in scoped_df.columns
-            }
+            required_columns = {"origin_lat", "origin_lon", "dest_lat", "dest_lon"}
+            missing_coordinates = required_columns - set(scoped_df.columns)
 
-            if not available_colour_dimensions:
-                st.info("No categorical columns available to colour the route map.")
-            elif scoped_df.empty:
+            if scoped_df.empty:
                 st.info("No jobs match the metro filter for the current selection.")
-            else:
-                colour_label = st.selectbox(
-                    "Colour routes by",
-                    options=list(available_colour_dimensions.keys()),
-                    help="Choose which attribute drives the route and point colouring.",
+            elif missing_coordinates:
+                st.info(
+                    "Add geocoded origin and destination coordinates to visualise routes."
                 )
-                show_routes = st.checkbox("Show route lines", value=True)
-                show_points = st.checkbox("Show origin/destination points", value=True)
-
-                selected_column = available_colour_dimensions[colour_label]
-                try:
-                    plotly_map_df = _prepare_plotly_map_data(scoped_df, selected_column)
-                except KeyError as exc:
-                    st.warning(str(exc))
-                    plotly_map_df = pd.DataFrame()
-
-                if plotly_map_df.empty:
+            else:
+                geocoded = scoped_df.dropna(subset=list(required_columns))
+                if geocoded.empty:
                     st.info(
                         "No routes with coordinates are available for the current filters."
                     )
-                elif not show_routes and not show_points:
-                    st.info("Enable at least one layer to view the route map.")
                 else:
-                    route_map = build_route_map(
-                        plotly_map_df,
-                        colour_label,
-                        show_routes=show_routes,
-                        show_points=show_points,
+                    colour_mode_label = st.radio(
+                        "Colour data by",
+                        ("Categorical attribute", "Metric"),
+                        horizontal=True,
+                        help=(
+                            "Switch between discrete attributes and continuous metrics "
+                            "to colour the route and point layers."
+                        ),
                     )
-                    st.plotly_chart(route_map, use_container_width=True)
+                    show_routes = st.checkbox("Show route lines", value=True)
+                    show_points = st.checkbox("Show origin/destination points", value=True)
+
+                    if not show_routes and not show_points:
+                        st.info("Enable at least one layer to view the route map.")
+                    elif colour_mode_label == "Categorical attribute":
+                        colour_dimensions = {
+                            "Job ID": "id",
+                            "Client": "client_display",
+                            "Destination city": "destination_city",
+                            "Origin city": "origin_city",
+                        }
+                        available_colour_dimensions = {
+                            label: column
+                            for label, column in colour_dimensions.items()
+                            if column in geocoded.columns
+                        }
+
+                        if not available_colour_dimensions:
+                            st.info(
+                                "No categorical columns available to colour the route map."
+                            )
+                        else:
+                            colour_label = st.selectbox(
+                                "Categorical attribute",
+                                options=list(available_colour_dimensions.keys()),
+                                help=(
+                                    "Choose which attribute drives the route and point colouring."
+                                ),
+                            )
+                            selected_column = available_colour_dimensions[colour_label]
+                            try:
+                                plotly_map_df = prepare_route_map_data(
+                                    scoped_df, selected_column
+                                )
+                            except KeyError as exc:
+                                st.warning(str(exc))
+                                plotly_map_df = pd.DataFrame()
+
+                            if plotly_map_df.empty:
+                                st.info(
+                                    "No routes with coordinates are available for the current filters."
+                                )
+                            else:
+                                route_map = build_route_map(
+                                    plotly_map_df,
+                                    colour_label,
+                                    show_routes=show_routes,
+                                    show_points=show_points,
+                                )
+                                st.plotly_chart(route_map, use_container_width=True)
+                    else:
+                        metric_colour_options = {
+                            "Margin $/m³": {
+                                "column": "margin_per_m3",
+                                "format": "currency_per_m3",
+                                "scale": px.colors.diverging.RdYlGn,
+                                "tickformat": "$.2f",
+                            },
+                            "Margin %": {
+                                "column": "margin_total_pct",
+                                "format": "percentage",
+                                "scale": px.colors.diverging.BrBG,
+                                "tickformat": ".1%",
+                            },
+                            "Total margin": {
+                                "column": "margin_total",
+                                "format": "currency",
+                                "scale": px.colors.diverging.RdYlGn,
+                                "tickformat": "$,.0f",
+                            },
+                            "Total revenue": {
+                                "column": "revenue_total",
+                                "format": "currency",
+                                "scale": px.colors.sequential.PuBu,
+                                "tickformat": "$,.0f",
+                            },
+                            "Quoted price $/m³": {
+                                "column": "price_per_m3",
+                                "format": "currency_per_m3",
+                                "scale": px.colors.sequential.Plasma,
+                                "tickformat": "$.2f",
+                            },
+                            "Volume (m³)": {
+                                "column": "volume_m3",
+                                "format": "volume",
+                                "scale": px.colors.sequential.Blues,
+                                "tickformat": ".1f",
+                            },
+                            "Distance (km)": {
+                                "column": "distance_km",
+                                "format": "distance",
+                                "scale": px.colors.sequential.Oranges,
+                                "tickformat": ".0f",
+                            },
+                            "Duration (hr)": {
+                                "column": "duration_hr",
+                                "format": "hours",
+                                "scale": px.colors.sequential.Sunset,
+                                "tickformat": ".1f",
+                            },
+                        }
+
+                        available_metric_options: dict[str, dict[str, object]] = {}
+                        for label, spec in metric_colour_options.items():
+                            column = spec["column"]
+                            if column not in geocoded.columns:
+                                continue
+                            numeric_series = pd.to_numeric(
+                                geocoded[column], errors="coerce"
+                            )
+                            numeric_series = numeric_series.replace(
+                                [math.inf, -math.inf], pd.NA
+                            )
+                            if numeric_series.notna().any():
+                                available_metric_options[label] = spec
+
+                        if not available_metric_options:
+                            st.info(
+                                "No numeric metrics are available to colour the route map."
+                            )
+                        else:
+                            metric_label = st.selectbox(
+                                "Metric",
+                                options=list(available_metric_options.keys()),
+                                help=(
+                                    "Select a metric to drive the continuous colour scale."
+                                ),
+                            )
+                            metric_spec = available_metric_options[metric_label]
+                            metric_column = metric_spec["column"]
+                            format_spec = metric_spec.get("format", "number")
+                            try:
+                                metric_map_df = prepare_metric_route_map_data(
+                                    scoped_df,
+                                    metric_column,
+                                    format_spec=str(format_spec),
+                                )
+                            except KeyError as exc:
+                                st.warning(str(exc))
+                                metric_map_df = pd.DataFrame()
+
+                            if metric_map_df.empty:
+                                st.info(
+                                    "No routes with the selected metric are available for the current filters."
+                                )
+                            else:
+                                route_map = build_route_map(
+                                    metric_map_df,
+                                    metric_label,
+                                    show_routes=show_routes,
+                                    show_points=show_points,
+                                    colour_mode="continuous",
+                                    colour_scale=metric_spec.get("scale"),
+                                    colorbar_tickformat=metric_spec.get("tickformat"),
+                                )
+                                st.plotly_chart(route_map, use_container_width=True)
         elif map_mode == "Heatmap":
             weight_options = available_heatmap_weightings(filtered_df)
             weight_label = st.selectbox(
