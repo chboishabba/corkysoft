@@ -247,8 +247,6 @@ def _render_pin_picker(
 
     current_lat = float(lat_input)
     current_lon = float(lon_input)
-    st.session_state[lat_key] = current_lat
-    st.session_state[lon_key] = current_lon
 
     entry["lon"] = current_lon
     entry["lat"] = current_lat
