@@ -25,6 +25,8 @@ from analytics.price_distribution import (
     ProfitabilitySummary,
     PROFITABILITY_COLOURS,
     ColumnMapping,
+    compute_profitability_line_width,
+    compute_tapered_route_polygon,
     available_heatmap_weightings,
     build_isochrone_polygons,
     filter_routes_by_country,
@@ -584,15 +586,26 @@ def render_network_map(
 ) -> None:
     st.markdown("### Live network overview")
 
-    show_live_overlay = st.toggle(
-        "Show live network overlay",
-        value=True,
-        help=(
-            "Toggle the live overlay of active routes and truck telemetry without "
-            "hiding the base map."
-        ),
-        key=toggle_key,
+    show_live_overlay: bool = True
+    toggle_help = (
+        "Toggle the live overlay of active routes and truck telemetry without hiding the "
+        "base map."
     )
+    if hasattr(st, "toggle"):
+        show_live_overlay = st.toggle(
+            "Show live network overlay",
+            value=True,
+            help=toggle_help,
+            key=toggle_key,
+        )
+    else:
+        # Older versions of Streamlit do not expose st.toggle; fall back to a checkbox.
+        show_live_overlay = st.checkbox(
+            "Show live network overlay",
+            value=True,
+            help=toggle_help,
+            key=toggle_key,
+        )
 
     if historical_routes.empty and trucks.empty and active_routes.empty:
         st.info("No geocoded historical jobs or live telemetry available to plot yet.")
@@ -620,14 +633,15 @@ def render_network_map(
 
     if show_live_overlay and not historical_routes.empty:
         history_layer = pdk.Layer(
-            "LineLayer",
+            "PolygonLayer",
             data=historical_routes,
-            get_source_position="[origin_lon, origin_lat]",
-            get_target_position="[dest_lon, dest_lat]",
-            get_color="colour",
-            get_width="line_width",
+            get_polygon="route_polygon",
+            get_fill_color="fill_colour",
+            stroked=False,
+            filled=True,
             pickable=True,
-            opacity=0.4,
+            extruded=False,
+            parameters={"depthTest": False},
         )
         overlay_layers.append(history_layer)
 
@@ -635,7 +649,16 @@ def render_network_map(
         if "job_id" in active_routes.columns and not historical_routes.empty:
             enriched = active_routes.merge(
                 historical_routes[
-                    ["id", "colour", "profit_band", "profitability_status", "tooltip"]
+                    [
+                        "id",
+                        "colour",
+                        "fill_colour",
+                        "line_width",
+                        "route_polygon",
+                        "profit_band",
+                        "profitability_status",
+                        "tooltip",
+                    ]
                 ],
                 left_on="job_id",
                 right_on="id",
@@ -653,12 +676,55 @@ def render_network_map(
                 enriched["profitability_status"] = enriched["profitability_status_hist"]
             if "tooltip" not in enriched.columns and "tooltip_hist" in enriched.columns:
                 enriched["tooltip"] = enriched["tooltip_hist"]
+            if "fill_colour" not in enriched.columns and "fill_colour_hist" in enriched.columns:
+                enriched["fill_colour"] = enriched["fill_colour_hist"]
+            if "line_width" not in enriched.columns and "line_width_hist" in enriched.columns:
+                enriched["line_width"] = enriched["line_width_hist"]
+            if "route_polygon" not in enriched.columns and "route_polygon_hist" in enriched.columns:
+                enriched["route_polygon"] = enriched["route_polygon_hist"]
         else:
             enriched = active_routes.copy()
             enriched["colour"] = [PROFITABILITY_COLOURS["Unknown"]] * len(enriched)
             enriched["profit_band"] = "Unknown"
             enriched["profitability_status"] = "Unknown"
             enriched["tooltip"] = "Active route"
+
+        default_width = compute_profitability_line_width("Unknown")
+        if "line_width" not in enriched.columns:
+            enriched["line_width"] = default_width
+        else:
+            enriched["line_width"] = enriched["line_width"].fillna(default_width)
+
+        def _ensure_fill_colour(value: object) -> list[int]:
+            if isinstance(value, (list, tuple)):
+                rgba = list(value)
+            else:
+                rgba = []
+            if len(rgba) < 3:
+                rgba = [255, 255, 255]
+            else:
+                rgba = [int(component) for component in rgba[:4]]
+            if len(rgba) == 3:
+                rgba.append(180)
+            if len(rgba) < 4:
+                rgba.extend([180] * (4 - len(rgba)))
+            if len(rgba) > 4:
+                rgba = rgba[:4]
+            return rgba
+
+        if "fill_colour" not in enriched.columns:
+            enriched["fill_colour"] = [
+                _ensure_fill_colour(PROFITABILITY_COLOURS["Unknown"]) for _ in range(len(enriched))
+            ]
+        else:
+            enriched["fill_colour"] = enriched["fill_colour"].apply(_ensure_fill_colour)
+
+        enriched["route_polygon"] = enriched.apply(
+            lambda row: row.get("route_polygon")
+            if isinstance(row.get("route_polygon"), list) and row.get("route_polygon")
+            else compute_tapered_route_polygon(row),
+            axis=1,
+        )
 
         enriched["colour"] = enriched["colour"].apply(
             lambda value: value if isinstance(value, (list, tuple)) else [255, 255, 255]
@@ -673,14 +739,15 @@ def render_network_map(
         )
 
         active_layer = pdk.Layer(
-            "LineLayer",
+            "PolygonLayer",
             data=enriched,
-            get_source_position="[origin_lon, origin_lat]",
-            get_target_position="[dest_lon, dest_lat]",
-            get_color="colour",
-            get_width=5,
+            get_polygon="route_polygon",
+            get_fill_color="fill_colour",
+            stroked=False,
+            filled=True,
             pickable=True,
-            opacity=0.9,
+            extruded=False,
+            parameters={"depthTest": False},
         )
         overlay_layers.append(active_layer)
 
