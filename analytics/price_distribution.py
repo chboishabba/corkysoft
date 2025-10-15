@@ -610,10 +610,12 @@ def _historical_jobs_query() -> str:
             d.postcode AS destination_postcode,
             d.country AS destination_country,
             d.lon AS dest_lon,
-            d.lat AS dest_lat
+            d.lat AS dest_lat,
+            hr.geojson AS route_geojson
         FROM historical_jobs AS hj
         LEFT JOIN addresses AS o ON hj.origin_address_id = o.id
         LEFT JOIN addresses AS d ON hj.destination_address_id = d.id
+        LEFT JOIN historical_job_routes AS hr ON hr.historical_job_id = hj.id
     """
 
 
