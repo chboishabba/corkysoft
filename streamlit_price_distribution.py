@@ -54,6 +54,7 @@ from analytics.optimizer import (
 from analytics.live_data import (
     TRUCK_STATUS_COLOURS,
     build_live_heatmap_source,
+    extract_route_path,
     load_active_routes,
     load_truck_positions,
 )
@@ -110,6 +111,16 @@ def _hex_to_rgb(value: str) -> Tuple[int, int, int]:
 
     raise ValueError(f"Unsupported colour format: {value}")
 _QUOTE_COUNTRY_STATE_KEY = "quote_builder_country"
+
+
+def _geojson_to_path(value: Any) -> Optional[List[List[float]]]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        coords = extract_route_path(value)
+    except Exception:
+        return None
+    return [[float(lon), float(lat)] for lat, lon in coords]
 
 
 def _initial_pin_state(result: QuoteResult) -> Dict[str, Any]:
@@ -612,6 +623,12 @@ def render_network_map(
             lambda row: f"{row['truck_id']} ({row['status']})", axis=1
         )
 
+    historical_overlay = historical_routes.copy()
+    if not historical_overlay.empty and "route_geojson" in historical_overlay.columns:
+        historical_overlay["route_path"] = historical_overlay["route_geojson"].apply(_geojson_to_path)
+    else:
+        historical_overlay["route_path"] = None
+
     if view_mode == "Overlay":
         show_live_overlay = st.toggle(
             "Show live network overlay",
@@ -628,25 +645,67 @@ def render_network_map(
 
         overlay_layers: list[pdk.Layer] = []
 
-        if show_live_overlay and not historical_routes.empty:
-            history_layer = pdk.Layer(
-                "LineLayer",
-                data=historical_routes,
-                get_source_position="[origin_lon, origin_lat]",
-                get_target_position="[dest_lon, dest_lat]",
-                get_color="colour",
-                get_width="line_width",
-                pickable=True,
-                opacity=0.4,
+        historical_has_paths = (
+            not historical_overlay.empty
+            and "route_path" in historical_overlay.columns
+            and historical_overlay["route_path"].notna().any()
+        )
+        active_has_geometry = (
+            not active_routes.empty
+            and "route_geometry" in active_routes.columns
+            and active_routes["route_geometry"].notna().any()
+        )
+
+        show_actual_routes = False
+        if show_live_overlay and (historical_has_paths or active_has_geometry):
+            show_actual_routes = st.toggle(
+                "Use actual route geometry",
+                value=False,
+                help="When available, plot the full ORS route instead of a straight line between depots.",
+                key=f"{toggle_key}_geometry",
             )
-            overlay_layers.append(history_layer)
+
+        if show_live_overlay and not historical_routes.empty:
+            if show_actual_routes and historical_has_paths:
+                history_paths = historical_overlay.dropna(subset=["route_path"])
+                if not history_paths.empty:
+                    history_layer = pdk.Layer(
+                        "PathLayer",
+                        data=history_paths,
+                        get_path="route_path",
+                        get_color="colour",
+                        get_width="line_width",
+                        width_min_pixels=1,
+                        pickable=True,
+                        opacity=0.4,
+                    )
+                    overlay_layers.append(history_layer)
+            else:
+                history_layer = pdk.Layer(
+                    "LineLayer",
+                    data=historical_routes,
+                    get_source_position="[origin_lon, origin_lat]",
+                    get_target_position="[dest_lon, dest_lat]",
+                    get_color="colour",
+                    get_width="line_width",
+                    pickable=True,
+                    opacity=0.4,
+                )
+                overlay_layers.append(history_layer)
 
         if show_live_overlay and not active_routes.empty:
             if "job_id" in active_routes.columns and not historical_routes.empty:
+                merge_columns = [
+                    "id",
+                    "colour",
+                    "profit_band",
+                    "profitability_status",
+                    "tooltip",
+                ]
+                if "route_path" in historical_overlay.columns:
+                    merge_columns.append("route_path")
                 enriched = active_routes.merge(
-                    historical_routes[
-                        ["id", "colour", "profit_band", "profitability_status", "tooltip"]
-                    ],
+                    historical_overlay[merge_columns],
                     left_on="job_id",
                     right_on="id",
                     how="left",
@@ -666,6 +725,8 @@ def render_network_map(
                     enriched["profitability_status"] = enriched["profitability_status_hist"]
                 if "tooltip" not in enriched.columns and "tooltip_hist" in enriched.columns:
                     enriched["tooltip"] = enriched["tooltip_hist"]
+                if "route_path" not in enriched.columns and "route_path_hist" in enriched.columns:
+                    enriched["route_path"] = enriched["route_path_hist"]
             else:
                 enriched = active_routes.copy()
                 enriched["colour"] = [PROFITABILITY_COLOURS["Unknown"]] * len(enriched)
@@ -685,17 +746,44 @@ def render_network_map(
                 axis=1,
             )
 
-            active_layer = pdk.Layer(
-                "LineLayer",
-                data=enriched,
-                get_source_position="[origin_lon, origin_lat]",
-                get_target_position="[dest_lon, dest_lat]",
-                get_color="colour",
-                get_width=5,
-                pickable=True,
-                opacity=0.9,
-            )
-            overlay_layers.append(active_layer)
+            if "route_geometry" in enriched.columns:
+                enriched["route_path_geometry"] = enriched["route_geometry"].apply(_geojson_to_path)
+                if "route_path" in enriched.columns:
+                    enriched["route_path"] = enriched["route_path_geometry"].combine_first(
+                        enriched["route_path"]
+                    )
+                else:
+                    enriched["route_path"] = enriched["route_path_geometry"]
+
+            if show_actual_routes:
+                if "route_path" in enriched.columns:
+                    active_path_data = enriched.dropna(subset=["route_path"])
+                else:
+                    active_path_data = pd.DataFrame()
+                if not active_path_data.empty:
+                    active_layer = pdk.Layer(
+                        "PathLayer",
+                        data=active_path_data,
+                        get_path="route_path",
+                        get_color="colour",
+                        get_width=5,
+                        width_min_pixels=2,
+                        pickable=True,
+                        opacity=0.9,
+                    )
+                    overlay_layers.append(active_layer)
+            else:
+                active_layer = pdk.Layer(
+                    "LineLayer",
+                    data=enriched,
+                    get_source_position="[origin_lon, origin_lat]",
+                    get_target_position="[dest_lon, dest_lat]",
+                    get_color="colour",
+                    get_width=5,
+                    pickable=True,
+                    opacity=0.9,
+                )
+                overlay_layers.append(active_layer)
 
         if show_live_overlay and not truck_data.empty:
             trucks_layer = pdk.Layer(
