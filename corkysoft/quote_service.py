@@ -1314,12 +1314,6 @@ def _ensure_client_record(
 
     if details and details.has_any_data():
         normalized_details = ClientDetails(
-        if not details.has_identity():
-            raise ValueError(
-                "Client requires a company name or both first and last names to be saved."
-            )
-
-        new_details = ClientDetails(
             first_name=details.first_name,
             last_name=details.last_name,
             company_name=details.company_name,
@@ -1335,9 +1329,13 @@ def _ensure_client_record(
         )
 
         if not normalized_details.has_identity():
-            inputs.client_details = normalized_details
             display = _ephemeral_client_display(normalized_details)
-            return None, display
+            if display:
+                inputs.client_details = normalized_details
+                return None, display
+            raise ValueError(
+                "Client requires a company name or both first and last names to be saved."
+            )
 
         cursor = conn.execute(
             """
@@ -1360,18 +1358,6 @@ def _ensure_client_record(
                 normalized_details.postcode,
                 normalized_details.country,
                 normalized_details.notes,
-                new_details.first_name,
-                new_details.last_name,
-                new_details.company_name,
-                new_details.email,
-                new_details.phone,
-                new_details.address_line1,
-                new_details.address_line2,
-                new_details.city,
-                new_details.state,
-                new_details.postcode,
-                new_details.country,
-                new_details.notes,
                 timestamp,
                 timestamp,
             ),
@@ -1380,9 +1366,6 @@ def _ensure_client_record(
         display = normalized_details.display_name() or f"Client #{client_id}"
         inputs.client_id = client_id
         inputs.client_details = normalized_details
-        display = new_details.display_name() or f"Client #{client_id}"
-        inputs.client_id = client_id
-        inputs.client_details = new_details
         return client_id, display
 
     return None, None
