@@ -43,13 +43,86 @@ PROFITABILITY_COLOURS = {
     "Unknown": [128, 128, 128],
 }
 
-PROFITABILITY_WIDTHS = {
-    "Below break-even": 200,
-    "0-50 above break-even": 120,
-    "50-100 above break-even": 100,
-    "100+ above break-even": 80,
-    "Unknown": 80,
+PROFITABILITY_BAND_INTENSITY = {
+    "Below break-even": 0,
+    "0-50 above break-even": 1,
+    "50-100 above break-even": 2,
+    "100+ above break-even": 3,
+    "Unknown": 2,
 }
+
+MAX_PROFITABILITY_WIDTH = 20.0
+MIN_PROFITABILITY_WIDTH = 11.5
+PROFITABILITY_WIDTH_CURVE_EXPONENT = 0.75
+ROUTE_WIDTH_METRE_SCALE = 0.25
+
+
+def _profit_band_intensity(band: str) -> float:
+    return PROFITABILITY_BAND_INTENSITY.get(band, PROFITABILITY_BAND_INTENSITY["Unknown"])
+
+
+def compute_profitability_line_width(profit_band: str) -> float:
+    """Return a tapered line width using a smooth, non-linear decay curve."""
+
+    band_index = _profit_band_intensity(profit_band)
+    max_index = max(PROFITABILITY_BAND_INTENSITY.values()) or 1
+    position = min(max(band_index / max_index, 0.0), 1.0)
+    width = MIN_PROFITABILITY_WIDTH + (
+        (MAX_PROFITABILITY_WIDTH - MIN_PROFITABILITY_WIDTH)
+        * (1 - position ** PROFITABILITY_WIDTH_CURVE_EXPONENT)
+    )
+    return round(width, 2)
+
+
+def compute_tapered_route_polygon(row: pd.Series) -> list[list[float]]:
+    """Return a diamond-shaped polygon with pointed ends for the map overlay."""
+
+    start_lon = float(row["origin_lon"])
+    start_lat = float(row["origin_lat"])
+    end_lon = float(row["dest_lon"])
+    end_lat = float(row["dest_lat"])
+
+    dx = end_lon - start_lon
+    dy = end_lat - start_lat
+    if dx == 0 and dy == 0:
+        return [[start_lon, start_lat]]
+
+    mid_lon = (start_lon + end_lon) / 2
+    mid_lat = (start_lat + end_lat) / 2
+
+    # Approximate metres-per-degree for the midpoint.
+    metres_per_degree_lat = 111_320
+    metres_per_degree_lon = max(1e-9, metres_per_degree_lat * math.cos(math.radians(mid_lat)))
+
+    # Convert to a planar vector in metres to derive the perpendicular axis.
+    dir_x_m = dx * metres_per_degree_lon
+    dir_y_m = dy * metres_per_degree_lat
+    vector_length = math.hypot(dir_x_m, dir_y_m)
+    if vector_length == 0:
+        return [[start_lon, start_lat]]
+
+    unit_dir_x = dir_x_m / vector_length
+    unit_dir_y = dir_y_m / vector_length
+
+    perp_x = -unit_dir_y
+    perp_y = unit_dir_x
+
+    width_m = float(row["line_width"]) * ROUTE_WIDTH_METRE_SCALE
+    offset_x_m = perp_x * width_m / 2
+    offset_y_m = perp_y * width_m / 2
+
+    offset_lon = offset_x_m / metres_per_degree_lon
+    offset_lat = offset_y_m / metres_per_degree_lat
+
+    left_mid = [mid_lon - offset_lon, mid_lat - offset_lat]
+    right_mid = [mid_lon + offset_lon, mid_lat + offset_lat]
+
+    return [
+        [start_lon, start_lat],
+        left_mid,
+        [end_lon, end_lat],
+        right_mid,
+    ]
 
 
 BREAK_EVEN_KEY = "break_even_per_m3"
@@ -1878,7 +1951,14 @@ def prepare_profitability_route_data(
     map_df["colour"] = map_df["colour"].apply(
         lambda value: value if isinstance(value, (list, tuple)) else [128, 128, 128]
     )
-    map_df["line_width"] = map_df["profit_band"].map(PROFITABILITY_WIDTHS).fillna(80)
+    map_df["fill_colour"] = map_df["colour"].apply(
+        lambda value: [int(component) for component in list(value)[:3]] + [102]
+    )
+    map_df["line_width"] = map_df["profit_band"].apply(compute_profitability_line_width)
+    fallback_width = compute_profitability_line_width("Unknown")
+    map_df["line_width"] = map_df["line_width"].fillna(fallback_width)
+
+    map_df["route_polygon"] = map_df.apply(compute_tapered_route_polygon, axis=1)
 
     def _format_tooltip(row: pd.Series) -> str:
         corridor = row.get("corridor_display", "Corridor")
