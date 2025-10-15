@@ -28,7 +28,7 @@ from .db import (
 
 
 try:  # pragma: no cover - availability exercised via tests
-    from corkysoft.quote_service import get_ors_client as _get_ors_client
+    from corkysoft.routing import get_ors_client as _get_ors_client
 except Exception:  # pragma: no cover - optional dependency
     _get_ors_client = None
 
@@ -2276,7 +2276,7 @@ def build_isochrone_polygons(
     ors_client:
         Optional OpenRouteService client to use for travel-time isochrones.
         When ``None`` the helper attempts to create a shared client via
-        :func:`corkysoft.quote_service.get_ors_client`.  If a client cannot be
+        :func:`corkysoft.routing.get_ors_client`.  If a client cannot be
         acquired the function falls back to circular approximations.
     ors_profile:
         Routing profile supplied to the OpenRouteService isochrone request.  The
