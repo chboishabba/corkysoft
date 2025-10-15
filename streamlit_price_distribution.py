@@ -707,19 +707,34 @@ def build_route_map(
                 for _, row in plot_df.iterrows():
                     value = float(row["map_colour_value"])
                     colour = _to_colour(value)
-                    origin_lat = _coerce_float(row.get("origin_lat"))
-                    origin_lon = _coerce_float(row.get("origin_lon"))
-                    dest_lat = _coerce_float(row.get("dest_lat"))
-                    dest_lon = _coerce_float(row.get("dest_lon"))
-                    if (
-                        origin_lat is None
-                        or origin_lon is None
-                        or dest_lat is None
-                        or dest_lon is None
-                    ):
+                    lat_values: list[float | None] = []
+                    lon_values: list[float | None] = []
+
+                    route_points = _row_route_points(row)
+                    if route_points:
+                        for lat, lon in route_points:
+                            lat_values.append(lat)
+                            lon_values.append(lon)
+                        lat_values.append(None)
+                        lon_values.append(None)
+                    else:
+                        origin_lat = _coerce_float(row.get("origin_lat"))
+                        origin_lon = _coerce_float(row.get("origin_lon"))
+                        dest_lat = _coerce_float(row.get("dest_lat"))
+                        dest_lon = _coerce_float(row.get("dest_lon"))
+                        if (
+                            origin_lat is None
+                            or origin_lon is None
+                            or dest_lat is None
+                            or dest_lon is None
+                        ):
+                            continue
+                        lat_values = [origin_lat, dest_lat, None]
+                        lon_values = [origin_lon, dest_lon, None]
+
+                    if not lat_values or not lon_values:
                         continue
-                    lat_values = [origin_lat, dest_lat, None]
-                    lon_values = [origin_lon, dest_lon, None]
+
                     figure.add_trace(
                         go.Scattermapbox(
                             lat=lat_values,
