@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 import sqlite3
 import warnings
+from typing import Any
 
 import pytest
 
@@ -873,6 +874,32 @@ def test_aggregate_corridor_performance_handles_missing_columns():
 
 
 def test_build_isochrone_polygons_uses_duration_for_speed():
+    class DummyIsochroneClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def isochrones(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(kwargs)
+            return {
+                "features": [
+                    {
+                        "properties": {"value": kwargs["range"][0]},
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [
+                                [
+                                    [153.0260, -27.4705],
+                                    [153.2260, -27.4705],
+                                    [153.2260, -27.6705],
+                                    [153.0260, -27.6705],
+                                    [153.0260, -27.4705],
+                                ]
+                            ],
+                        },
+                    }
+                ]
+            }
+
     df = pd.DataFrame(
         {
             "origin_lat": [-27.4705],
@@ -885,6 +912,7 @@ def test_build_isochrone_polygons_uses_duration_for_speed():
         }
     )
 
+    client = DummyIsochroneClient()
     iso_df = build_isochrone_polygons(
         df,
         centre="origin",
@@ -892,17 +920,35 @@ def test_build_isochrone_polygons_uses_duration_for_speed():
         default_speed_kmh=60.0,
         max_routes=5,
         points=12,
+        ors_client=client,
     )
 
     assert len(iso_df) == 1
     record = iso_df.iloc[0]
     assert record["label"] == "Brisbane → Sydney"
-    assert record["latitudes"][0] != record["latitudes"][1]
-    assert len(record["latitudes"]) == 13
-    assert len(record["longitudes"]) == 13
+    assert record["latitudes"] == [
+        -27.4705,
+        -27.4705,
+        -27.6705,
+        -27.6705,
+        -27.4705,
+    ]
+    assert record["longitudes"] == [
+        153.026,
+        153.226,
+        153.226,
+        153.026,
+        153.026,
+    ]
     assert record["speed_kmh"] == pytest.approx(92.0, rel=1e-6)
     assert record["radius_km"] == pytest.approx(184.0, rel=1e-6)
     assert "hr reach" in record["tooltip"]
+
+    assert len(client.calls) == 1
+    call = client.calls[0]
+    assert call["profile"] == "driving-hgv"
+    assert call["locations"] == [[153.0260, -27.4705]]
+    assert call["range"] == [int(2.0 * 3600)]
 
 
 def test_build_isochrone_polygons_handles_missing_inputs():

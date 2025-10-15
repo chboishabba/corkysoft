@@ -163,6 +163,25 @@ def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
     return any(row[1] == column for row in rows)
 
 
+def _ensure_column(
+    conn: sqlite3.Connection,
+    table: str,
+    column: str,
+    definition: str,
+) -> None:
+    """Add *column* to *table* if it is missing.
+
+    This helper is intentionally simple and only supports ``ALTER TABLE``
+    additions which are backwards compatible with existing data.  It keeps the
+    quote persistence logic resilient when existing installations are running
+    against databases created before postcode/state fields were introduced.
+    """
+
+    if _column_exists(conn, table, column):
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def _extract_postcode(*values: Optional[str]) -> Optional[str]:
     for value in values:
         if not value:
@@ -379,6 +398,9 @@ def _ensure_address_record(
     if not _table_exists(conn, "addresses"):
         return None
 
+    _ensure_column(conn, "addresses", "state", "TEXT")
+    _ensure_column(conn, "addresses", "postcode", "TEXT")
+
     normalized = normalize_place(resolved or raw_input)
     if not normalized:
         normalized = normalize_place(raw_input)
@@ -457,6 +479,11 @@ def _insert_historical_job(
 ) -> None:
     if not _table_exists(conn, "historical_jobs"):
         return
+
+    _ensure_column(conn, "historical_jobs", "origin_postcode", "TEXT")
+    _ensure_column(conn, "historical_jobs", "destination_postcode", "TEXT")
+    _ensure_column(conn, "historical_jobs", "origin_state", "TEXT")
+    _ensure_column(conn, "historical_jobs", "destination_state", "TEXT")
 
     cubic_m = inputs.cubic_m
     price_per_m3: Optional[float]
@@ -856,6 +883,49 @@ def _snap_to_road(
     ], notes
 
 
+def snap_coordinates_to_road(
+    origin: Tuple[float, float],
+    destination: Tuple[float, float],
+    *,
+    client: Optional["ors.Client"] = None,
+) -> PinSnapResult:
+    """Return the nearest routable coordinates for *origin* and *destination*.
+
+    The helper mirrors the snapping logic used by :func:`route_distance` but
+    exposes it for interactive workflows (e.g. manual pin overrides in the
+    Streamlit quote builder).  When snapping succeeds the returned
+    :class:`PinSnapResult` includes the adjusted coordinates and notes
+    describing which endpoints moved.  If the OpenRouteService client cannot
+    provide a ``nearest`` endpoint the function raises ``RuntimeError`` so the
+    caller can surface an actionable error message to the user.
+    """
+
+    resolved_client = get_ors_client(client)
+    if not hasattr(resolved_client, "nearest"):
+        raise RuntimeError(
+            "openrouteservice client does not expose a 'nearest' endpoint; upgrade the client library."
+        )
+
+    origin_lon, origin_lat = origin
+    dest_lon, dest_lat = destination
+    origin_geo = GeocodeResult(lon=float(origin_lon), lat=float(origin_lat))
+    dest_geo = GeocodeResult(lon=float(dest_lon), lat=float(dest_lat))
+
+    snapped = _snap_to_road(resolved_client, origin_geo, dest_geo)
+    notes: Dict[str, str] = {}
+    changed = False
+    if snapped is not None:
+        _coords, notes = snapped
+        changed = bool(notes)
+
+    return PinSnapResult(
+        origin=(float(origin_geo.lon), float(origin_geo.lat)),
+        destination=(float(dest_geo.lon), float(dest_geo.lat)),
+        notes=notes,
+        changed=changed,
+    )
+
+
 def _haversine_km(
     lat1: float,
     lon1: float,
@@ -1012,6 +1082,14 @@ class QuoteResult:
     origin_ambiguities: Dict[str, Sequence[str]] = field(default_factory=dict)
     destination_ambiguities: Dict[str, Sequence[str]] = field(default_factory=dict)
     manual_quote: Optional[float] = None
+
+
+@dataclass
+class PinSnapResult:
+    origin: Tuple[float, float]
+    destination: Tuple[float, float]
+    notes: Dict[str, str] = field(default_factory=dict)
+    changed: bool = False
 
 
 def format_currency(amount: float) -> str:
@@ -1236,6 +1314,12 @@ def _ensure_client_record(
 
     if details and details.has_any_data():
         normalized_details = ClientDetails(
+        if not details.has_identity():
+            raise ValueError(
+                "Client requires a company name or both first and last names to be saved."
+            )
+
+        new_details = ClientDetails(
             first_name=details.first_name,
             last_name=details.last_name,
             company_name=details.company_name,
@@ -1276,6 +1360,18 @@ def _ensure_client_record(
                 normalized_details.postcode,
                 normalized_details.country,
                 normalized_details.notes,
+                new_details.first_name,
+                new_details.last_name,
+                new_details.company_name,
+                new_details.email,
+                new_details.phone,
+                new_details.address_line1,
+                new_details.address_line2,
+                new_details.city,
+                new_details.state,
+                new_details.postcode,
+                new_details.country,
+                new_details.notes,
                 timestamp,
                 timestamp,
             ),
@@ -1284,6 +1380,9 @@ def _ensure_client_record(
         display = normalized_details.display_name() or f"Client #{client_id}"
         inputs.client_id = client_id
         inputs.client_details = normalized_details
+        display = new_details.display_name() or f"Client #{client_id}"
+        inputs.client_id = client_id
+        inputs.client_details = new_details
         return client_id, display
 
     return None, None
@@ -1433,6 +1532,7 @@ __all__ = [
     "PricingModel",
     "QuoteInput",
     "QuoteResult",
+    "PinSnapResult",
     "SeasonalAdjustment",
     "calculate_quote",
     "compute_base_subtotal",
@@ -1444,4 +1544,5 @@ __all__ = [
     "persist_quote",
     "build_summary",
     "get_ors_client",
+    "snap_coordinates_to_road",
 ]

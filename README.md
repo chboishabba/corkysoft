@@ -79,7 +79,7 @@ Key visuals include:
 - Optional profitability tabs that compare $/m³ against $/km and contrast quoted vs cost-derived $/m³, including margin outlier tables.
 - An interactive Mapbox view showing each route with selectable colouring (job, client, origin city, or destination city) and toggles to focus on lines or points when clusters get dense.
 - A travel-time isochrone mode that shades the catchment around each corridor using inferred average speeds for rapid reach comparisons.
-- A live network map that blends historical job filters with real-time truck telemetry, colouring corridors by profitability band and highlighting active trucks/routes.
+- A live network map that blends historical job filters with real-time truck telemetry, colouring corridors by profitability band and highlighting active trucks/routes, with an optional density heatmap to spotlight live clusters.
 - A dynamic break-even engine that recalculates per-job cost floors using network-wide fuel, driver, maintenance and overhead settings stored in `global_parameters`.
 - Corridor insights summarising job counts, weighted $/m³ and below break-even ratios aggregated into bidirectional lanes for systemic diagnostics.
 - A non-technical optimizer tab that recommends corridor price uplifts from the filtered data and offers a CSV export for action lists.
@@ -99,6 +99,7 @@ Inside the Quote builder tab you can expand the **Client details** panel to link
 a new one. The UI highlights potential duplicates whenever the full name, phone number or complete address matches a stored
 client so you can reuse or update the right record without losing context. If you just need a quick estimate, leave the client
 section blank (or enter partial contact info) and the quote will still be saved without forcing a client record to be created.
+client so you can reuse or update the right record without losing context.
 
 ### Export profitability summaries
 
@@ -273,9 +274,10 @@ python routes_to_sqlite.py import-history historical_jobs.csv --geocode --route
 * Be polite: the script has built-in backoff between requests.
 * When ORS cannot snap a coordinate to the road network the quote builder now
   retries with the nearest road geometry. If that still fails you can drop
-  manual pins inside the UI to override the geocode before it finally falls
-  back to a straight-line distance estimate (all attempts are flagged in the UI
-  suggestions).
+  manual pins inside the UI, edit the latitude/longitude fields directly, or
+  use the **Snap pins to nearest road** action before it finally falls back to
+  a straight-line distance estimate (all attempts are flagged in the UI
+  suggestions and raise a modal warning).
 * If a route fails (e.g. invalid address), the row remains pending.
 
 ---

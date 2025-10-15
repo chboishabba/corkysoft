@@ -53,6 +53,8 @@ from analytics.optimizer import (
 )
 from analytics.live_data import (
     TRUCK_STATUS_COLOURS,
+    build_live_heatmap_source,
+    extract_route_path,
     load_active_routes,
     load_truck_positions,
 )
@@ -69,6 +71,7 @@ from corkysoft.quote_service import (
     format_currency,
     find_client_matches,
     persist_quote,
+    snap_coordinates_to_road,
 )
 from corkysoft.schema import ensure_schema as ensure_core_schema
 
@@ -76,6 +79,7 @@ from corkysoft.schema import ensure_schema as ensure_core_schema
 DEFAULT_TARGET_MARGIN_PERCENT = 20.0
 _AUS_LAT_LON = (-25.2744, 133.7751)
 _PIN_NOTE = "Manual pin override used for routing"
+_HAVERSINE_MODAL_STATE_KEY = "quote_haversine_modal_ack"
 _ISOCHRONE_PALETTE = [
     "#636EFA",
     "#EF553B",
@@ -112,6 +116,16 @@ def _hex_to_rgb(value: str) -> Tuple[int, int, int]:
 
     raise ValueError(f"Unsupported colour format: {value}")
 _QUOTE_COUNTRY_STATE_KEY = "quote_builder_country"
+
+
+def _geojson_to_path(value: Any) -> Optional[List[List[float]]]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        coords = extract_route_path(value)
+    except Exception:
+        return None
+    return [[float(lon), float(lat)] for lat, lon in coords]
 
 
 def _initial_pin_state(result: QuoteResult) -> Dict[str, Any]:
@@ -159,53 +173,77 @@ def _pin_coordinates(entry: Dict[str, Any]) -> tuple[float, float]:
     return (float(lon), float(lat))
 
 
+def _pin_lon_key(map_key: str) -> str:
+    return f"{map_key}_lon_input"
+
+
+def _pin_lat_key(map_key: str) -> str:
+    return f"{map_key}_lat_input"
+
+
 def _render_pin_picker(
     label: str,
     *,
     map_key: str,
     entry: Dict[str, Any],
 ) -> tuple[float, float]:
-    if folium is None or st_folium is None:
-        st.warning(
-            "Install 'folium' and 'streamlit-folium' to drop pins interactively. Enter coordinates manually instead."
-        )
-        lon, lat = _pin_coordinates(entry)
-        lat_input = st.number_input(
-            f"{label} latitude",
-            value=float(lat),
-            format="%.6f",
-            key=f"{map_key}_lat",
-        )
-        lon_input = st.number_input(
-            f"{label} longitude",
-            value=float(lon),
-            format="%.6f",
-            key=f"{map_key}_lon",
-        )
-        entry["lon"] = float(lon_input)
-        entry["lat"] = float(lat_input)
-        return float(lon_input), float(lat_input)
-
     lon, lat = _pin_coordinates(entry)
-    zoom = 12 if entry.get("lon") is not None and entry.get("lat") is not None else 4
-    map_obj = folium.Map(location=[lat, lon], zoom_start=zoom)
-    folium.Marker(
-        [lat, lon],
-        tooltip=f"{label} pin",
-        icon=folium.Icon(color="blue" if label == "Origin" else "red"),
-    ).add_to(map_obj)
-    click_result = st_folium(map_obj, height=320, key=map_key, returned_objects=[])
+    lon_key = _pin_lon_key(map_key)
+    lat_key = _pin_lat_key(map_key)
 
-    new_lon, new_lat = lon, lat
-    if isinstance(click_result, dict):
-        last_clicked = click_result.get("last_clicked") or {}
-        if "lat" in last_clicked and "lng" in last_clicked:
-            new_lat = float(last_clicked["lat"])
-            new_lon = float(last_clicked["lng"])
-    entry["lon"] = new_lon
-    entry["lat"] = new_lat
+    if lon_key not in st.session_state:
+        st.session_state[lon_key] = float(lon)
+    if lat_key not in st.session_state:
+        st.session_state[lat_key] = float(lat)
+
+    current_lon = float(st.session_state.get(lon_key, lon))
+    current_lat = float(st.session_state.get(lat_key, lat))
+
+    map_available = folium is not None and st_folium is not None
+    if map_available:
+        zoom = 12 if entry.get("lon") is not None and entry.get("lat") is not None else 4
+        map_obj = folium.Map(location=[current_lat, current_lon], zoom_start=zoom)
+        folium.Marker(
+            [current_lat, current_lon],
+            tooltip=f"{label} pin",
+            icon=folium.Icon(color="blue" if label == "Origin" else "red"),
+        ).add_to(map_obj)
+        click_result = st_folium(map_obj, height=320, key=map_key, returned_objects=[])
+
+        if isinstance(click_result, dict):
+            last_clicked = click_result.get("last_clicked") or {}
+            if "lat" in last_clicked and "lng" in last_clicked:
+                current_lat = float(last_clicked["lat"])
+                current_lon = float(last_clicked["lng"])
+                st.session_state[lat_key] = current_lat
+                st.session_state[lon_key] = current_lon
+    else:
+        st.warning(
+            "Install 'folium' and 'streamlit-folium' for interactive pin dropping. The latitude/longitude inputs below remain available for manual edits."
+        )
+
+    lat_input = st.number_input(
+        f"{label} latitude",
+        value=float(st.session_state[lat_key]),
+        format="%.6f",
+        key=lat_key,
+    )
+    lon_input = st.number_input(
+        f"{label} longitude",
+        value=float(st.session_state[lon_key]),
+        format="%.6f",
+        key=lon_key,
+    )
+
+    current_lat = float(lat_input)
+    current_lon = float(lon_input)
+    st.session_state[lat_key] = current_lat
+    st.session_state[lon_key] = current_lon
+
+    entry["lon"] = current_lon
+    entry["lat"] = current_lat
     st.session_state["quote_pin_override"] = st.session_state.get("quote_pin_override", {})
-    return new_lon, new_lat
+    return current_lon, current_lat
 
 # -----------------------------------------------------------------------------
 # Compatibility shim for metro-distance filtering across branches/modules
@@ -587,18 +625,22 @@ def render_network_map(
 ) -> None:
     st.markdown("### Live network overview")
 
-    show_live_overlay = st.toggle(
-        "Show live network overlay",
-        value=True,
-        help=(
-            "Toggle the live overlay of active routes and truck telemetry without "
-            "hiding the base map."
-        ),
-        key=toggle_key,
+    view_mode = st.radio(
+        "Map view",
+        ("Overlay", "Heatmap"),
+        horizontal=True,
+        key=f"{toggle_key}_view_mode",
+        help="Switch between the layered network overlay and an aggregated density heatmap.",
     )
 
-    if historical_routes.empty and trucks.empty and active_routes.empty:
-        st.info("No geocoded historical jobs or live telemetry available to plot yet.")
+    base_map_layer = pdk.Layer(
+        "TileLayer",
+        data="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        min_zoom=0,
+        max_zoom=19,
+        tile_size=256,
+        attribution="© OpenStreetMap contributors",
+    )
 
     truck_data = trucks.copy()
     if not truck_data.empty:
@@ -610,145 +652,285 @@ def render_network_map(
             lambda row: f"{row['truck_id']} ({row['status']})", axis=1
         )
 
-    base_map_layer = pdk.Layer(
-        "TileLayer",
-        data="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-        min_zoom=0,
-        max_zoom=19,
-        tile_size=256,
-        attribution="© OpenStreetMap contributors",
-    )
+    historical_overlay = historical_routes.copy()
+    if not historical_overlay.empty and "route_geojson" in historical_overlay.columns:
+        historical_overlay["route_path"] = historical_overlay["route_geojson"].apply(_geojson_to_path)
+    else:
+        historical_overlay["route_path"] = None
 
-    overlay_layers: list[pdk.Layer] = []
-
-    if show_live_overlay and not historical_routes.empty:
-        history_layer = pdk.Layer(
-            "LineLayer",
-            data=historical_routes,
-            get_source_position="[origin_lon, origin_lat]",
-            get_target_position="[dest_lon, dest_lat]",
-            get_color="colour",
-            get_width="line_width",
-            pickable=True,
-            opacity=0.4,
-        )
-        overlay_layers.append(history_layer)
-
-    if show_live_overlay and not active_routes.empty:
-        if "job_id" in active_routes.columns and not historical_routes.empty:
-            enriched = active_routes.merge(
-                historical_routes[
-                    ["id", "colour", "profit_band", "profitability_status", "tooltip"]
-                ],
-                left_on="job_id",
-                right_on="id",
-                how="left",
-                suffixes=("", "_hist"),
-            )
-            if "colour" not in enriched.columns and "colour_hist" in enriched.columns:
-                enriched["colour"] = enriched["colour_hist"]
-            if "profit_band" not in enriched.columns and "profit_band_hist" in enriched.columns:
-                enriched["profit_band"] = enriched["profit_band_hist"]
-            if (
-                "profitability_status" not in enriched.columns
-                and "profitability_status_hist" in enriched.columns
-            ):
-                enriched["profitability_status"] = enriched["profitability_status_hist"]
-            if "tooltip" not in enriched.columns and "tooltip_hist" in enriched.columns:
-                enriched["tooltip"] = enriched["tooltip_hist"]
-        else:
-            enriched = active_routes.copy()
-            enriched["colour"] = [PROFITABILITY_COLOURS["Unknown"]] * len(enriched)
-            enriched["profit_band"] = "Unknown"
-            enriched["profitability_status"] = "Unknown"
-            enriched["tooltip"] = "Active route"
-
-        enriched["colour"] = enriched["colour"].apply(
-            lambda value: value if isinstance(value, (list, tuple)) else [255, 255, 255]
-        )
-        enriched["tooltip"] = enriched.apply(
-            lambda row: "Truck {} ({})".format(
-                row["truck_id"],
-                row.get("profitability_status")
-                or row.get("profit_band", "Unknown"),
+    if view_mode == "Overlay":
+        show_live_overlay = st.toggle(
+            "Show live network overlay",
+            value=True,
+            help=(
+                "Toggle the live overlay of active routes and truck telemetry without "
+                "hiding the base map."
             ),
-            axis=1,
+            key=toggle_key,
         )
 
-        active_layer = pdk.Layer(
-            "LineLayer",
-            data=enriched,
-            get_source_position="[origin_lon, origin_lat]",
-            get_target_position="[dest_lon, dest_lat]",
-            get_color="colour",
-            get_width=5,
-            pickable=True,
-            opacity=0.9,
-        )
-        overlay_layers.append(active_layer)
+        if historical_routes.empty and trucks.empty and active_routes.empty:
+            st.info("No geocoded historical jobs or live telemetry available to plot yet.")
 
-    if show_live_overlay and not truck_data.empty:
-        trucks_layer = pdk.Layer(
-            "ScatterplotLayer",
-            data=truck_data,
-            get_position="[lon, lat]",
-            get_fill_color="colour",
-            get_radius=800,
-            pickable=True,
-        )
-        overlay_layers.append(trucks_layer)
+        overlay_layers: list[pdk.Layer] = []
 
-        text_layer = pdk.Layer(
-            "TextLayer",
-            data=truck_data,
-            get_position="[lon, lat]",
-            get_text="truck_id",
-            get_color="colour",
-            get_size=12,
-            size_units="meters",
-            size_scale=16,
-            get_alignment_baseline="bottom",
+        historical_has_paths = (
+            not historical_overlay.empty
+            and "route_path" in historical_overlay.columns
+            and historical_overlay["route_path"].notna().any()
         )
-        overlay_layers.append(text_layer)
-
-    view_df_candidates: list[pd.DataFrame] = []
-    if not historical_routes.empty:
-        view_df_candidates.append(
-            historical_routes.rename(columns={"origin_lat": "lat", "origin_lon": "lon"})[
-                ["lat", "lon"]
-            ]
+        active_has_geometry = (
+            not active_routes.empty
+            and "route_geometry" in active_routes.columns
+            and active_routes["route_geometry"].notna().any()
         )
-    if not truck_data.empty:
-        view_df_candidates.append(truck_data[["lat", "lon"]])
-    if not active_routes.empty:
-        view_df_candidates.append(
-            active_routes.rename(columns={"origin_lat": "lat", "origin_lon": "lon"})[
-                ["lat", "lon"]
-            ]
-        )
-    view_df = pd.concat(view_df_candidates) if view_df_candidates else pd.DataFrame()
 
-    tooltip = None
-    if show_live_overlay and overlay_layers:
-        tooltip = {"html": "<b>{tooltip}</b>", "style": {"color": "white"}}
-
-    st.pydeck_chart(
-        pdk.Deck(
-            layers=[base_map_layer, *overlay_layers],
-            initial_view_state=_initial_view_state(view_df),
-            tooltip=tooltip,
-            map_style=None,
-        )
-    )
-
-    if show_live_overlay and overlay_layers:
-        legend_cols = st.columns(len(PROFITABILITY_COLOURS))
-        for (band, colour), column in zip(PROFITABILITY_COLOURS.items(), legend_cols):
-            colour_hex = "#" + "".join(f"{int(c):02x}" for c in colour)
-            column.markdown(
-                f"<div style='color:{colour_hex}; font-weight:bold'>{band}</div>",
-                unsafe_allow_html=True,
+        show_actual_routes = False
+        if show_live_overlay and (historical_has_paths or active_has_geometry):
+            show_actual_routes = st.toggle(
+                "Use actual route geometry",
+                value=False,
+                help="When available, plot the full ORS route instead of a straight line between depots.",
+                key=f"{toggle_key}_geometry",
             )
+
+        if show_live_overlay and not historical_routes.empty:
+            if show_actual_routes and historical_has_paths:
+                history_paths = historical_overlay.dropna(subset=["route_path"])
+                if not history_paths.empty:
+                    history_layer = pdk.Layer(
+                        "PathLayer",
+                        data=history_paths,
+                        get_path="route_path",
+                        get_color="colour",
+                        get_width="line_width",
+                        width_min_pixels=1,
+                        pickable=True,
+                        opacity=0.4,
+                    )
+                    overlay_layers.append(history_layer)
+            else:
+                history_layer = pdk.Layer(
+                    "LineLayer",
+                    data=historical_routes,
+                    get_source_position="[origin_lon, origin_lat]",
+                    get_target_position="[dest_lon, dest_lat]",
+                    get_color="colour",
+                    get_width="line_width",
+                    pickable=True,
+                    opacity=0.4,
+                )
+                overlay_layers.append(history_layer)
+
+        if show_live_overlay and not active_routes.empty:
+            if "job_id" in active_routes.columns and not historical_routes.empty:
+                merge_columns = [
+                    "id",
+                    "colour",
+                    "profit_band",
+                    "profitability_status",
+                    "tooltip",
+                ]
+                if "route_path" in historical_overlay.columns:
+                    merge_columns.append("route_path")
+                enriched = active_routes.merge(
+                    historical_overlay[merge_columns],
+                    left_on="job_id",
+                    right_on="id",
+                    how="left",
+                    suffixes=("", "_hist"),
+                )
+                if "colour" not in enriched.columns and "colour_hist" in enriched.columns:
+                    enriched["colour"] = enriched["colour_hist"]
+                if (
+                    "profit_band" not in enriched.columns
+                    and "profit_band_hist" in enriched.columns
+                ):
+                    enriched["profit_band"] = enriched["profit_band_hist"]
+                if (
+                    "profitability_status" not in enriched.columns
+                    and "profitability_status_hist" in enriched.columns
+                ):
+                    enriched["profitability_status"] = enriched["profitability_status_hist"]
+                if "tooltip" not in enriched.columns and "tooltip_hist" in enriched.columns:
+                    enriched["tooltip"] = enriched["tooltip_hist"]
+                if "route_path" not in enriched.columns and "route_path_hist" in enriched.columns:
+                    enriched["route_path"] = enriched["route_path_hist"]
+            else:
+                enriched = active_routes.copy()
+                enriched["colour"] = [PROFITABILITY_COLOURS["Unknown"]] * len(enriched)
+                enriched["profit_band"] = "Unknown"
+                enriched["profitability_status"] = "Unknown"
+                enriched["tooltip"] = "Active route"
+
+            enriched["colour"] = enriched["colour"].apply(
+                lambda value: value if isinstance(value, (list, tuple)) else [255, 255, 255]
+            )
+            enriched["tooltip"] = enriched.apply(
+                lambda row: "Truck {} ({})".format(
+                    row["truck_id"],
+                    row.get("profitability_status")
+                    or row.get("profit_band", "Unknown"),
+                ),
+                axis=1,
+            )
+
+            if "route_geometry" in enriched.columns:
+                enriched["route_path_geometry"] = enriched["route_geometry"].apply(_geojson_to_path)
+                if "route_path" in enriched.columns:
+                    enriched["route_path"] = enriched["route_path_geometry"].combine_first(
+                        enriched["route_path"]
+                    )
+                else:
+                    enriched["route_path"] = enriched["route_path_geometry"]
+
+            if show_actual_routes:
+                if "route_path" in enriched.columns:
+                    active_path_data = enriched.dropna(subset=["route_path"])
+                else:
+                    active_path_data = pd.DataFrame()
+                if not active_path_data.empty:
+                    active_layer = pdk.Layer(
+                        "PathLayer",
+                        data=active_path_data,
+                        get_path="route_path",
+                        get_color="colour",
+                        get_width=5,
+                        width_min_pixels=2,
+                        pickable=True,
+                        opacity=0.9,
+                    )
+                    overlay_layers.append(active_layer)
+            else:
+                active_layer = pdk.Layer(
+                    "LineLayer",
+                    data=enriched,
+                    get_source_position="[origin_lon, origin_lat]",
+                    get_target_position="[dest_lon, dest_lat]",
+                    get_color="colour",
+                    get_width=5,
+                    pickable=True,
+                    opacity=0.9,
+                )
+                overlay_layers.append(active_layer)
+
+        if show_live_overlay and not truck_data.empty:
+            trucks_layer = pdk.Layer(
+                "ScatterplotLayer",
+                data=truck_data,
+                get_position="[lon, lat]",
+                get_fill_color="colour",
+                get_radius=800,
+                pickable=True,
+            )
+            overlay_layers.append(trucks_layer)
+
+            text_layer = pdk.Layer(
+                "TextLayer",
+                data=truck_data,
+                get_position="[lon, lat]",
+                get_text="truck_id",
+                get_color="colour",
+                get_size=12,
+                size_units="meters",
+                size_scale=16,
+                get_alignment_baseline="bottom",
+            )
+            overlay_layers.append(text_layer)
+
+        view_df_candidates: list[pd.DataFrame] = []
+        if not historical_routes.empty:
+            view_df_candidates.append(
+                historical_routes.rename(columns={"origin_lat": "lat", "origin_lon": "lon"})[
+                    ["lat", "lon"]
+                ]
+            )
+        if not truck_data.empty:
+            view_df_candidates.append(truck_data[["lat", "lon"]])
+        if not active_routes.empty:
+            view_df_candidates.append(
+                active_routes.rename(columns={"origin_lat": "lat", "origin_lon": "lon"})[
+                    ["lat", "lon"]
+                ]
+            )
+        view_df = pd.concat(view_df_candidates) if view_df_candidates else pd.DataFrame()
+
+        tooltip = None
+        if show_live_overlay and overlay_layers:
+            tooltip = {"html": "<b>{tooltip}</b>", "style": {"color": "white"}}
+
+        st.pydeck_chart(
+            pdk.Deck(
+                layers=[base_map_layer, *overlay_layers],
+                initial_view_state=_initial_view_state(view_df),
+                tooltip=tooltip,
+                map_style=None,
+            )
+        )
+
+        if show_live_overlay and overlay_layers:
+            legend_cols = st.columns(len(PROFITABILITY_COLOURS))
+            for (band, colour), column in zip(PROFITABILITY_COLOURS.items(), legend_cols):
+                colour_hex = "#" + "".join(f"{int(c):02x}" for c in colour)
+                column.markdown(
+                    f"<div style='color:{colour_hex}; font-weight:bold'>{band}</div>",
+                    unsafe_allow_html=True,
+                )
+    else:
+        if historical_routes.empty and trucks.empty and active_routes.empty:
+            st.info("No geocoded historical jobs or live telemetry available to plot yet.")
+            return
+
+        radius_pixels = st.slider(
+            "Heatmap radius",
+            min_value=20,
+            max_value=150,
+            value=60,
+            step=10,
+            key=f"{toggle_key}_heatmap_radius",
+            help="Adjust how far each point influence spreads across the heatmap.",
+        )
+        intensity = st.slider(
+            "Heatmap intensity",
+            min_value=0.2,
+            max_value=4.0,
+            value=1.0,
+            step=0.2,
+            key=f"{toggle_key}_heatmap_intensity",
+            help="Increase to emphasise clusters of live activity.",
+        )
+
+        heatmap_source = build_live_heatmap_source(historical_routes, active_routes, truck_data)
+
+        if heatmap_source.empty:
+            st.info(
+                "Live heatmap requires geocoded historical routes, active routes, or truck telemetry."
+            )
+            return
+
+        heatmap_layer = pdk.Layer(
+            "HeatmapLayer",
+            data=heatmap_source,
+            get_position="[lon, lat]",
+            aggregation="SUM",
+            get_weight="weight",
+            radiusPixels=radius_pixels,
+            intensity=intensity,
+        )
+
+        st.pydeck_chart(
+            pdk.Deck(
+                layers=[base_map_layer, heatmap_layer],
+                initial_view_state=_initial_view_state(heatmap_source),
+                tooltip=None,
+                map_style=None,
+            )
+        )
+
+        st.caption(
+            "Historical endpoints provide the base density, active routes carry more weight, "
+            "and live trucks are boosted the most so current activity shines through."
+        )
 
 
 def _set_query_params(**params: str) -> None:
@@ -1976,6 +2158,44 @@ with connection_scope() as conn:
                 except ValueError as exc:
                     st.error(str(exc))
                 else:
+                else:
+                    client_details_to_store = None
+
+                submission_valid = True
+                if selected_client_id_final is None and client_details_to_store is not None:
+                    if match_choice_form not in (-1, None):
+                        selected_client_id_final = int(match_choice_form)
+                    elif not client_details_to_store.has_identity():
+                        st.error(
+                            "Provide a company name or both first and last names when creating a client."
+                        )
+                        submission_valid = False
+
+                if submission_valid:
+                    quote_inputs = QuoteInput(
+                        origin=origin_value,
+                        destination=destination_value,
+                        cubic_m=float(cubic_m_value),
+                        quote_date=quote_date_value,
+                        modifiers=list(selected_modifier_ids),
+                        target_margin_percent=margin_to_apply,
+                        country=country_value or COUNTRY_DEFAULT,
+                        client_id=selected_client_id_final,
+                        client_details=client_details_to_store,
+                    )
+                    st.session_state["quote_pin_override"] = _initial_pin_state(result)
+                    st.session_state.pop(_HAVERSINE_MODAL_STATE_KEY, None)
+                    _set_query_params(view="Quote builder")
+                    st.success("Quote calculated. Review the breakdown below.")
+                    stored_inputs = quote_inputs
+                    quote_result = result
+                    try:
+                        result = calculate_quote(conn, quote_inputs)
+                    except RuntimeError as exc:
+                        st.error(str(exc))
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    else:
                         st.session_state["quote_inputs"] = quote_inputs
                         st.session_state["quote_result"] = result
                         st.session_state["quote_manual_override_enabled"] = False
@@ -2093,7 +2313,8 @@ with connection_scope() as conn:
             )
 
             pin_state = _ensure_pin_state(quote_result)
-            pin_related_notes = []
+            pin_related_notes: List[str] = []
+            straight_line_detected = False
             for notes in (
                 quote_result.origin_suggestions,
                 quote_result.destination_suggestions,
@@ -2104,16 +2325,99 @@ with connection_scope() as conn:
                     lowered = note.lower()
                     if _PIN_NOTE.lower() in lowered or "straight-line" in lowered:
                         pin_related_notes.append(note)
+                    if "straight-line" in lowered:
+                        straight_line_detected = True
+
+            if straight_line_detected and not st.session_state.get(
+                _HAVERSINE_MODAL_STATE_KEY, False
+            ):
+                with st.modal(
+                    "Routing fell back to a straight-line estimate",
+                    key="quote_haversine_modal",
+                ):
+                    st.warning(
+                        "OpenRouteService could not find a routable point within 350 m. "
+                        "The quote currently relies on a straight-line distance estimate."
+                    )
+                    st.caption(
+                        "Drop manual pins, click \"Snap pins to nearest road\", or edit the coordinates "
+                        "below before recalculating to improve accuracy."
+                    )
+                    if st.button(
+                        "Dismiss warning", key="quote_haversine_modal_dismiss"
+                    ):
+                        st.session_state[_HAVERSINE_MODAL_STATE_KEY] = True
+                        _rerun_app()
 
             st.markdown("#### Manual pins for routing")
             if pin_related_notes and not pin_state.get("enabled", False):
                 st.warning(
-                    "Routing relied on snapping or a straight-line fallback. Drop pins below to improve accuracy."
+                    "Routing relied on snapping or a straight-line fallback. Drop pins or use "
+                    '"Snap pins to nearest road" to improve accuracy before recalculating.'
                 )
             else:
                 st.caption(
                     "Drop a pin for each address when ORS cannot find a routable point within 350 m."
                 )
+            st.caption(
+                "Click the maps or edit the latitude/longitude values to fine-tune the override pins."
+            )
+
+            control_cols = st.columns([3, 2])
+            with control_cols[1]:
+                snap_feedback = st.empty()
+                snap_clicked = st.button(
+                    "Snap pins to nearest road",
+                    type="secondary",
+                    key="quote_snap_to_nearest_road",
+                    help=(
+                        "Use OpenRouteService's nearest endpoint to move each pin onto the closest "
+                        "routable road before recalculating."
+                    ),
+                )
+            if snap_clicked:
+                origin_lon_default, origin_lat_default = _pin_coordinates(
+                    pin_state["origin"]
+                )
+                dest_lon_default, dest_lat_default = _pin_coordinates(
+                    pin_state["destination"]
+                )
+                try:
+                    snap_result = snap_coordinates_to_road(
+                        (origin_lon_default, origin_lat_default),
+                        (dest_lon_default, dest_lat_default),
+                    )
+                except RuntimeError as exc:
+                    snap_feedback.error(f"Unable to snap pins: {exc}")
+                else:
+                    pin_state["origin"] = {
+                        "lon": snap_result.origin[0],
+                        "lat": snap_result.origin[1],
+                    }
+                    pin_state["destination"] = {
+                        "lon": snap_result.destination[0],
+                        "lat": snap_result.destination[1],
+                    }
+                    st.session_state[_pin_lon_key("quote_origin_pin_map")] = float(
+                        snap_result.origin[0]
+                    )
+                    st.session_state[_pin_lat_key("quote_origin_pin_map")] = float(
+                        snap_result.origin[1]
+                    )
+                    st.session_state[_pin_lon_key("quote_destination_pin_map")] = float(
+                        snap_result.destination[0]
+                    )
+                    st.session_state[_pin_lat_key("quote_destination_pin_map")] = float(
+                        snap_result.destination[1]
+                    )
+                    if snap_result.changed:
+                        snap_feedback.success(
+                            "Pins snapped to the nearest routable road."
+                        )
+                    else:
+                        snap_feedback.info(
+                            "Pins already align with the nearest routable road."
+                        )
 
             pin_cols = st.columns(2)
             with pin_cols[0]:
@@ -2172,6 +2476,7 @@ with connection_scope() as conn:
                     pin_override_state = _initial_pin_state(manual_result)
                     pin_override_state["enabled"] = True
                     st.session_state["quote_pin_override"] = pin_override_state
+                    st.session_state.pop(_HAVERSINE_MODAL_STATE_KEY, None)
                     st.success("Quote recalculated using manual pins.")
                     _set_query_params(view="Quote builder")
                     _rerun_app()
@@ -2313,6 +2618,7 @@ with connection_scope() as conn:
                 st.session_state.pop("quote_manual_override_enabled", None)
                 st.session_state.pop("quote_manual_override_amount", None)
                 st.session_state.pop("quote_pin_override", None)
+                st.session_state.pop(_HAVERSINE_MODAL_STATE_KEY, None)
                 _set_query_params(view="Quote builder")
                 _rerun_app()
 

@@ -1,10 +1,23 @@
 from __future__ import annotations
 
+import json
 import sqlite3
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
+import pytest
 
-from analytics.live_data import MockTelemetryIngestor, load_active_routes, load_truck_positions
+from analytics.db import ensure_historical_job_routes_table
+from analytics.live_data import (
+    MockTelemetryIngestor,
+    TruckGpsSnapshot,
+    TruckTelemetryHarness,
+    build_live_heatmap_source,
+    extract_route_path,
+    load_active_routes,
+    load_truck_positions,
+)
+from analytics.live_data import _position_along_route  # type: ignore[attr-defined]
 from analytics.price_distribution import (
     PROFITABILITY_COLOURS,
     classify_profit_band,
@@ -17,6 +30,7 @@ from corkysoft.schema import ensure_schema
 def _build_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     ensure_schema(conn)
+    ensure_historical_job_routes_table(conn)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS addresses (
@@ -43,6 +57,8 @@ def _build_conn() -> sqlite3.Connection:
             volume_m3 REAL,
             revenue_total REAL,
             price_per_m3 REAL,
+            distance_km REAL,
+            duration_hr REAL,
             FOREIGN KEY(origin_address_id) REFERENCES addresses(id),
             FOREIGN KEY(destination_address_id) REFERENCES addresses(id)
         )
@@ -58,12 +74,45 @@ def _build_conn() -> sqlite3.Connection:
         addresses,
     )
     jobs = [
-        (1, "2024-01-01", "Acme", 1, 2, 40.0, 12000.0, 300.0),
-        (2, "2024-01-02", "Bravo", 1, 3, 30.0, 9000.0, 280.0),
+        (1, "2024-01-01", "Acme", 1, 2, 40.0, 12000.0, 300.0, 900.0, 10.0),
+        (2, "2024-01-02", "Bravo", 1, 3, 30.0, 9000.0, 280.0, 1600.0, 20.0),
     ]
     conn.executemany(
-        "INSERT OR IGNORE INTO historical_jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        """
+        INSERT OR REPLACE INTO historical_jobs (
+            id, job_date, client, origin_address_id, destination_address_id,
+            volume_m3, revenue_total, price_per_m3, distance_km, duration_hr
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
         jobs,
+    )
+
+    route_geojson = json.dumps(
+        {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {},
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": [
+                            [153.0260, -27.4705],
+                            [153.2760, -27.4705],
+                            [153.2760, -27.2205],
+                        ],
+                    },
+                }
+            ],
+        }
+    )
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO historical_job_routes (
+            historical_job_id, geojson, created_at, updated_at
+        ) VALUES (?, ?, datetime('now'), datetime('now'))
+        """,
+        (1, route_geojson),
     )
     conn.commit()
     return conn
@@ -72,18 +121,33 @@ def _build_conn() -> sqlite3.Connection:
 def test_mock_ingestor_populates_live_tables():
     conn = _build_conn()
     try:
-        ingestor = MockTelemetryIngestor(conn, truck_ids=("TRK-1", "TRK-2"))
-        ingestor.run_cycle()
-        ingestor.run_cycle()
+        ingestor = MockTelemetryIngestor(conn, truck_ids=("TRK-1",))
+        start = datetime(2024, 1, 1, 8, 0, tzinfo=UTC)
+        midpoint = start + timedelta(hours=5)
+
+        ingestor.run_cycle(now=start, jitter=0.0)
+        ingestor.run_cycle(now=midpoint, jitter=0.0)
 
         trucks_df = load_truck_positions(conn)
         routes_df = load_active_routes(conn)
 
         assert not trucks_df.empty
-        assert set(trucks_df["truck_id"]) == {"TRK-1", "TRK-2"}
-        assert "lat" in trucks_df.columns and "lon" in trucks_df.columns
-        assert not routes_df.empty
-        assert set(routes_df["truck_id"]) <= {"TRK-1", "TRK-2"}
+        assert list(trucks_df["truck_id"]) == ["TRK-1"]
+
+        route_row = routes_df.iloc[0]
+        progress_value = float(route_row["progress"])
+        travel_seconds = float(route_row["travel_seconds"])
+        expected_progress = min(1.0, (midpoint - start).total_seconds() / travel_seconds)
+        assert pytest.approx(progress_value, rel=1e-3) == pytest.approx(expected_progress, rel=1e-3)
+
+        route_geometry = route_row["route_geometry"]
+        assert route_geometry
+        points = extract_route_path(route_geometry)
+        expected_lat, expected_lon = _position_along_route(points, progress_value)
+
+        truck_row = trucks_df.iloc[0]
+        assert pytest.approx(float(truck_row["lat"]), rel=1e-4) == pytest.approx(expected_lat, rel=1e-4)
+        assert pytest.approx(float(truck_row["lon"]), rel=1e-4) == pytest.approx(expected_lon, rel=1e-4)
 
         base_df = routes_df.copy()
         base_df["id"] = base_df["job_id"]
@@ -97,6 +161,130 @@ def test_mock_ingestor_populates_live_tables():
         assert set(mapped["profitability_status"]) <= {"Profitable", "Break-even"}
     finally:
         conn.close()
+
+
+def test_harness_projects_real_gps_updates():
+    conn = _build_conn()
+    try:
+        harness = TruckTelemetryHarness(conn)
+        start = datetime(2024, 1, 1, 6, 0, tzinfo=UTC)
+
+        harness.ingest(
+            [
+                TruckGpsSnapshot(
+                    truck_id="LIVE-1",
+                    lat=-27.4705,
+                    lon=153.0260,
+                    status="en_route",
+                    recorded_at=start,
+                    job_id=1,
+                )
+            ]
+        )
+
+        row = conn.execute(
+            "SELECT progress, started_at, travel_seconds FROM active_routes WHERE truck_id=?",
+            ("LIVE-1",),
+        ).fetchone()
+        assert row is not None
+        assert pytest.approx(row["progress"], rel=1e-4) == 0.0
+        assert row["travel_seconds"] == pytest.approx(10 * 3600.0)
+
+        geometry = conn.execute(
+            "SELECT route_geometry FROM active_routes WHERE truck_id=?",
+            ("LIVE-1",),
+        ).fetchone()[0]
+        points = extract_route_path(geometry)
+        mid_lat, mid_lon = _position_along_route(points, 0.5)
+
+        harness.ingest(
+            [
+                TruckGpsSnapshot(
+                    truck_id="LIVE-1",
+                    lat=mid_lat,
+                    lon=mid_lon,
+                    status="en_route",
+                    recorded_at=start + timedelta(hours=5),
+                    job_id=1,
+                )
+            ]
+        )
+
+        updated = conn.execute(
+            "SELECT progress, eta FROM active_routes WHERE truck_id=?",
+            ("LIVE-1",),
+        ).fetchone()
+        assert updated is not None
+        assert pytest.approx(updated["progress"], rel=1e-3) == 0.5
+        assert updated["eta"].startswith("2024-01-01T16:00")
+
+        trucks_df = load_truck_positions(conn)
+        assert trucks_df.loc[trucks_df["truck_id"] == "LIVE-1", "lat"].notna().all()
+    finally:
+        conn.close()
+
+
+def test_build_live_heatmap_source_emphasises_live_points():
+    historical_routes = pd.DataFrame(
+        [
+            {
+                "origin_lat": -27.47,
+                "origin_lon": 153.026,
+                "dest_lat": -33.8688,
+                "dest_lon": 151.2093,
+            }
+        ]
+    )
+    active_routes = pd.DataFrame(
+        [
+            {
+                "origin_lat": -37.8136,
+                "origin_lon": 144.9631,
+                "dest_lat": -34.9285,
+                "dest_lon": 138.6007,
+            }
+        ]
+    )
+    trucks = pd.DataFrame(
+        [
+            {
+                "truck_id": "TRK-1",
+                "lat": -35.308,
+                "lon": 149.124,
+            }
+        ]
+    )
+
+    heatmap_df = build_live_heatmap_source(historical_routes, active_routes, trucks)
+
+    assert set(heatmap_df["source"]) == {
+        "Historical origin",
+        "Historical destination",
+        "Active origin",
+        "Active destination",
+        "Active truck",
+    }
+
+    def _weights_for(source: str) -> set[float]:
+        return set(heatmap_df.loc[heatmap_df["source"] == source, "weight"])
+
+    assert _weights_for("Historical origin") == {1.0}
+    assert _weights_for("Historical destination") == {1.0}
+    assert _weights_for("Active origin") == {3.0}
+    assert _weights_for("Active destination") == {3.0}
+    assert _weights_for("Active truck") == {5.0}
+
+    numeric_coords = heatmap_df[["lat", "lon"]].apply(pd.to_numeric, errors="coerce")
+    assert numeric_coords.notna().all().all()
+
+    empty_heatmap = build_live_heatmap_source(
+        pd.DataFrame(columns=["origin_lat", "origin_lon", "dest_lat", "dest_lon"]),
+        pd.DataFrame(columns=["origin_lat", "origin_lon", "dest_lat", "dest_lon"]),
+        pd.DataFrame(columns=["lat", "lon"]),
+    )
+
+    assert empty_heatmap.empty
+    assert list(empty_heatmap.columns) == ["lat", "lon", "weight", "source"]
 
 
 def test_classify_profit_band_edges():
