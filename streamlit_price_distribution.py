@@ -684,14 +684,34 @@ def render_network_map(
 
     historical_overlay = historical_routes.copy()
     if not historical_overlay.empty and "route_geojson" in historical_overlay.columns:
-        historical_overlay["route_path"] = historical_overlay["route_geojson"].apply(_geojson_to_path)
+        historical_overlay["route_path"] = historical_overlay["route_geojson"].apply(
+            _geojson_to_path
+        )
     else:
         historical_overlay["route_path"] = None
 
+    if not historical_overlay.empty and "lane_key" in historical_overlay.columns:
+        lane_overlay = historical_overlay.copy()
+        lane_overlay["_has_geojson"] = (
+            lane_overlay["route_path"].notna() if "route_path" in lane_overlay.columns else False
+        )
+        lane_overlay["_job_weight"] = pd.to_numeric(
+            lane_overlay.get("job_count", 0), errors="coerce"
+        ).fillna(0.0)
+        lane_overlay = (
+            lane_overlay.sort_values(
+                by=["_has_geojson", "_job_weight"], ascending=[False, False]
+            )
+            .drop(columns=["_has_geojson", "_job_weight"])
+            .drop_duplicates(subset=["lane_key"])
+        )
+    else:
+        lane_overlay = historical_overlay.copy()
+
     historical_has_paths = (
-        not historical_overlay.empty
-        and "route_path" in historical_overlay.columns
-        and historical_overlay["route_path"].notna().any()
+        not lane_overlay.empty
+        and "route_path" in lane_overlay.columns
+        and lane_overlay["route_path"].notna().any()
     )
     active_has_geometry = (
         not active_routes.empty
@@ -700,10 +720,10 @@ def render_network_map(
     )
     overlay_layers: list[pdk.Layer] = []
 
-    if show_live_overlay and not historical_routes.empty:
+    if show_live_overlay and not lane_overlay.empty:
         history_layer = pdk.Layer(
             "PolygonLayer",
-            data=historical_routes,
+            data=lane_overlay,
             get_polygon="route_polygon",
             get_fill_color="fill_colour",
             stroked=False,
@@ -726,10 +746,10 @@ def render_network_map(
 
         overlay_layers: list[pdk.Layer] = []
 
-        if show_live_overlay and not historical_routes.empty:
+        if show_live_overlay and not lane_overlay.empty:
             history_layer = pdk.Layer(
                 "PolygonLayer",
-                data=historical_routes,
+                data=lane_overlay,
                 get_polygon="route_polygon",
                 get_fill_color="fill_colour",
                 stroked=False,
@@ -838,9 +858,9 @@ def render_network_map(
             )
             overlay_layers.append(active_layer)
 
-            if show_live_overlay and not historical_routes.empty:
+            if show_live_overlay and not lane_overlay.empty:
                 if show_actual_routes and historical_has_paths:
-                    history_paths = historical_overlay.dropna(subset=["route_path"])
+                    history_paths = lane_overlay.dropna(subset=["route_path"])
                     if not history_paths.empty:
                         history_layer = pdk.Layer(
                             "PathLayer",
@@ -856,7 +876,7 @@ def render_network_map(
                 else:
                     history_layer = pdk.Layer(
                         "LineLayer",
-                        data=historical_routes,
+                        data=lane_overlay,
                         get_source_position="[origin_lon, origin_lat]",
                         get_target_position="[dest_lon, dest_lat]",
                         get_color="colour",
