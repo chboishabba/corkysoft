@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
+from corkysoft.au_address import STATE_NAME_TO_CODE
 from corkysoft.routing import normalize_place
 
 if TYPE_CHECKING:  # pragma: no cover - import for type checkers only
@@ -245,9 +246,15 @@ def _extract_state(*values: Optional[str]) -> Optional[str]:
     for value in values:
         if not value:
             continue
-        match = STATE_RE.search(value)
+        text = str(value)
+        match = STATE_RE.search(text)
         if match:
             return match.group(1).upper()
+        lowered = f" {text.strip().lower()} "
+        for name, code in STATE_NAME_TO_CODE.items():
+            target = f" {name} "
+            if target in lowered:
+                return code
     return None
 
 
@@ -696,12 +703,14 @@ def persist_quote(
     )
 
     origin_postcode = _extract_postcode(
+        result.origin_postcode_hint,
         result.origin_resolved,
         inputs.origin,
         *(result.origin_candidates or []),
         *(result.origin_suggestions or []),
     )
     destination_postcode = _extract_postcode(
+        result.destination_postcode_hint,
         result.destination_resolved,
         inputs.destination,
         *(result.destination_candidates or []),
@@ -709,12 +718,14 @@ def persist_quote(
     )
 
     origin_state = _extract_state(
+        result.origin_state_hint,
         result.origin_resolved,
         inputs.origin,
         *(result.origin_candidates or []),
         *(result.origin_suggestions or []),
     )
     destination_state = _extract_state(
+        result.destination_state_hint,
         result.destination_resolved,
         inputs.destination,
         *(result.destination_candidates or []),

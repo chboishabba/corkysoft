@@ -200,8 +200,8 @@ def test_persist_quote_records_postcodes() -> None:
     ensure_dashboard_tables(conn)
 
     inputs = QuoteInput(
-        origin="123 Example Street, Brisbane QLD 4000",
-        destination="456 Demo Road, Sydney NSW 2000",
+        origin="123 Example Street, Brisbane",
+        destination="456 Demo Road, Sydney",
         cubic_m=30.0,
         quote_date=date(2024, 1, 15),
         modifiers=[],
@@ -209,8 +209,12 @@ def test_persist_quote_records_postcodes() -> None:
         country="Australia",
     )
     result = _quote_result()
-    result.origin_resolved = "Brisbane QLD 4000"
-    result.destination_resolved = "Sydney NSW 2000"
+    result.origin_resolved = "Brisbane QLD"
+    result.destination_resolved = "Sydney NSW"
+    result.origin_postcode_hint = "4000"
+    result.destination_postcode_hint = "2000"
+    result.origin_state_hint = "Queensland"
+    result.destination_state_hint = "New South Wales"
     result.summary_text = build_summary(inputs, result)
 
     persist_quote(conn, inputs, result)
