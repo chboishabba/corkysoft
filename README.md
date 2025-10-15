@@ -38,10 +38,14 @@ It uses the [OpenRouteService API](https://openrouteservice.org) (ORS, open-sour
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install openrouteservice
-````
+pip install -r requirements.txt
+```
 
 3. Get a free API key from [openrouteservice.org](https://openrouteservice.org/sign-up/).
+   The Streamlit dashboard will automatically request network-based isochrone
+   geometries whenever the `openrouteservice` client is available and
+   `ORS_API_KEY` is configured; otherwise it falls back to simple circular
+   buffers.
 
 ---
 
