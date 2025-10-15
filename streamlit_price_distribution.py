@@ -82,6 +82,11 @@ DEFAULT_TARGET_MARGIN_PERCENT = 20.0
 _AUS_LAT_LON = (-25.2744, 133.7751)
 _PIN_NOTE = "Manual pin override used for routing"
 _HAVERSINE_MODAL_STATE_KEY = "quote_haversine_modal_ack"
+_NULL_CLIENT_MODAL_STATE_KEY = "quote_null_client_modal_open"
+_NULL_CLIENT_COMPANY_KEY = "quote_null_client_company"
+_NULL_CLIENT_NOTES_KEY = "quote_null_client_notes"
+_NULL_CLIENT_DEFAULT_COMPANY = "Null (filler) client"
+_NULL_CLIENT_DEFAULT_NOTES = "Placeholder client captured via quote builder."
 _ISOCHRONE_PALETTE = [
     "#636EFA",
     "#EF553B",
@@ -2239,11 +2244,6 @@ with connection_scope() as conn:
                 if selected_client_id_final is None and client_details_to_store is not None:
                     if match_choice_form not in (-1, None):
                         selected_client_id_final = int(match_choice_form)
-                    elif not client_details_to_store.has_identity():
-                        st.error(
-                            "Provide a company name or both first and last names when creating a client."
-                        )
-                        submission_valid = False
 
                 if submission_valid:
                     quote_inputs = QuoteInput(
@@ -2665,9 +2665,29 @@ with connection_scope() as conn:
                     quote_result.manual_quote = None
                 quote_result.summary_text = build_summary(stored_inputs, quote_result)
                 st.session_state["quote_result"] = quote_result
-                if manual_override_enabled and manual_to_store is None:
-                    pass
-                else:
+                should_persist = not (
+                    manual_override_enabled and manual_to_store is None
+                )
+                trigger_null_client_modal = False
+                if should_persist:
+                    if not stored_inputs:
+                        st.error("Calculate the quote before submitting it.")
+                        should_persist = False
+                    else:
+                        client_details = stored_inputs.client_details
+                        if stored_inputs.client_id is None:
+                            if client_details and client_details.has_any_data():
+                                if not client_details.has_identity():
+                                    st.error(
+                                        "Provide a company name or both first and last names when creating a client."
+                                    )
+                                    should_persist = False
+                            else:
+                                trigger_null_client_modal = True
+                                should_persist = False
+                if trigger_null_client_modal:
+                    st.session_state[_NULL_CLIENT_MODAL_STATE_KEY] = True
+                if should_persist:
                     try:
                         rowid = persist_quote(
                             conn,
@@ -2690,6 +2710,65 @@ with connection_scope() as conn:
                 st.session_state.pop(_HAVERSINE_MODAL_STATE_KEY, None)
                 _set_query_params(view="Quote builder")
                 _rerun_app()
+
+            if st.session_state.get(_NULL_CLIENT_MODAL_STATE_KEY):
+                if _NULL_CLIENT_COMPANY_KEY not in st.session_state:
+                    st.session_state[_NULL_CLIENT_COMPANY_KEY] = (
+                        _NULL_CLIENT_DEFAULT_COMPANY
+                    )
+                if _NULL_CLIENT_NOTES_KEY not in st.session_state:
+                    st.session_state[_NULL_CLIENT_NOTES_KEY] = (
+                        _NULL_CLIENT_DEFAULT_NOTES
+                    )
+                with st.modal(
+                    "Link this quote to a client",
+                    key="quote_null_client_modal",
+                ):
+                    st.warning(
+                        "A client must be linked before submitting a quote."
+                        " Select an existing client in the form or use the placeholder"
+                        " details below."
+                    )
+                    st.caption(
+                        "Applying the filler details will populate the client fields in the"
+                        " quote builder. You can then review and submit again."
+                    )
+                    st.text_input(
+                        "Filler company name",
+                        key=_NULL_CLIENT_COMPANY_KEY,
+                    )
+                    st.text_area(
+                        "Notes (optional)",
+                        key=_NULL_CLIENT_NOTES_KEY,
+                        height=80,
+                    )
+                    modal_cols = st.columns(2)
+                    if modal_cols[0].button(
+                        "Use filler client", key="quote_null_client_apply"
+                    ):
+                        filler_details = ClientDetails(
+                            company_name=(
+                                st.session_state.get(_NULL_CLIENT_COMPANY_KEY)
+                                or _NULL_CLIENT_DEFAULT_COMPANY
+                            ),
+                            notes=(
+                                st.session_state.get(_NULL_CLIENT_NOTES_KEY)
+                                or _NULL_CLIENT_DEFAULT_NOTES
+                            ),
+                        )
+                        if stored_inputs:
+                            stored_inputs.client_id = None
+                            stored_inputs.client_details = filler_details
+                            st.session_state["quote_inputs"] = stored_inputs
+                        st.session_state[_NULL_CLIENT_MODAL_STATE_KEY] = False
+                        _rerun_app()
+                    if modal_cols[1].button(
+                        "Cancel", key="quote_null_client_cancel"
+                    ):
+                        st.session_state[_NULL_CLIENT_MODAL_STATE_KEY] = False
+                        st.session_state.pop(_NULL_CLIENT_COMPANY_KEY, None)
+                        st.session_state.pop(_NULL_CLIENT_NOTES_KEY, None)
+                        _rerun_app()
 
     with tab_map["Optimizer"]:
         st.markdown("### Margin optimizer")
