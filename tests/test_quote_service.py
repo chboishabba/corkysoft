@@ -246,29 +246,17 @@ def test_persist_quote_creates_client_record() -> None:
     assert hist_client == ("Taylor Jordan", client_id)
 
 
-def test_persist_quote_requires_client_identity() -> None:
-    conn = sqlite3.connect(":memory:")
-    ensure_schema(conn)
-    ensure_dashboard_tables(conn)
-
-    inputs = _quote_input()
-    inputs.client_details = ClientDetails(email="noname@example.com")
-    result = _quote_result()
-    result.summary_text = build_summary(inputs, result)
-
-    with pytest.raises(ValueError, match="Client requires a company name"):
-        persist_quote(conn, inputs, result)
-
-
 @pytest.mark.parametrize(
-    "details",
+    "details, expected_display",
     [
-        ClientDetails(first_name="Taylor"),
-        ClientDetails(last_name="Jordan"),
+        (ClientDetails(first_name="Taylor"), "Taylor"),
+        (ClientDetails(last_name="Jordan"), "Jordan"),
+        (ClientDetails(email="noname@example.com"), "noname@example.com"),
+        (ClientDetails(phone="0412 000 123"), "0412 000 123"),
     ],
 )
-def test_persist_quote_requires_both_names_without_company(
-    details: ClientDetails,
+def test_persist_quote_skips_client_creation_without_identity(
+    details: ClientDetails, expected_display: str
 ) -> None:
     conn = sqlite3.connect(":memory:")
     ensure_schema(conn)
@@ -279,8 +267,16 @@ def test_persist_quote_requires_both_names_without_company(
     result = _quote_result()
     result.summary_text = build_summary(inputs, result)
 
-    with pytest.raises(ValueError, match="Client requires a company name"):
-        persist_quote(conn, inputs, result)
+    rowid = persist_quote(conn, inputs, result)
+
+    client_row = conn.execute("SELECT COUNT(*) FROM clients").fetchone()
+    assert client_row == (0,)
+
+    quote_client = conn.execute(
+        "SELECT client_id, client_display FROM quotes WHERE id = ?",
+        (rowid,),
+    ).fetchone()
+    assert quote_client == (None, expected_display)
 
 
 def test_find_client_matches_detects_phone() -> None:

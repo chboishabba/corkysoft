@@ -1949,35 +1949,33 @@ with connection_scope() as conn:
                 else:
                     client_details_to_store = None
 
-                submission_valid = True
                 if selected_client_id_final is None and client_details_to_store is not None:
                     if match_choice_form not in (-1, None):
                         selected_client_id_final = int(match_choice_form)
                     elif not client_details_to_store.has_identity():
-                        st.error(
-                            "Provide a company name or both first and last names when creating a client."
+                        st.info(
+                            "Client details without a company or full name will be stored with the quote "
+                            "but a client record will not be created."
                         )
-                        submission_valid = False
 
-                if submission_valid:
-                    quote_inputs = QuoteInput(
-                        origin=origin_value,
-                        destination=destination_value,
-                        cubic_m=float(cubic_m_value),
-                        quote_date=quote_date_value,
-                        modifiers=list(selected_modifier_ids),
-                        target_margin_percent=margin_to_apply,
-                        country=country_value or COUNTRY_DEFAULT,
-                        client_id=selected_client_id_final,
-                        client_details=client_details_to_store,
-                    )
-                    try:
-                        result = calculate_quote(conn, quote_inputs)
-                    except RuntimeError as exc:
-                        st.error(str(exc))
-                    except ValueError as exc:
-                        st.error(str(exc))
-                    else:
+                quote_inputs = QuoteInput(
+                    origin=origin_value,
+                    destination=destination_value,
+                    cubic_m=float(cubic_m_value),
+                    quote_date=quote_date_value,
+                    modifiers=list(selected_modifier_ids),
+                    target_margin_percent=margin_to_apply,
+                    country=country_value or COUNTRY_DEFAULT,
+                    client_id=selected_client_id_final,
+                    client_details=client_details_to_store,
+                )
+                try:
+                    result = calculate_quote(conn, quote_inputs)
+                except RuntimeError as exc:
+                    st.error(str(exc))
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
                         st.session_state["quote_inputs"] = quote_inputs
                         st.session_state["quote_result"] = result
                         st.session_state["quote_manual_override_enabled"] = False
