@@ -526,7 +526,6 @@ def _insert_historical_job(
     ]
     values: List[Optional[object]] = [
         inputs.quote_date.isoformat(),
-        None,
         client_display,
         corridor_display,
         price_per_m3,
