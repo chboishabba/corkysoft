@@ -624,6 +624,27 @@ def test_prepare_profitability_route_data_tags_profitability():
         assert all(0 <= component <= 255 for component in fill)
 
 
+def test_prepare_profitability_route_data_uses_row_break_even_values():
+    df = pd.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "origin_lat": [-27.4705, -27.4705, -27.4705],
+            "origin_lon": [153.0260, 153.0260, 153.0260],
+            "dest_lat": [-33.8688, -33.8688, -33.8688],
+            "dest_lon": [151.2093, 151.2093, 151.2093],
+            "price_per_m3": [220.0, 220.0, 220.0],
+            "break_even_per_m3": [200.0, 220.0, 250.0],
+        }
+    )
+
+    result = prepare_profitability_route_data(df, break_even=230.0)
+    statuses = result.set_index("id")["profitability_status"].to_dict()
+
+    assert statuses[1] == "Profitable"
+    assert statuses[2] == "Break-even"
+    assert statuses[3] == "Loss-leading"
+
+
 def test_prepare_route_map_data_filters_missing_coordinates():
     df = pd.DataFrame(
         {

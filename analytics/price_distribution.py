@@ -2107,21 +2107,22 @@ def prepare_profitability_route_data(
     if map_df.empty:
         return map_df
 
+    price_series = pd.to_numeric(map_df["price_per_m3"], errors="coerce")
     if "break_even_per_m3" in map_df.columns:
-        break_even_series = pd.to_numeric(map_df["break_even_per_m3"], errors="coerce").fillna(break_even)
-        price_series = pd.to_numeric(map_df["price_per_m3"], errors="coerce")
-        map_df["profit_band"] = [
-            classify_profit_band(price, be)
-            for price, be in zip(price_series, break_even_series)
-        ]
-    else:
-        map_df["profit_band"] = map_df["price_per_m3"].apply(
-            lambda value: classify_profit_band(value, break_even)
+        break_even_series = pd.to_numeric(map_df["break_even_per_m3"], errors="coerce").fillna(
+            break_even
         )
-    map_df["profit_band"] = map_df["price_per_m3"].apply(lambda value: classify_profit_band(value, break_even))
-    map_df["profitability_status"] = map_df["price_per_m3"].apply(
-        lambda value: classify_profitability_status(value, break_even)
-    )
+    else:
+        break_even_series = pd.Series(break_even, index=map_df.index, dtype="float64")
+
+    map_df["profit_band"] = [
+        classify_profit_band(price, be)
+        for price, be in zip(price_series, break_even_series)
+    ]
+    map_df["profitability_status"] = [
+        classify_profitability_status(price, be)
+        for price, be in zip(price_series, break_even_series)
+    ]
     map_df["colour"] = map_df["profit_band"].map(PROFITABILITY_COLOURS)
     map_df["colour"] = map_df["colour"].apply(
         lambda value: value if isinstance(value, (list, tuple)) else [128, 128, 128]
