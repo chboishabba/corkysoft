@@ -163,6 +163,25 @@ def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
     return any(row[1] == column for row in rows)
 
 
+def _ensure_column(
+    conn: sqlite3.Connection,
+    table: str,
+    column: str,
+    definition: str,
+) -> None:
+    """Add *column* to *table* if it is missing.
+
+    This helper is intentionally simple and only supports ``ALTER TABLE``
+    additions which are backwards compatible with existing data.  It keeps the
+    quote persistence logic resilient when existing installations are running
+    against databases created before postcode/state fields were introduced.
+    """
+
+    if _column_exists(conn, table, column):
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def _extract_postcode(*values: Optional[str]) -> Optional[str]:
     for value in values:
         if not value:
@@ -379,6 +398,9 @@ def _ensure_address_record(
     if not _table_exists(conn, "addresses"):
         return None
 
+    _ensure_column(conn, "addresses", "state", "TEXT")
+    _ensure_column(conn, "addresses", "postcode", "TEXT")
+
     normalized = normalize_place(resolved or raw_input)
     if not normalized:
         normalized = normalize_place(raw_input)
@@ -458,6 +480,11 @@ def _insert_historical_job(
     if not _table_exists(conn, "historical_jobs"):
         return
 
+    _ensure_column(conn, "historical_jobs", "origin_postcode", "TEXT")
+    _ensure_column(conn, "historical_jobs", "destination_postcode", "TEXT")
+    _ensure_column(conn, "historical_jobs", "origin_state", "TEXT")
+    _ensure_column(conn, "historical_jobs", "destination_state", "TEXT")
+
     cubic_m = inputs.cubic_m
     price_per_m3: Optional[float]
     if cubic_m and cubic_m > 0:
@@ -499,6 +526,7 @@ def _insert_historical_job(
     ]
     values: List[Optional[object]] = [
         inputs.quote_date.isoformat(),
+        None,
         client_display,
         corridor_display,
         price_per_m3,
