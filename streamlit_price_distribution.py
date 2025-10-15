@@ -631,6 +631,7 @@ def render_network_map(
     toggle_help = (
         "Toggle the live overlay of active routes and truck telemetry without hiding the "
         "base map."
+    )
     view_mode = st.radio(
         "Map view",
         ("Overlay", "Heatmap"),
