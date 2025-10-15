@@ -1283,6 +1283,17 @@ def _update_client_missing_fields(
     )
 
 
+def _ephemeral_client_display(details: ClientDetails) -> Optional[str]:
+    display = details.display_name()
+    if display:
+        return display
+    if details.email:
+        return details.email
+    if details.phone:
+        return details.phone
+    return None
+
+
 def _ensure_client_record(
     conn: sqlite3.Connection,
     inputs: QuoteInput,
@@ -1302,6 +1313,7 @@ def _ensure_client_record(
             return client_id, display
 
     if details and details.has_any_data():
+        normalized_details = ClientDetails(
         if not details.has_identity():
             raise ValueError(
                 "Client requires a company name or both first and last names to be saved."
@@ -1321,6 +1333,12 @@ def _ensure_client_record(
             country=details.country or inputs.country,
             notes=details.notes,
         )
+
+        if not normalized_details.has_identity():
+            inputs.client_details = normalized_details
+            display = _ephemeral_client_display(normalized_details)
+            return None, display
+
         cursor = conn.execute(
             """
             INSERT INTO clients (
@@ -1330,6 +1348,18 @@ def _ensure_client_record(
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                normalized_details.first_name,
+                normalized_details.last_name,
+                normalized_details.company_name,
+                normalized_details.email,
+                normalized_details.phone,
+                normalized_details.address_line1,
+                normalized_details.address_line2,
+                normalized_details.city,
+                normalized_details.state,
+                normalized_details.postcode,
+                normalized_details.country,
+                normalized_details.notes,
                 new_details.first_name,
                 new_details.last_name,
                 new_details.company_name,
@@ -1347,6 +1377,9 @@ def _ensure_client_record(
             ),
         )
         client_id = int(cursor.lastrowid)
+        display = normalized_details.display_name() or f"Client #{client_id}"
+        inputs.client_id = client_id
+        inputs.client_details = normalized_details
         display = new_details.display_name() or f"Client #{client_id}"
         inputs.client_id = client_id
         inputs.client_details = new_details

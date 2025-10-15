@@ -44,7 +44,7 @@ This merges everything from:
 | ---------------------------- | :----: | --------------------------------- |
 | **Jobs + geocode tables**    |    ✅   | Implemented.                      |
 | **Schema migration support** |    ✅   | Handles new columns.              |
-| **Client registry & dedupe** |    ✅   | Quote builder stores clients and flags duplicates. |
+| **Client registry & dedupe** |    ✅   | Quote builder stores clients, flags duplicates, and allows quotes without forcing a client record. |
 | **Historical job import**    |   🔜   | From MoveWare CSV/screenshots.    |
 | **$ per m³ calculation**     |   🔜   | Derived metric for profitability. |
 | **Corridor / lane table**    |   🔜   | Define recurring routes.          |

@@ -97,6 +97,8 @@ quotes** to analyse submissions from the in-app quote builder alongside historic
 
 Inside the Quote builder tab you can expand the **Client details** panel to link the quote with an existing customer or create
 a new one. The UI highlights potential duplicates whenever the full name, phone number or complete address matches a stored
+client so you can reuse or update the right record without losing context. If you just need a quick estimate, leave the client
+section blank (or enter partial contact info) and the quote will still be saved without forcing a client record to be created.
 client so you can reuse or update the right record without losing context.
 
 ### Export profitability summaries
