@@ -320,6 +320,8 @@ st.caption(
     "Visualise $ per m³ by corridor and client, with break-even bands to spot loss-leaders."
 )
 
+tabs_placeholder = st.container()
+
 
 def _blank_column_mapping() -> ColumnMapping:
     return ColumnMapping(
@@ -1071,12 +1073,6 @@ def _rerun_app() -> None:
     st.experimental_rerun()
 
 
-def _activate_quote_tab() -> None:
-    """Switch the interface to the quote builder tab."""
-    _set_query_params(view="Quote builder")
-    _rerun_app()
-
-
 def _first_non_empty(route: pd.Series, columns: Sequence[str]) -> Optional[str]:
     for column in columns:
         if column in route and isinstance(route[column], str):
@@ -1396,6 +1392,31 @@ with connection_scope() as conn:
     elif not has_filtered_data:
         st.warning("No jobs match the selected filters. Quote builder remains available below.")
 
+    tab_labels = [
+        "Histogram",
+        "Profitability insights",
+        "Route maps",
+        "Quote builder",
+        "Optimizer",
+    ]
+    params = _get_query_params()
+    requested_tab = params.get("view", [tab_labels[0]])[0]
+    if requested_tab not in tab_labels:
+        requested_tab = tab_labels[0]
+    if requested_tab != tab_labels[0]:
+        ordered_labels = [
+            requested_tab,
+            *[label for label in tab_labels if label != requested_tab],
+        ]
+    else:
+        ordered_labels = tab_labels
+
+    with tabs_placeholder:
+        streamlit_tabs = st.tabs(ordered_labels)
+    tab_map: Dict[str, Any] = {
+        label: tab for label, tab in zip(ordered_labels, streamlit_tabs)
+    }
+
     summary: Optional[DistributionSummary] = None
     profitability_summary: Optional[ProfitabilitySummary] = None
     metro_summary: Optional[DistributionSummary] = None
@@ -1431,37 +1452,6 @@ with connection_scope() as conn:
         active_routes,
         toggle_key="network_map_live_overlay_toggle_overview",
     )
-
-    st.button(
-        "Open quote builder",
-        on_click=_activate_quote_tab,
-        disabled=dataset_error is not None,
-        help="Jump to the quote builder tab to build a quick quote from a historical route.",
-    )
-
-    tab_labels = [
-        "Histogram",
-        "Profitability insights",
-        "Route maps",
-        "Quote builder",
-        "Optimizer",
-    ]
-    params = _get_query_params()
-    requested_tab = params.get("view", [tab_labels[0]])[0]
-    if requested_tab not in tab_labels:
-        requested_tab = tab_labels[0]
-    if requested_tab != tab_labels[0]:
-        ordered_labels = [
-            requested_tab,
-            *[label for label in tab_labels if label != requested_tab],
-        ]
-    else:
-        ordered_labels = tab_labels
-
-    streamlit_tabs = st.tabs(ordered_labels)
-    tab_map: Dict[str, Any] = {
-        label: tab for label, tab in zip(ordered_labels, streamlit_tabs)
-    }
 
     with tab_map["Histogram"]:
         if has_filtered_data:
