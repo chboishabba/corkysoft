@@ -248,6 +248,20 @@ python routes_to_sqlite.py import-history historical_jobs.csv --geocode --route
 
 `historical_jobs.csv` requires headers `date,origin,destination,m3,quoted_price,client`. The importer normalises whitespace and Australian postcodes, optionally geocodes/resolves addresses, and (with `--route`) enriches rows with travel distance/duration using OpenRouteService.
 
+#### Render a network map
+
+Generate an interactive HTML map of the saved jobs:
+
+```bash
+python map_jobs.py --out routes_map.html
+```
+
+Add `--show-actual` to overlay the actual OpenRouteService routed geometry as a separate layer (you can toggle between the straight-line and routed views via the map controls):
+
+```bash
+python map_jobs.py --show-actual
+```
+
 ---
 
 ## 🗂 Database Schema
