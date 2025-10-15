@@ -8,7 +8,7 @@ import sqlite3
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple, TYPE_CHECKING
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
 try:  # pragma: no cover - exercised indirectly via integration paths
     import openrouteservice as _ors
@@ -201,6 +201,36 @@ def _is_routable_point_error(exc: Exception) -> bool:
         or '"code": 2010' in text
         or "'code': 2010" in text
     )
+
+
+def _extract_route_metrics(route_payload: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+    """Extract distance (meters) and duration (seconds) from an ORS response."""
+
+    routes = route_payload.get("routes")
+    if not routes:
+        return None
+
+    first_route = routes[0] or {}
+    summary = first_route.get("summary") or {}
+    distance: Any = summary.get("distance")
+    duration: Any = summary.get("duration")
+
+    if distance is None or duration is None:
+        for segment in first_route.get("segments", []) or []:
+            if distance is None:
+                distance = segment.get("distance", distance)
+            if duration is None:
+                duration = segment.get("duration", duration)
+            if distance is not None and duration is not None:
+                break
+
+    if distance is None or duration is None:
+        return None
+
+    try:
+        return float(distance), float(duration)
+    except (TypeError, ValueError):
+        return None
 
 
 def _extract_snap_coordinates(response: object) -> Optional[Tuple[float, float]]:
@@ -430,16 +460,20 @@ def route_distance(
             profile=profile,
             format="json",
         )
-        summary = route["routes"][0]["summary"]
-        meters = float(summary["distance"])
-        seconds = float(summary["duration"])
-        time.sleep(ROUTE_BACKOFF)
-        return meters / 1000.0, seconds / 3600.0, origin_geo, dest_geo
     except Exception as exc:  # pragma: no cover - fallback behaviour tested below
         if not _is_routable_point_error(exc):
             raise
         logger.warning(
             "ORS could not find a routable point for %s → %s: %s", origin, destination, exc
+        )
+    else:
+        time.sleep(ROUTE_BACKOFF)
+        metrics = _extract_route_metrics(route)
+        if metrics is not None:
+            meters, seconds = metrics
+            return meters / 1000.0, seconds / 3600.0, origin_geo, dest_geo
+        logger.warning(
+            "ORS route response missing distance/duration for %s → %s", origin, destination
         )
 
     snapped = _snap_to_road(
@@ -459,16 +493,22 @@ def route_distance(
                 profile=profile,
                 format="json",
             )
-            summary = route["routes"][0]["summary"]
-            meters = float(summary["distance"])
-            seconds = float(summary["duration"])
-            time.sleep(ROUTE_BACKOFF)
-            return meters / 1000.0, seconds / 3600.0, origin_geo, dest_geo
         except Exception as exc:
             if not _is_routable_point_error(exc):
                 raise
             logger.warning(
                 "Snapped routing still failed for %s → %s: %s", origin, destination, exc
+            )
+        else:
+            time.sleep(ROUTE_BACKOFF)
+            metrics = _extract_route_metrics(route)
+            if metrics is not None:
+                meters, seconds = metrics
+                return meters / 1000.0, seconds / 3600.0, origin_geo, dest_geo
+            logger.warning(
+                "Snapped ORS route response missing distance/duration for %s → %s",
+                origin,
+                destination,
             )
 
     logger.warning(
