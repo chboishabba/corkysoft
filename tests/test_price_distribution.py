@@ -830,6 +830,53 @@ def test_build_route_map_prefers_route_geojson_over_route_path():
     assert lon_values[:3] == pytest.approx([144.9631, 146.0, 151.2093])
 
 
+def test_build_route_map_allows_haversine_toggle():
+    geojson = {
+        "type": "Feature",
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [
+                [144.9631, -37.8136],
+                [146.0, -36.5],
+                [151.2093, -33.8688],
+            ],
+        },
+    }
+    df = pd.DataFrame(
+        [
+            {
+                "id": 42,
+                "map_colour_value": "Client A",
+                "map_colour_display": "Client A",
+                "origin_lat": -37.8136,
+                "origin_lon": 144.9631,
+                "dest_lat": -33.8688,
+                "dest_lon": 151.2093,
+                "route_geojson": geojson,
+            }
+        ]
+    )
+
+    figure = build_route_map(
+        df,
+        "Client",
+        show_routes=True,
+        show_points=False,
+        use_route_geometry=False,
+    )
+
+    line_traces = [trace for trace in figure.data if getattr(trace, "mode", "") == "lines"]
+    assert line_traces, "Expected a line trace when routes are requested"
+    route_trace = line_traces[0]
+    lat_values = list(route_trace.lat)
+    lon_values = list(route_trace.lon)
+
+    assert lat_values[:2] == pytest.approx([-37.8136, -33.8688])
+    assert lon_values[:2] == pytest.approx([144.9631, 151.2093])
+    assert lat_values[2] is None
+    assert lon_values[2] is None
+
+
 def test_import_historical_jobs_from_dataframe_inserts_rows(tmp_path):
     db_path = tmp_path / "test.db"
     conn = sqlite3.connect(db_path)

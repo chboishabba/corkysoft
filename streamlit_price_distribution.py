@@ -482,11 +482,15 @@ def build_route_map(
     colour_mode: str = "categorical",
     colour_scale: Optional[Sequence[str]] = None,
     colorbar_tickformat: Optional[str] = None,
+    use_route_geometry: bool = True,
 ) -> go.Figure:
     """Construct a Plotly Mapbox figure showing coloured routes and points."""
 
     def _row_route_points(row: pd.Series) -> List[Tuple[float, float]]:
         """Return the ordered ``(lat, lon)`` points for ``row`` when available."""
+
+        if not use_route_geometry:
+            return []
 
         geojson_value = row.get("route_geojson")
         if isinstance(geojson_value, (bytes, bytearray, memoryview)):
@@ -1876,6 +1880,31 @@ with connection_scope() as conn:
                     show_routes = st.checkbox("Show route lines", value=True)
                     show_points = st.checkbox("Show origin/destination points", value=True)
 
+                    geometry_toggle_help = (
+                        "Switch between straight-line haversine chords and the stored route geometry "
+                        "when plotting route lines."
+                    )
+                    geometry_toggle_key = "route_map_use_route_geometry"
+                    default_geometry_value = st.session_state.get(
+                        geometry_toggle_key, True
+                    )
+                    if hasattr(st, "toggle"):
+                        use_route_geometry = st.toggle(
+                            "Use actual route geometry",
+                            value=default_geometry_value,
+                            help=geometry_toggle_help,
+                            key=geometry_toggle_key,
+                            disabled=not show_routes,
+                        )
+                    else:
+                        use_route_geometry = st.checkbox(
+                            "Use actual route geometry",
+                            value=default_geometry_value,
+                            help=geometry_toggle_help,
+                            key=geometry_toggle_key,
+                            disabled=not show_routes,
+                        )
+
                     if not show_routes and not show_points:
                         st.info("Enable at least one layer to view the route map.")
                     elif colour_mode_label == "Categorical attribute":
@@ -1922,6 +1951,7 @@ with connection_scope() as conn:
                                     colour_label,
                                     show_routes=show_routes,
                                     show_points=show_points,
+                                    use_route_geometry=use_route_geometry,
                                 )
                                 st.plotly_chart(route_map, use_container_width=True)
                     else:
@@ -2028,6 +2058,7 @@ with connection_scope() as conn:
                                     colour_mode="continuous",
                                     colour_scale=metric_spec.get("scale"),
                                     colorbar_tickformat=metric_spec.get("tickformat"),
+                                    use_route_geometry=use_route_geometry,
                                 )
                                 st.plotly_chart(route_map, use_container_width=True)
         elif map_mode == "Heatmap":
