@@ -25,6 +25,8 @@ from analytics.price_distribution import (
     ProfitabilitySummary,
     PROFITABILITY_COLOURS,
     ColumnMapping,
+    compute_profitability_line_width,
+    compute_tapered_route_polygon,
     available_heatmap_weightings,
     build_isochrone_polygons,
     filter_routes_by_country,
@@ -658,26 +660,104 @@ def render_network_map(
     else:
         historical_overlay["route_path"] = None
 
-    if view_mode == "Overlay":
-        show_live_overlay = st.toggle(
-            "Show live network overlay",
-            value=True,
-            help=(
-                "Toggle the live overlay of active routes and truck telemetry without "
-                "hiding the base map."
-            ),
-            key=toggle_key,
+    overlay_layers: list[pdk.Layer] = []
+
+    if show_live_overlay and not historical_routes.empty:
+        history_layer = pdk.Layer(
+            "PolygonLayer",
+            data=historical_routes,
+            get_polygon="route_polygon",
+            get_fill_color="fill_colour",
+            stroked=False,
+            filled=True,
+            pickable=True,
+            extruded=False,
+            parameters={"depthTest": False},
         )
 
-        if historical_routes.empty and trucks.empty and active_routes.empty:
-            st.info("No geocoded historical jobs or live telemetry available to plot yet.")
+    if show_live_overlay and not active_routes.empty:
+        if "job_id" in active_routes.columns and not historical_routes.empty:
+            enriched = active_routes.merge(
+                historical_routes[
+                    [
+                        "id",
+                        "colour",
+                        "fill_colour",
+                        "line_width",
+                        "route_polygon",
+                        "profit_band",
+                        "profitability_status",
+                        "tooltip",
+                    ]
+                ],
+                left_on="job_id",
+                right_on="id",
+                how="left",
+                suffixes=("", "_hist"),
+            )
+            if "colour" not in enriched.columns and "colour_hist" in enriched.columns:
+                enriched["colour"] = enriched["colour_hist"]
+            if "profit_band" not in enriched.columns and "profit_band_hist" in enriched.columns:
+                enriched["profit_band"] = enriched["profit_band_hist"]
+            if (
+                "profitability_status" not in enriched.columns
+                and "profitability_status_hist" in enriched.columns
+            ):
+                enriched["profitability_status"] = enriched["profitability_status_hist"]
+            if "tooltip" not in enriched.columns and "tooltip_hist" in enriched.columns:
+                enriched["tooltip"] = enriched["tooltip_hist"]
+            if "fill_colour" not in enriched.columns and "fill_colour_hist" in enriched.columns:
+                enriched["fill_colour"] = enriched["fill_colour_hist"]
+            if "line_width" not in enriched.columns and "line_width_hist" in enriched.columns:
+                enriched["line_width"] = enriched["line_width_hist"]
+            if "route_polygon" not in enriched.columns and "route_polygon_hist" in enriched.columns:
+                enriched["route_polygon"] = enriched["route_polygon_hist"]
+        else:
+            enriched = active_routes.copy()
+            enriched["colour"] = [PROFITABILITY_COLOURS["Unknown"]] * len(enriched)
+            enriched["profit_band"] = "Unknown"
+            enriched["profitability_status"] = "Unknown"
+            enriched["tooltip"] = "Active route"
 
-        overlay_layers: list[pdk.Layer] = []
+        default_width = compute_profitability_line_width("Unknown")
+        if "line_width" not in enriched.columns:
+            enriched["line_width"] = default_width
+        else:
+            enriched["line_width"] = enriched["line_width"].fillna(default_width)
 
-        historical_has_paths = (
-            not historical_overlay.empty
-            and "route_path" in historical_overlay.columns
-            and historical_overlay["route_path"].notna().any()
+        def _ensure_fill_colour(value: object) -> list[int]:
+            if isinstance(value, (list, tuple)):
+                rgba = list(value)
+            else:
+                rgba = []
+            if len(rgba) < 3:
+                rgba = [255, 255, 255]
+            else:
+                rgba = [int(component) for component in rgba[:4]]
+            if len(rgba) == 3:
+                rgba.append(180)
+            if len(rgba) < 4:
+                rgba.extend([180] * (4 - len(rgba)))
+            if len(rgba) > 4:
+                rgba = rgba[:4]
+            return rgba
+
+        if "fill_colour" not in enriched.columns:
+            enriched["fill_colour"] = [
+                _ensure_fill_colour(PROFITABILITY_COLOURS["Unknown"]) for _ in range(len(enriched))
+            ]
+        else:
+            enriched["fill_colour"] = enriched["fill_colour"].apply(_ensure_fill_colour)
+
+        enriched["route_polygon"] = enriched.apply(
+            lambda row: row.get("route_polygon")
+            if isinstance(row.get("route_polygon"), list) and row.get("route_polygon")
+            else compute_tapered_route_polygon(row),
+            axis=1,
+        )
+
+        enriched["colour"] = enriched["colour"].apply(
+            lambda value: value if isinstance(value, (list, tuple)) else [255, 255, 255]
         )
         active_has_geometry = (
             not active_routes.empty
@@ -685,14 +765,18 @@ def render_network_map(
             and active_routes["route_geometry"].notna().any()
         )
 
-        show_actual_routes = False
-        if show_live_overlay and (historical_has_paths or active_has_geometry):
-            show_actual_routes = st.toggle(
-                "Use actual route geometry",
-                value=False,
-                help="When available, plot the full ORS route instead of a straight line between depots.",
-                key=f"{toggle_key}_geometry",
-            )
+        active_layer = pdk.Layer(
+            "PolygonLayer",
+            data=enriched,
+            get_polygon="route_polygon",
+            get_fill_color="fill_colour",
+            stroked=False,
+            filled=True,
+            pickable=True,
+            extruded=False,
+            parameters={"depthTest": False},
+        )
+        overlay_layers.append(active_layer)
 
         if show_live_overlay and not historical_routes.empty:
             if show_actual_routes and historical_has_paths:

@@ -602,6 +602,26 @@ def test_prepare_profitability_route_data_tags_profitability():
         for tooltip in result["tooltip"]
     )
 
+    widths = result.set_index("id")["line_width"].to_dict()
+    assert widths[1] > widths[2] > widths[3]
+
+    polygons = result.set_index("id")["route_polygon"].to_dict()
+    first_polygon = polygons[1]
+    assert isinstance(first_polygon, list)
+    assert len(first_polygon) == 4
+    origin = [df.iloc[0]["origin_lon"], df.iloc[0]["origin_lat"]]
+    destination = [df.iloc[0]["dest_lon"], df.iloc[0]["dest_lat"]]
+    assert pytest.approx(first_polygon[0][0]) == origin[0]
+    assert pytest.approx(first_polygon[0][1]) == origin[1]
+    assert pytest.approx(first_polygon[2][0]) == destination[0]
+    assert pytest.approx(first_polygon[2][1]) == destination[1]
+    assert first_polygon[1] != origin
+    assert first_polygon[3] != destination
+
+    for fill in result["fill_colour"]:
+        assert len(fill) == 4
+        assert all(0 <= component <= 255 for component in fill)
+
 
 def test_prepare_route_map_data_filters_missing_coordinates():
     df = pd.DataFrame(
