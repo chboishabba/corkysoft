@@ -627,6 +627,10 @@ def render_network_map(
 ) -> None:
     st.markdown("### Live network overview")
 
+    show_live_overlay: bool = True
+    toggle_help = (
+        "Toggle the live overlay of active routes and truck telemetry without hiding the "
+        "base map."
     view_mode = st.radio(
         "Map view",
         ("Overlay", "Heatmap"),
@@ -634,6 +638,21 @@ def render_network_map(
         key=f"{toggle_key}_view_mode",
         help="Switch between the layered network overlay and an aggregated density heatmap.",
     )
+    if hasattr(st, "toggle"):
+        show_live_overlay = st.toggle(
+            "Show live network overlay",
+            value=True,
+            help=toggle_help,
+            key=toggle_key,
+        )
+    else:
+        # Older versions of Streamlit do not expose st.toggle; fall back to a checkbox.
+        show_live_overlay = st.checkbox(
+            "Show live network overlay",
+            value=True,
+            help=toggle_help,
+            key=toggle_key,
+        )
 
     base_map_layer = pdk.Layer(
         "TileLayer",
