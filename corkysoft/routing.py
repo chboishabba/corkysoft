@@ -32,6 +32,7 @@ COUNTRY_DEFAULT = os.environ.get("ORS_COUNTRY", "Australia")
 GEOCODE_BACKOFF = 0.2
 ROUTE_BACKOFF = 0.2
 FALLBACK_SPEED_KMH = 65.0
+SNAP_SEARCH_RADII = (50, 150, 300, 750, 1500)
 
 _ORS_CLIENT: Optional["ors.Client"] = None
 
@@ -166,37 +167,108 @@ def _is_routable_point_error(exc: Exception) -> bool:
     )
 
 
+def _extract_snap_coordinates(response: object) -> Optional[Tuple[float, float]]:
+    """Return coordinates from an ORS snap/nearest style *response*."""
+
+    if not response:
+        return None
+
+    locations: Optional[Iterable[object]] = None
+    if isinstance(response, dict):
+        locations = response.get("locations") or response.get("features")
+    elif isinstance(response, list):
+        locations = response
+
+    if not locations:
+        return None
+
+    first = next(iter(locations), None)
+    if not first:
+        return None
+
+    coords: Optional[Iterable[float]] = None
+    if isinstance(first, dict):
+        coords = (
+            first.get("location")
+            or first.get("coordinates")
+            or (
+                first.get("geometry", {}).get("coordinates")
+                if isinstance(first.get("geometry"), dict)
+                else None
+            )
+        )
+    elif isinstance(first, Sequence) and not isinstance(first, (str, bytes)):
+        coords = first
+
+    if not coords:
+        return None
+
+    coords_list = list(coords)
+    if len(coords_list) < 2:
+        return None
+
+    return float(coords_list[0]), float(coords_list[1])
+
+
 def _snap_to_road(
     client: "ors.Client",
     origin_geo: GeocodeResult,
     dest_geo: GeocodeResult,
+    *,
+    profile: str = "driving-car",
+    radii: Sequence[int] = SNAP_SEARCH_RADII,
 ) -> Optional[Tuple[List[List[float]], Dict[str, str]]]:
     """Attempt to snap unroutable coordinates to the nearest road."""
 
-    if not hasattr(client, "nearest"):
-        return None
-
     def _snap_single(lon: float, lat: float) -> Optional[Tuple[float, float]]:
-        try:
-            response = client.nearest(coordinates=[[lon, lat]], number=1)
-        except Exception:  # pragma: no cover - upstream failure handled by fallback
-            return None
-        features = None
-        if isinstance(response, dict):
-            features = response.get("features")
-        if not features and isinstance(response, list):
-            features = response
-        if not features:
-            return None
-        feature = features[0]
-        geometry = feature.get("geometry") if isinstance(feature, dict) else None
-        coords = geometry.get("coordinates") if isinstance(geometry, dict) else None
-        if not coords or len(coords) < 2:
-            return None
-        snapped_lon, snapped_lat = coords[0], coords[1]
-        if snapped_lon == lon and snapped_lat == lat:
-            return None
-        return float(snapped_lon), float(snapped_lat)
+        snap_method = getattr(client, "snap", None)
+        if callable(snap_method):
+            for radius in radii:
+                payload = {
+                    "locations": [[lon, lat]],
+                    "radius": radius,
+                    "format": "json",
+                }
+                try:
+                    response = snap_method(profile=profile, **payload)
+                except TypeError:
+                    try:
+                        response = snap_method(
+                            payload,
+                            profile=profile,
+                            format="json",
+                        )
+                    except Exception:  # pragma: no cover - defensive fallback
+                        continue
+                except Exception:  # pragma: no cover - upstream failure handled below
+                    continue
+
+                coords = _extract_snap_coordinates(response)
+                if coords is None:
+                    continue
+
+                snapped_lon, snapped_lat = coords
+                if snapped_lon == lon and snapped_lat == lat:
+                    return None
+                return snapped_lon, snapped_lat
+
+        nearest_method = getattr(client, "nearest", None)
+        if callable(nearest_method):
+            try:
+                response = nearest_method(coordinates=[[lon, lat]], number=1)
+            except Exception:  # pragma: no cover - upstream failure handled by fallback
+                return None
+
+            coords = _extract_snap_coordinates(response)
+            if coords is None:
+                return None
+
+            snapped_lon, snapped_lat = coords
+            if snapped_lon == lon and snapped_lat == lat:
+                return None
+            return snapped_lon, snapped_lat
+
+        return None
 
     notes: Dict[str, str] = {}
     snapped_origin = _snap_single(origin_geo.lon, origin_geo.lat)
@@ -233,20 +305,30 @@ def snap_coordinates_to_road(
     destination: Tuple[float, float],
     *,
     client: Optional["ors.Client"] = None,
+    profile: str = "driving-car",
+    radii: Sequence[int] = SNAP_SEARCH_RADII,
 ) -> PinSnapResult:
     """Return the nearest routable coordinates for *origin* and *destination*."""
 
     resolved_client = get_ors_client(client)
 
-    if not hasattr(resolved_client, "nearest"):
-        raise RuntimeError("Client does not support nearest endpoint search")
+    if not hasattr(resolved_client, "snap") and not hasattr(resolved_client, "nearest"):
+        raise RuntimeError(
+            "Client does not support snapping via 'snap' or 'nearest' endpoints"
+        )
 
     origin_lon, origin_lat = origin
     dest_lon, dest_lat = destination
     origin_geo = GeocodeResult(lon=float(origin_lon), lat=float(origin_lat))
     dest_geo = GeocodeResult(lon=float(dest_lon), lat=float(dest_lat))
 
-    snapped = _snap_to_road(resolved_client, origin_geo, dest_geo)
+    snapped = _snap_to_road(
+        resolved_client,
+        origin_geo,
+        dest_geo,
+        profile=profile,
+        radii=radii,
+    )
     notes: Dict[str, str] = {}
     changed = False
     if snapped is not None:
@@ -304,10 +386,12 @@ def route_distance(
         [dest_geo.lon, dest_geo.lat],
     ]
 
+    profile = "driving-car"
+
     try:
         route = resolved_client.directions(
             coordinates=coordinates,
-            profile="driving-car",
+            profile=profile,
             format="json",
         )
         summary = route["routes"][0]["summary"]
@@ -322,7 +406,12 @@ def route_distance(
             "ORS could not find a routable point for %s → %s: %s", origin, destination, exc
         )
 
-    snapped = _snap_to_road(resolved_client, origin_geo, dest_geo)
+    snapped = _snap_to_road(
+        resolved_client,
+        origin_geo,
+        dest_geo,
+        profile=profile,
+    )
     if snapped is not None:
         snapped_coords, snap_notes = snapped
         coordinates = snapped_coords
@@ -331,7 +420,7 @@ def route_distance(
         try:
             route = resolved_client.directions(
                 coordinates=coordinates,
-                profile="driving-car",
+                profile=profile,
                 format="json",
             )
             summary = route["routes"][0]["summary"]
