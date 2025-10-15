@@ -489,11 +489,23 @@ def build_route_map(
         """Return the ordered ``(lat, lon)`` points for ``row`` when available."""
 
         geojson_value = row.get("route_geojson")
-        if isinstance(geojson_value, str) and geojson_value.strip():
+        if isinstance(geojson_value, (bytes, bytearray, memoryview)):
             try:
-                return extract_route_path(geojson_value)
+                geojson_value = geojson_value.decode("utf-8")
             except Exception:
-                pass
+                geojson_value = None
+        if isinstance(geojson_value, dict):
+            try:
+                geojson_value = json.dumps(geojson_value)
+            except (TypeError, ValueError):
+                geojson_value = None
+        if isinstance(geojson_value, str):
+            geojson_str = geojson_value.strip()
+            if geojson_str:
+                try:
+                    return extract_route_path(geojson_str)
+                except Exception:
+                    pass
 
         path_value = row.get("route_path")
         if isinstance(path_value, str):
