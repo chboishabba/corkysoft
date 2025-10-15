@@ -70,6 +70,7 @@ from corkysoft.quote_service import (
     format_currency,
     find_client_matches,
     persist_quote,
+    snap_coordinates_to_road,
 )
 from corkysoft.schema import ensure_schema as ensure_core_schema
 
@@ -77,6 +78,7 @@ from corkysoft.schema import ensure_schema as ensure_core_schema
 DEFAULT_TARGET_MARGIN_PERCENT = 20.0
 _AUS_LAT_LON = (-25.2744, 133.7751)
 _PIN_NOTE = "Manual pin override used for routing"
+_HAVERSINE_MODAL_STATE_KEY = "quote_haversine_modal_ack"
 _ISOCHRONE_PALETTE = [
     "#636EFA",
     "#EF553B",
@@ -160,53 +162,77 @@ def _pin_coordinates(entry: Dict[str, Any]) -> tuple[float, float]:
     return (float(lon), float(lat))
 
 
+def _pin_lon_key(map_key: str) -> str:
+    return f"{map_key}_lon_input"
+
+
+def _pin_lat_key(map_key: str) -> str:
+    return f"{map_key}_lat_input"
+
+
 def _render_pin_picker(
     label: str,
     *,
     map_key: str,
     entry: Dict[str, Any],
 ) -> tuple[float, float]:
-    if folium is None or st_folium is None:
-        st.warning(
-            "Install 'folium' and 'streamlit-folium' to drop pins interactively. Enter coordinates manually instead."
-        )
-        lon, lat = _pin_coordinates(entry)
-        lat_input = st.number_input(
-            f"{label} latitude",
-            value=float(lat),
-            format="%.6f",
-            key=f"{map_key}_lat",
-        )
-        lon_input = st.number_input(
-            f"{label} longitude",
-            value=float(lon),
-            format="%.6f",
-            key=f"{map_key}_lon",
-        )
-        entry["lon"] = float(lon_input)
-        entry["lat"] = float(lat_input)
-        return float(lon_input), float(lat_input)
-
     lon, lat = _pin_coordinates(entry)
-    zoom = 12 if entry.get("lon") is not None and entry.get("lat") is not None else 4
-    map_obj = folium.Map(location=[lat, lon], zoom_start=zoom)
-    folium.Marker(
-        [lat, lon],
-        tooltip=f"{label} pin",
-        icon=folium.Icon(color="blue" if label == "Origin" else "red"),
-    ).add_to(map_obj)
-    click_result = st_folium(map_obj, height=320, key=map_key, returned_objects=[])
+    lon_key = _pin_lon_key(map_key)
+    lat_key = _pin_lat_key(map_key)
 
-    new_lon, new_lat = lon, lat
-    if isinstance(click_result, dict):
-        last_clicked = click_result.get("last_clicked") or {}
-        if "lat" in last_clicked and "lng" in last_clicked:
-            new_lat = float(last_clicked["lat"])
-            new_lon = float(last_clicked["lng"])
-    entry["lon"] = new_lon
-    entry["lat"] = new_lat
+    if lon_key not in st.session_state:
+        st.session_state[lon_key] = float(lon)
+    if lat_key not in st.session_state:
+        st.session_state[lat_key] = float(lat)
+
+    current_lon = float(st.session_state.get(lon_key, lon))
+    current_lat = float(st.session_state.get(lat_key, lat))
+
+    map_available = folium is not None and st_folium is not None
+    if map_available:
+        zoom = 12 if entry.get("lon") is not None and entry.get("lat") is not None else 4
+        map_obj = folium.Map(location=[current_lat, current_lon], zoom_start=zoom)
+        folium.Marker(
+            [current_lat, current_lon],
+            tooltip=f"{label} pin",
+            icon=folium.Icon(color="blue" if label == "Origin" else "red"),
+        ).add_to(map_obj)
+        click_result = st_folium(map_obj, height=320, key=map_key, returned_objects=[])
+
+        if isinstance(click_result, dict):
+            last_clicked = click_result.get("last_clicked") or {}
+            if "lat" in last_clicked and "lng" in last_clicked:
+                current_lat = float(last_clicked["lat"])
+                current_lon = float(last_clicked["lng"])
+                st.session_state[lat_key] = current_lat
+                st.session_state[lon_key] = current_lon
+    else:
+        st.warning(
+            "Install 'folium' and 'streamlit-folium' for interactive pin dropping. The latitude/longitude inputs below remain available for manual edits."
+        )
+
+    lat_input = st.number_input(
+        f"{label} latitude",
+        value=float(st.session_state[lat_key]),
+        format="%.6f",
+        key=lat_key,
+    )
+    lon_input = st.number_input(
+        f"{label} longitude",
+        value=float(st.session_state[lon_key]),
+        format="%.6f",
+        key=lon_key,
+    )
+
+    current_lat = float(lat_input)
+    current_lon = float(lon_input)
+    st.session_state[lat_key] = current_lat
+    st.session_state[lon_key] = current_lon
+
+    entry["lon"] = current_lon
+    entry["lat"] = current_lat
     st.session_state["quote_pin_override"] = st.session_state.get("quote_pin_override", {})
-    return new_lon, new_lat
+    return current_lon, current_lat
 
 # -----------------------------------------------------------------------------
 # Compatibility shim for metro-distance filtering across branches/modules
@@ -2039,6 +2065,12 @@ with connection_scope() as conn:
                         client_id=selected_client_id_final,
                         client_details=client_details_to_store,
                     )
+                    st.session_state["quote_pin_override"] = _initial_pin_state(result)
+                    st.session_state.pop(_HAVERSINE_MODAL_STATE_KEY, None)
+                    _set_query_params(view="Quote builder")
+                    st.success("Quote calculated. Review the breakdown below.")
+                    stored_inputs = quote_inputs
+                    quote_result = result
                     try:
                         result = calculate_quote(conn, quote_inputs)
                     except RuntimeError as exc:
@@ -2163,7 +2195,8 @@ with connection_scope() as conn:
             )
 
             pin_state = _ensure_pin_state(quote_result)
-            pin_related_notes = []
+            pin_related_notes: List[str] = []
+            straight_line_detected = False
             for notes in (
                 quote_result.origin_suggestions,
                 quote_result.destination_suggestions,
@@ -2174,16 +2207,99 @@ with connection_scope() as conn:
                     lowered = note.lower()
                     if _PIN_NOTE.lower() in lowered or "straight-line" in lowered:
                         pin_related_notes.append(note)
+                    if "straight-line" in lowered:
+                        straight_line_detected = True
+
+            if straight_line_detected and not st.session_state.get(
+                _HAVERSINE_MODAL_STATE_KEY, False
+            ):
+                with st.modal(
+                    "Routing fell back to a straight-line estimate",
+                    key="quote_haversine_modal",
+                ):
+                    st.warning(
+                        "OpenRouteService could not find a routable point within 350 m. "
+                        "The quote currently relies on a straight-line distance estimate."
+                    )
+                    st.caption(
+                        "Drop manual pins, click \"Snap pins to nearest road\", or edit the coordinates "
+                        "below before recalculating to improve accuracy."
+                    )
+                    if st.button(
+                        "Dismiss warning", key="quote_haversine_modal_dismiss"
+                    ):
+                        st.session_state[_HAVERSINE_MODAL_STATE_KEY] = True
+                        _rerun_app()
 
             st.markdown("#### Manual pins for routing")
             if pin_related_notes and not pin_state.get("enabled", False):
                 st.warning(
-                    "Routing relied on snapping or a straight-line fallback. Drop pins below to improve accuracy."
+                    "Routing relied on snapping or a straight-line fallback. Drop pins or use "
+                    '"Snap pins to nearest road" to improve accuracy before recalculating.'
                 )
             else:
                 st.caption(
                     "Drop a pin for each address when ORS cannot find a routable point within 350 m."
                 )
+            st.caption(
+                "Click the maps or edit the latitude/longitude values to fine-tune the override pins."
+            )
+
+            control_cols = st.columns([3, 2])
+            with control_cols[1]:
+                snap_feedback = st.empty()
+                snap_clicked = st.button(
+                    "Snap pins to nearest road",
+                    type="secondary",
+                    key="quote_snap_to_nearest_road",
+                    help=(
+                        "Use OpenRouteService's nearest endpoint to move each pin onto the closest "
+                        "routable road before recalculating."
+                    ),
+                )
+            if snap_clicked:
+                origin_lon_default, origin_lat_default = _pin_coordinates(
+                    pin_state["origin"]
+                )
+                dest_lon_default, dest_lat_default = _pin_coordinates(
+                    pin_state["destination"]
+                )
+                try:
+                    snap_result = snap_coordinates_to_road(
+                        (origin_lon_default, origin_lat_default),
+                        (dest_lon_default, dest_lat_default),
+                    )
+                except RuntimeError as exc:
+                    snap_feedback.error(f"Unable to snap pins: {exc}")
+                else:
+                    pin_state["origin"] = {
+                        "lon": snap_result.origin[0],
+                        "lat": snap_result.origin[1],
+                    }
+                    pin_state["destination"] = {
+                        "lon": snap_result.destination[0],
+                        "lat": snap_result.destination[1],
+                    }
+                    st.session_state[_pin_lon_key("quote_origin_pin_map")] = float(
+                        snap_result.origin[0]
+                    )
+                    st.session_state[_pin_lat_key("quote_origin_pin_map")] = float(
+                        snap_result.origin[1]
+                    )
+                    st.session_state[_pin_lon_key("quote_destination_pin_map")] = float(
+                        snap_result.destination[0]
+                    )
+                    st.session_state[_pin_lat_key("quote_destination_pin_map")] = float(
+                        snap_result.destination[1]
+                    )
+                    if snap_result.changed:
+                        snap_feedback.success(
+                            "Pins snapped to the nearest routable road."
+                        )
+                    else:
+                        snap_feedback.info(
+                            "Pins already align with the nearest routable road."
+                        )
 
             pin_cols = st.columns(2)
             with pin_cols[0]:
@@ -2242,6 +2358,7 @@ with connection_scope() as conn:
                     pin_override_state = _initial_pin_state(manual_result)
                     pin_override_state["enabled"] = True
                     st.session_state["quote_pin_override"] = pin_override_state
+                    st.session_state.pop(_HAVERSINE_MODAL_STATE_KEY, None)
                     st.success("Quote recalculated using manual pins.")
                     _set_query_params(view="Quote builder")
                     _rerun_app()
@@ -2383,6 +2500,7 @@ with connection_scope() as conn:
                 st.session_state.pop("quote_manual_override_enabled", None)
                 st.session_state.pop("quote_manual_override_amount", None)
                 st.session_state.pop("quote_pin_override", None)
+                st.session_state.pop(_HAVERSINE_MODAL_STATE_KEY, None)
                 _set_query_params(view="Quote builder")
                 _rerun_app()
 

@@ -45,6 +45,7 @@ from corkysoft.quote_service import (
     format_client_display,
     persist_quote,
     route_distance,
+    snap_coordinates_to_road,
 )
 from corkysoft.au_address import GeocodeResult
 
@@ -611,6 +612,89 @@ def test_route_distance_falls_back_to_haversine(monkeypatch: pytest.MonkeyPatch)
     assert duration_hr == pytest.approx(expected_duration)
     assert "Used straight-line estimate due to missing road network" in resolved_origin.suggestions
     assert "Used straight-line estimate due to missing road network" in resolved_dest.suggestions
+
+
+def test_snap_coordinates_to_road_adjusts_points(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.calls: list[list[list[float]]] = []
+
+        def nearest(self, *, coordinates, number):  # type: ignore[override]
+            self.calls.append(coordinates)
+            lon, lat = coordinates[0]
+            return {
+                "features": [
+                    {
+                        "geometry": {
+                            "coordinates": [lon + 0.01, lat + 0.02],
+                        }
+                    }
+                ]
+            }
+
+    client_instance = _Client()
+    monkeypatch.setattr(
+        "corkysoft.quote_service.get_ors_client",
+        lambda client=None: client_instance,
+    )
+
+    result = snap_coordinates_to_road((150.0, -33.0), (151.0, -34.0))
+
+    assert client_instance.calls and len(client_instance.calls) == 2
+    assert result.changed is True
+    assert result.notes == {
+        "origin": "Snapped to nearest routable road",
+        "destination": "Snapped to nearest routable road",
+    }
+    assert result.origin[0] == pytest.approx(150.01)
+    assert result.origin[1] == pytest.approx(-32.98)
+    assert result.destination[0] == pytest.approx(151.01)
+    assert result.destination[1] == pytest.approx(-33.98)
+
+
+def test_snap_coordinates_to_road_handles_unchanged_points(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Client:
+        def nearest(self, *, coordinates, number):  # type: ignore[override]
+            lon, lat = coordinates[0]
+            return {
+                "features": [
+                    {"geometry": {"coordinates": [lon, lat]}},
+                ]
+            }
+
+    client_instance = _Client()
+    monkeypatch.setattr(
+        "corkysoft.quote_service.get_ors_client",
+        lambda client=None: client_instance,
+    )
+
+    result = snap_coordinates_to_road((150.0, -33.0), (151.0, -34.0))
+
+    assert result.changed is False
+    assert result.notes == {}
+    assert result.origin[0] == pytest.approx(150.0)
+    assert result.origin[1] == pytest.approx(-33.0)
+    assert result.destination[0] == pytest.approx(151.0)
+    assert result.destination[1] == pytest.approx(-34.0)
+
+
+def test_snap_coordinates_to_road_requires_nearest_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Client:
+        pass
+
+    monkeypatch.setattr(
+        "corkysoft.quote_service.get_ors_client",
+        lambda client=None: _Client(),
+    )
+
+    with pytest.raises(RuntimeError, match="nearest"):
+        snap_coordinates_to_road((150.0, -33.0), (151.0, -34.0))
 
 
 def test_load_quotes_returns_saved_quote() -> None:
