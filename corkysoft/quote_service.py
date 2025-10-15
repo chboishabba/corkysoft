@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 _ORS_CLIENT: Optional["ors.Client"] = None
 POSTCODE_RE = re.compile(r"\b(\d{4})\b")
+STATE_RE = re.compile(r"\b(ACT|NSW|NT|QLD|SA|TAS|VIC|WA)\b", re.IGNORECASE)
 
 
 def get_ors_client(client: Optional[ors.Client] = None) -> ors.Client:
@@ -138,6 +139,25 @@ def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
     return any(row[1] == column for row in rows)
 
 
+def _ensure_column(
+    conn: sqlite3.Connection,
+    table: str,
+    column: str,
+    definition: str,
+) -> None:
+    """Add *column* to *table* if it is missing.
+
+    This helper is intentionally simple and only supports ``ALTER TABLE``
+    additions which are backwards compatible with existing data.  It keeps the
+    quote persistence logic resilient when existing installations are running
+    against databases created before postcode/state fields were introduced.
+    """
+
+    if _column_exists(conn, table, column):
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def _extract_postcode(*values: Optional[str]) -> Optional[str]:
     for value in values:
         if not value:
@@ -145,6 +165,16 @@ def _extract_postcode(*values: Optional[str]) -> Optional[str]:
         match = POSTCODE_RE.search(value)
         if match:
             return match.group(1)
+    return None
+
+
+def _extract_state(*values: Optional[str]) -> Optional[str]:
+    for value in values:
+        if not value:
+            continue
+        match = STATE_RE.search(value)
+        if match:
+            return match.group(1).upper()
     return None
 
 
@@ -157,15 +187,20 @@ def _ensure_address_record(
     country: str,
     *,
     postcode: Optional[str] = None,
+    state: Optional[str] = None,
 ) -> Optional[int]:
     if not _table_exists(conn, "addresses"):
         return None
+
+    _ensure_column(conn, "addresses", "state", "TEXT")
+    _ensure_column(conn, "addresses", "postcode", "TEXT")
 
     normalized = normalize_place(resolved or raw_input)
     if not normalized:
         normalized = normalize_place(raw_input)
 
     has_postcode = _column_exists(conn, "addresses", "postcode")
+    has_state = _column_exists(conn, "addresses", "state")
 
     row = conn.execute(
         """
@@ -177,57 +212,47 @@ def _ensure_address_record(
     ).fetchone()
     if row is not None:
         address_id = int(row[0])
+        update_fields = ["lon = COALESCE(?, lon)", "lat = COALESCE(?, lat)"]
+        params: List[Optional[object]] = [lon, lat]
+        if has_state:
+            update_fields.append("state = COALESCE(?, state)")
+            params.append(state)
         if has_postcode:
-            conn.execute(
-                """
-                UPDATE addresses
-                SET lon = COALESCE(?, lon),
-                    lat = COALESCE(?, lat),
-                    postcode = COALESCE(?, postcode)
-                WHERE id = ?
-                """,
-                (lon, lat, postcode, address_id),
-            )
-        else:
-            conn.execute(
-                "UPDATE addresses SET lon = COALESCE(?, lon), lat = COALESCE(?, lat) WHERE id = ?",
-                (lon, lat, address_id),
-            )
+            update_fields.append("postcode = COALESCE(?, postcode)")
+            params.append(postcode)
+        params.append(address_id)
+        conn.execute(
+            f"UPDATE addresses SET {', '.join(update_fields)} WHERE id = ?",
+            tuple(params),
+        )
         return address_id
 
+    columns = ["raw_input", "normalized", "city", "country", "lon", "lat"]
+    values: List[Optional[object]] = [
+        raw_input,
+        normalized,
+        resolved or normalized,
+        country,
+        lon,
+        lat,
+    ]
+    if has_state:
+        columns.append("state")
+        values.append(state)
     if has_postcode:
-        cursor = conn.execute(
-            """
-            INSERT INTO addresses (
-                raw_input, normalized, city, country, lon, lat, postcode
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                raw_input,
-                normalized,
-                resolved or normalized,
-                country,
-                lon,
-                lat,
-                postcode,
-            ),
-        )
-    else:
-        cursor = conn.execute(
-            """
-            INSERT INTO addresses (
-                raw_input, normalized, city, country, lon, lat
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                raw_input,
-                normalized,
-                resolved or normalized,
-                country,
-                lon,
-                lat,
-            ),
-        )
+        columns.append("postcode")
+        values.append(postcode)
+
+    placeholders = ", ".join(["?"] * len(columns))
+    column_list = ", ".join(columns)
+    cursor = conn.execute(
+        f"""
+        INSERT INTO addresses (
+            {column_list}
+        ) VALUES ({placeholders})
+        """,
+        tuple(values),
+    )
     return int(cursor.lastrowid)
 
 
@@ -241,9 +266,16 @@ def _insert_historical_job(
     destination_address_id: Optional[int],
     origin_postcode: Optional[str],
     destination_postcode: Optional[str],
+    origin_state: Optional[str],
+    destination_state: Optional[str],
 ) -> None:
     if not _table_exists(conn, "historical_jobs"):
         return
+
+    _ensure_column(conn, "historical_jobs", "origin_postcode", "TEXT")
+    _ensure_column(conn, "historical_jobs", "destination_postcode", "TEXT")
+    _ensure_column(conn, "historical_jobs", "origin_state", "TEXT")
+    _ensure_column(conn, "historical_jobs", "destination_state", "TEXT")
 
     cubic_m = inputs.cubic_m
     price_per_m3: Optional[float]
@@ -258,37 +290,67 @@ def _insert_historical_job(
     )
     corridor_display = f"{origin_label} → {destination_label}"
 
+    has_origin_state = _column_exists(conn, "historical_jobs", "origin_state")
+    has_destination_state = _column_exists(
+        conn, "historical_jobs", "destination_state"
+    )
+
+    columns = [
+        "job_date",
+        "client",
+        "corridor_display",
+        "price_per_m3",
+        "revenue_total",
+        "revenue",
+        "volume_m3",
+        "volume",
+        "distance_km",
+        "final_cost",
+        "origin",
+        "destination",
+        "origin_postcode",
+        "destination_postcode",
+        "origin_address_id",
+        "destination_address_id",
+        "created_at",
+        "updated_at",
+    ]
+    values: List[Optional[object]] = [
+        inputs.quote_date.isoformat(),
+        None,
+        corridor_display,
+        price_per_m3,
+        stored_amount,
+        stored_amount,
+        cubic_m,
+        cubic_m,
+        result.distance_km,
+        result.total_before_margin,
+        origin_label,
+        destination_label,
+        origin_postcode,
+        destination_postcode,
+        origin_address_id,
+        destination_address_id,
+        created_at,
+        created_at,
+    ]
+
+    if has_origin_state:
+        columns.append("origin_state")
+        values.append(origin_state)
+    if has_destination_state:
+        columns.append("destination_state")
+        values.append(destination_state)
+
+    placeholders = ", ".join(["?"] * len(columns))
     conn.execute(
-        """
+        f"""
         INSERT INTO historical_jobs (
-            job_date, client, corridor_display,
-            price_per_m3, revenue_total, revenue,
-            volume_m3, volume, distance_km, final_cost,
-            origin, destination, origin_postcode, destination_postcode,
-            origin_address_id, destination_address_id,
-            created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            {', '.join(columns)}
+        ) VALUES ({placeholders})
         """,
-        (
-            inputs.quote_date.isoformat(),
-            None,
-            corridor_display,
-            price_per_m3,
-            stored_amount,
-            stored_amount,
-            cubic_m,
-            cubic_m,
-            result.distance_km,
-            result.total_before_margin,
-            origin_label,
-            destination_label,
-            origin_postcode,
-            destination_postcode,
-            origin_address_id,
-            destination_address_id,
-            created_at,
-            created_at,
-        ),
+        tuple(values),
     )
 
 
@@ -1003,6 +1065,19 @@ def persist_quote(
         *(result.destination_suggestions or []),
     )
 
+    origin_state = _extract_state(
+        result.origin_resolved,
+        inputs.origin,
+        *(result.origin_candidates or []),
+        *(result.origin_suggestions or []),
+    )
+    destination_state = _extract_state(
+        result.destination_resolved,
+        inputs.destination,
+        *(result.destination_candidates or []),
+        *(result.destination_suggestions or []),
+    )
+
     origin_address_id = _ensure_address_record(
         conn,
         inputs.origin,
@@ -1011,6 +1086,7 @@ def persist_quote(
         result.origin_lat,
         inputs.country,
         postcode=origin_postcode,
+        state=origin_state,
     )
     destination_address_id = _ensure_address_record(
         conn,
@@ -1020,6 +1096,7 @@ def persist_quote(
         result.dest_lat,
         inputs.country,
         postcode=destination_postcode,
+        state=destination_state,
     )
     _insert_historical_job(
         conn,
@@ -1031,6 +1108,8 @@ def persist_quote(
         destination_address_id,
         origin_postcode,
         destination_postcode,
+        origin_state,
+        destination_state,
     )
     conn.commit()
     return quote_rowid

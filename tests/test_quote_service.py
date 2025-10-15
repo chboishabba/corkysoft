@@ -184,6 +184,14 @@ def test_persist_quote_records_postcodes() -> None:
     ]
     assert address_postcodes == ["4000", "2000"]
 
+    address_states = [
+        row[0]
+        for row in conn.execute(
+            "SELECT state FROM addresses ORDER BY id"
+        ).fetchall()
+    ]
+    assert address_states == ["QLD", "NSW"]
+
 
 def test_build_summary_mentions_manual_amount() -> None:
     inputs = _quote_input()
