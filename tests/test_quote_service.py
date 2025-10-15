@@ -1,6 +1,6 @@
 import sqlite3
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 import types
 from typing import List, Optional
@@ -35,11 +35,14 @@ import corkysoft.quote_service as quote_service
 
 from corkysoft.quote_service import (
     PRICING_MODELS,
+    ClientDetails,
     QuoteInput,
     QuoteResult,
     build_summary,
     calculate_quote,
     ensure_schema,
+    find_client_matches,
+    format_client_display,
     persist_quote,
     route_distance,
 )
@@ -149,6 +152,16 @@ def test_persist_quote_creates_historical_job_entry() -> None:
     address_count = conn.execute("SELECT COUNT(*) FROM addresses").fetchone()[0]
     assert address_count == 2
 
+    hist_client = conn.execute(
+        "SELECT client, client_id FROM historical_jobs"
+    ).fetchone()
+    assert hist_client == ("Quote builder", None)
+
+    quote_client = conn.execute(
+        "SELECT client_display, client_id FROM quotes"
+    ).fetchone()
+    assert quote_client == ("Quote builder", None)
+
 
 def test_persist_quote_records_postcodes() -> None:
     conn = sqlite3.connect(":memory:")
@@ -191,6 +204,124 @@ def test_persist_quote_records_postcodes() -> None:
         ).fetchall()
     ]
     assert address_states == ["QLD", "NSW"]
+
+
+def test_persist_quote_creates_client_record() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    ensure_dashboard_tables(conn)
+
+    inputs = _quote_input()
+    inputs.client_details = ClientDetails(
+        first_name="Taylor",
+        last_name="Jordan",
+        email="taylor@example.com",
+        phone="0412000123",
+    )
+    result = _quote_result()
+    result.summary_text = build_summary(inputs, result)
+
+    rowid = persist_quote(conn, inputs, result)
+
+    client_row = conn.execute(
+        "SELECT id, first_name, last_name, email, phone FROM clients"
+    ).fetchone()
+    assert client_row is not None
+    client_id, first_name, last_name, email, phone = client_row
+    assert first_name == "Taylor"
+    assert last_name == "Jordan"
+    assert email == "taylor@example.com"
+    assert phone == "0412000123"
+    assert inputs.client_id == client_id
+
+    quote_client = conn.execute(
+        "SELECT client_id, client_display FROM quotes WHERE id = ?",
+        (rowid,),
+    ).fetchone()
+    assert quote_client == (client_id, "Taylor Jordan")
+
+    hist_client = conn.execute(
+        "SELECT client, client_id FROM historical_jobs"
+    ).fetchone()
+    assert hist_client == ("Taylor Jordan", client_id)
+
+
+def test_persist_quote_requires_client_identity() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    ensure_dashboard_tables(conn)
+
+    inputs = _quote_input()
+    inputs.client_details = ClientDetails(email="noname@example.com")
+    result = _quote_result()
+    result.summary_text = build_summary(inputs, result)
+
+    with pytest.raises(ValueError, match="Client requires a company name"):
+        persist_quote(conn, inputs, result)
+
+
+@pytest.mark.parametrize(
+    "details",
+    [
+        ClientDetails(first_name="Taylor"),
+        ClientDetails(last_name="Jordan"),
+    ],
+)
+def test_persist_quote_requires_both_names_without_company(
+    details: ClientDetails,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    ensure_dashboard_tables(conn)
+
+    inputs = _quote_input()
+    inputs.client_details = details
+    result = _quote_result()
+    result.summary_text = build_summary(inputs, result)
+
+    with pytest.raises(ValueError, match="Client requires a company name"):
+        persist_quote(conn, inputs, result)
+
+
+def test_find_client_matches_detects_phone() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    timestamp = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        INSERT INTO clients (
+            first_name, last_name, company_name, email, phone,
+            address_line1, address_line2, city, state, postcode,
+            country, notes, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "Jordan",
+            "Miles",
+            None,
+            "jordan@example.com",
+            "0412000123",
+            "1 Sample St",
+            None,
+            "Brisbane",
+            "QLD",
+            "4000",
+            "Australia",
+            None,
+            timestamp,
+            timestamp,
+        ),
+    )
+
+    matches = find_client_matches(conn, ClientDetails(phone="(0412) 000 123"))
+    assert matches
+    assert matches[0].id == 1
+    assert "matching phone" in matches[0].reason
+
+
+def test_format_client_display_prefers_company() -> None:
+    display = format_client_display("A", "B", "Acme Pty Ltd")
+    assert display == "Acme Pty Ltd"
 
 
 def test_build_summary_mentions_manual_amount() -> None:
@@ -488,6 +619,7 @@ def test_load_quotes_returns_saved_quote() -> None:
     ensure_dashboard_tables(conn)
 
     inputs = _quote_input()
+    inputs.client_details = ClientDetails(company_name="Acme Logistics")
     result = _quote_result()
     result.manual_quote = 1100.0
     result.summary_text = build_summary(inputs, result)
@@ -501,7 +633,7 @@ def test_load_quotes_returns_saved_quote() -> None:
     assert mapping.volume in {"volume_m3", "volume"}
 
     row = df.iloc[0]
-    assert row["client_display"] == "Quote builder"
+    assert row["client_display"] == "Acme Logistics"
     assert row["corridor_display"] == "Origin → Destination"
     assert row["price_per_m3"] == pytest.approx(result.manual_quote / inputs.cubic_m)
     assert row["final_cost_total"] == pytest.approx(result.total_before_margin)

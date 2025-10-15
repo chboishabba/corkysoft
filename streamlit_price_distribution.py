@@ -53,18 +53,22 @@ from analytics.optimizer import (
 )
 from analytics.live_data import (
     TRUCK_STATUS_COLOURS,
+    build_live_heatmap_source,
     load_active_routes,
     load_truck_positions,
 )
 from corkysoft.quote_service import (
     COUNTRY_DEFAULT,
     DEFAULT_MODIFIERS,
+    ClientDetails,
     build_summary,
     QuoteInput,
     QuoteResult,
     calculate_quote,
     ensure_schema as ensure_quote_schema,
+    format_client_display,
     format_currency,
+    find_client_matches,
     persist_quote,
 )
 from corkysoft.schema import ensure_schema as ensure_core_schema
@@ -584,18 +588,22 @@ def render_network_map(
 ) -> None:
     st.markdown("### Live network overview")
 
-    show_live_overlay = st.toggle(
-        "Show live network overlay",
-        value=True,
-        help=(
-            "Toggle the live overlay of active routes and truck telemetry without "
-            "hiding the base map."
-        ),
-        key=toggle_key,
+    view_mode = st.radio(
+        "Map view",
+        ("Overlay", "Heatmap"),
+        horizontal=True,
+        key=f"{toggle_key}_view_mode",
+        help="Switch between the layered network overlay and an aggregated density heatmap.",
     )
 
-    if historical_routes.empty and trucks.empty and active_routes.empty:
-        st.info("No geocoded historical jobs or live telemetry available to plot yet.")
+    base_map_layer = pdk.Layer(
+        "TileLayer",
+        data="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        min_zoom=0,
+        max_zoom=19,
+        tile_size=256,
+        attribution="© OpenStreetMap contributors",
+    )
 
     truck_data = trucks.copy()
     if not truck_data.empty:
@@ -607,145 +615,208 @@ def render_network_map(
             lambda row: f"{row['truck_id']} ({row['status']})", axis=1
         )
 
-    base_map_layer = pdk.Layer(
-        "TileLayer",
-        data="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-        min_zoom=0,
-        max_zoom=19,
-        tile_size=256,
-        attribution="© OpenStreetMap contributors",
-    )
-
-    overlay_layers: list[pdk.Layer] = []
-
-    if show_live_overlay and not historical_routes.empty:
-        history_layer = pdk.Layer(
-            "LineLayer",
-            data=historical_routes,
-            get_source_position="[origin_lon, origin_lat]",
-            get_target_position="[dest_lon, dest_lat]",
-            get_color="colour",
-            get_width="line_width",
-            pickable=True,
-            opacity=0.4,
-        )
-        overlay_layers.append(history_layer)
-
-    if show_live_overlay and not active_routes.empty:
-        if "job_id" in active_routes.columns and not historical_routes.empty:
-            enriched = active_routes.merge(
-                historical_routes[
-                    ["id", "colour", "profit_band", "profitability_status", "tooltip"]
-                ],
-                left_on="job_id",
-                right_on="id",
-                how="left",
-                suffixes=("", "_hist"),
-            )
-            if "colour" not in enriched.columns and "colour_hist" in enriched.columns:
-                enriched["colour"] = enriched["colour_hist"]
-            if "profit_band" not in enriched.columns and "profit_band_hist" in enriched.columns:
-                enriched["profit_band"] = enriched["profit_band_hist"]
-            if (
-                "profitability_status" not in enriched.columns
-                and "profitability_status_hist" in enriched.columns
-            ):
-                enriched["profitability_status"] = enriched["profitability_status_hist"]
-            if "tooltip" not in enriched.columns and "tooltip_hist" in enriched.columns:
-                enriched["tooltip"] = enriched["tooltip_hist"]
-        else:
-            enriched = active_routes.copy()
-            enriched["colour"] = [PROFITABILITY_COLOURS["Unknown"]] * len(enriched)
-            enriched["profit_band"] = "Unknown"
-            enriched["profitability_status"] = "Unknown"
-            enriched["tooltip"] = "Active route"
-
-        enriched["colour"] = enriched["colour"].apply(
-            lambda value: value if isinstance(value, (list, tuple)) else [255, 255, 255]
-        )
-        enriched["tooltip"] = enriched.apply(
-            lambda row: "Truck {} ({})".format(
-                row["truck_id"],
-                row.get("profitability_status")
-                or row.get("profit_band", "Unknown"),
+    if view_mode == "Overlay":
+        show_live_overlay = st.toggle(
+            "Show live network overlay",
+            value=True,
+            help=(
+                "Toggle the live overlay of active routes and truck telemetry without "
+                "hiding the base map."
             ),
-            axis=1,
+            key=toggle_key,
         )
 
-        active_layer = pdk.Layer(
-            "LineLayer",
-            data=enriched,
-            get_source_position="[origin_lon, origin_lat]",
-            get_target_position="[dest_lon, dest_lat]",
-            get_color="colour",
-            get_width=5,
-            pickable=True,
-            opacity=0.9,
-        )
-        overlay_layers.append(active_layer)
+        if historical_routes.empty and trucks.empty and active_routes.empty:
+            st.info("No geocoded historical jobs or live telemetry available to plot yet.")
 
-    if show_live_overlay and not truck_data.empty:
-        trucks_layer = pdk.Layer(
-            "ScatterplotLayer",
-            data=truck_data,
-            get_position="[lon, lat]",
-            get_fill_color="colour",
-            get_radius=800,
-            pickable=True,
-        )
-        overlay_layers.append(trucks_layer)
+        overlay_layers: list[pdk.Layer] = []
 
-        text_layer = pdk.Layer(
-            "TextLayer",
-            data=truck_data,
-            get_position="[lon, lat]",
-            get_text="truck_id",
-            get_color="colour",
-            get_size=12,
-            size_units="meters",
-            size_scale=16,
-            get_alignment_baseline="bottom",
-        )
-        overlay_layers.append(text_layer)
-
-    view_df_candidates: list[pd.DataFrame] = []
-    if not historical_routes.empty:
-        view_df_candidates.append(
-            historical_routes.rename(columns={"origin_lat": "lat", "origin_lon": "lon"})[
-                ["lat", "lon"]
-            ]
-        )
-    if not truck_data.empty:
-        view_df_candidates.append(truck_data[["lat", "lon"]])
-    if not active_routes.empty:
-        view_df_candidates.append(
-            active_routes.rename(columns={"origin_lat": "lat", "origin_lon": "lon"})[
-                ["lat", "lon"]
-            ]
-        )
-    view_df = pd.concat(view_df_candidates) if view_df_candidates else pd.DataFrame()
-
-    tooltip = None
-    if show_live_overlay and overlay_layers:
-        tooltip = {"html": "<b>{tooltip}</b>", "style": {"color": "white"}}
-
-    st.pydeck_chart(
-        pdk.Deck(
-            layers=[base_map_layer, *overlay_layers],
-            initial_view_state=_initial_view_state(view_df),
-            tooltip=tooltip,
-            map_style=None,
-        )
-    )
-
-    if show_live_overlay and overlay_layers:
-        legend_cols = st.columns(len(PROFITABILITY_COLOURS))
-        for (band, colour), column in zip(PROFITABILITY_COLOURS.items(), legend_cols):
-            colour_hex = "#" + "".join(f"{int(c):02x}" for c in colour)
-            column.markdown(
-                f"<div style='color:{colour_hex}; font-weight:bold'>{band}</div>",
-                unsafe_allow_html=True,
+        if show_live_overlay and not historical_routes.empty:
+            history_layer = pdk.Layer(
+                "LineLayer",
+                data=historical_routes,
+                get_source_position="[origin_lon, origin_lat]",
+                get_target_position="[dest_lon, dest_lat]",
+                get_color="colour",
+                get_width="line_width",
+                pickable=True,
+                opacity=0.4,
             )
+            overlay_layers.append(history_layer)
+
+        if show_live_overlay and not active_routes.empty:
+            if "job_id" in active_routes.columns and not historical_routes.empty:
+                enriched = active_routes.merge(
+                    historical_routes[
+                        ["id", "colour", "profit_band", "profitability_status", "tooltip"]
+                    ],
+                    left_on="job_id",
+                    right_on="id",
+                    how="left",
+                    suffixes=("", "_hist"),
+                )
+                if "colour" not in enriched.columns and "colour_hist" in enriched.columns:
+                    enriched["colour"] = enriched["colour_hist"]
+                if (
+                    "profit_band" not in enriched.columns
+                    and "profit_band_hist" in enriched.columns
+                ):
+                    enriched["profit_band"] = enriched["profit_band_hist"]
+                if (
+                    "profitability_status" not in enriched.columns
+                    and "profitability_status_hist" in enriched.columns
+                ):
+                    enriched["profitability_status"] = enriched["profitability_status_hist"]
+                if "tooltip" not in enriched.columns and "tooltip_hist" in enriched.columns:
+                    enriched["tooltip"] = enriched["tooltip_hist"]
+            else:
+                enriched = active_routes.copy()
+                enriched["colour"] = [PROFITABILITY_COLOURS["Unknown"]] * len(enriched)
+                enriched["profit_band"] = "Unknown"
+                enriched["profitability_status"] = "Unknown"
+                enriched["tooltip"] = "Active route"
+
+            enriched["colour"] = enriched["colour"].apply(
+                lambda value: value if isinstance(value, (list, tuple)) else [255, 255, 255]
+            )
+            enriched["tooltip"] = enriched.apply(
+                lambda row: "Truck {} ({})".format(
+                    row["truck_id"],
+                    row.get("profitability_status")
+                    or row.get("profit_band", "Unknown"),
+                ),
+                axis=1,
+            )
+
+            active_layer = pdk.Layer(
+                "LineLayer",
+                data=enriched,
+                get_source_position="[origin_lon, origin_lat]",
+                get_target_position="[dest_lon, dest_lat]",
+                get_color="colour",
+                get_width=5,
+                pickable=True,
+                opacity=0.9,
+            )
+            overlay_layers.append(active_layer)
+
+        if show_live_overlay and not truck_data.empty:
+            trucks_layer = pdk.Layer(
+                "ScatterplotLayer",
+                data=truck_data,
+                get_position="[lon, lat]",
+                get_fill_color="colour",
+                get_radius=800,
+                pickable=True,
+            )
+            overlay_layers.append(trucks_layer)
+
+            text_layer = pdk.Layer(
+                "TextLayer",
+                data=truck_data,
+                get_position="[lon, lat]",
+                get_text="truck_id",
+                get_color="colour",
+                get_size=12,
+                size_units="meters",
+                size_scale=16,
+                get_alignment_baseline="bottom",
+            )
+            overlay_layers.append(text_layer)
+
+        view_df_candidates: list[pd.DataFrame] = []
+        if not historical_routes.empty:
+            view_df_candidates.append(
+                historical_routes.rename(columns={"origin_lat": "lat", "origin_lon": "lon"})[
+                    ["lat", "lon"]
+                ]
+            )
+        if not truck_data.empty:
+            view_df_candidates.append(truck_data[["lat", "lon"]])
+        if not active_routes.empty:
+            view_df_candidates.append(
+                active_routes.rename(columns={"origin_lat": "lat", "origin_lon": "lon"})[
+                    ["lat", "lon"]
+                ]
+            )
+        view_df = pd.concat(view_df_candidates) if view_df_candidates else pd.DataFrame()
+
+        tooltip = None
+        if show_live_overlay and overlay_layers:
+            tooltip = {"html": "<b>{tooltip}</b>", "style": {"color": "white"}}
+
+        st.pydeck_chart(
+            pdk.Deck(
+                layers=[base_map_layer, *overlay_layers],
+                initial_view_state=_initial_view_state(view_df),
+                tooltip=tooltip,
+                map_style=None,
+            )
+        )
+
+        if show_live_overlay and overlay_layers:
+            legend_cols = st.columns(len(PROFITABILITY_COLOURS))
+            for (band, colour), column in zip(PROFITABILITY_COLOURS.items(), legend_cols):
+                colour_hex = "#" + "".join(f"{int(c):02x}" for c in colour)
+                column.markdown(
+                    f"<div style='color:{colour_hex}; font-weight:bold'>{band}</div>",
+                    unsafe_allow_html=True,
+                )
+    else:
+        if historical_routes.empty and trucks.empty and active_routes.empty:
+            st.info("No geocoded historical jobs or live telemetry available to plot yet.")
+            return
+
+        radius_pixels = st.slider(
+            "Heatmap radius",
+            min_value=20,
+            max_value=150,
+            value=60,
+            step=10,
+            key=f"{toggle_key}_heatmap_radius",
+            help="Adjust how far each point influence spreads across the heatmap.",
+        )
+        intensity = st.slider(
+            "Heatmap intensity",
+            min_value=0.2,
+            max_value=4.0,
+            value=1.0,
+            step=0.2,
+            key=f"{toggle_key}_heatmap_intensity",
+            help="Increase to emphasise clusters of live activity.",
+        )
+
+        heatmap_source = build_live_heatmap_source(historical_routes, active_routes, truck_data)
+
+        if heatmap_source.empty:
+            st.info(
+                "Live heatmap requires geocoded historical routes, active routes, or truck telemetry."
+            )
+            return
+
+        heatmap_layer = pdk.Layer(
+            "HeatmapLayer",
+            data=heatmap_source,
+            get_position="[lon, lat]",
+            aggregation="SUM",
+            get_weight="weight",
+            radiusPixels=radius_pixels,
+            intensity=intensity,
+        )
+
+        st.pydeck_chart(
+            pdk.Deck(
+                layers=[base_map_layer, heatmap_layer],
+                initial_view_state=_initial_view_state(heatmap_source),
+                tooltip=None,
+                map_style=None,
+            )
+        )
+
+        st.caption(
+            "Historical endpoints provide the base density, active routes carry more weight, "
+            "and live trucks are boosted the most so current activity shines through."
+        )
 
 
 def _set_query_params(**params: str) -> None:
@@ -1678,6 +1749,40 @@ with connection_scope() as conn:
         modifier_options = [mod.id for mod in DEFAULT_MODIFIERS]
         modifier_labels: Dict[str, str] = {mod.id: mod.label for mod in DEFAULT_MODIFIERS}
 
+        client_rows = conn.execute(
+            """
+            SELECT id, first_name, last_name, company_name, email, phone,
+                   address_line1, address_line2, city, state, postcode, country, notes
+            FROM clients
+            ORDER BY
+                CASE WHEN company_name IS NOT NULL AND TRIM(company_name) <> '' THEN 0 ELSE 1 END,
+                LOWER(COALESCE(company_name, '')),
+                LOWER(COALESCE(first_name, '')),
+                LOWER(COALESCE(last_name, ''))
+            """
+        ).fetchall()
+        client_option_values: List[Optional[int]] = [None] + [int(row[0]) for row in client_rows]
+        client_label_map: Dict[int, str] = {
+            int(row[0]): format_client_display(row[1], row[2], row[3])
+            for row in client_rows
+        }
+        default_client_id = session_inputs.client_id if session_inputs else None
+        default_client_details = session_inputs.client_details if session_inputs else None
+        client_match_choice_state = st.session_state.get("quote_client_match_choice", -1)
+        client_form_should_expand = bool(
+            (default_client_id and default_client_id in client_option_values)
+            or (
+                default_client_details
+                and hasattr(default_client_details, "has_any_data")
+                and default_client_details.has_any_data()
+            )
+        )
+        selected_client_id_form: Optional[int] = (
+            default_client_id if default_client_id in client_option_values else None
+        )
+        entered_client_details_form: Optional[ClientDetails] = default_client_details
+        match_choice_form = client_match_choice_state
+
         with st.form("quote_builder_form"):
             origin_value = st.text_input("Origin", value=default_origin)
             destination_value = st.text_input(
@@ -1722,6 +1827,177 @@ with connection_scope() as conn:
                     " is enabled."
                 ),
             )
+            with st.expander(
+                "Client details (optional)", expanded=client_form_should_expand
+            ):
+                existing_index = 0
+                if selected_client_id_form in client_option_values:
+                    existing_index = client_option_values.index(selected_client_id_form)
+                selected_client_id_form = st.selectbox(
+                    "Link to existing client",
+                    options=client_option_values,
+                    index=existing_index,
+                    format_func=lambda cid: (
+                        "No client linked"
+                        if cid is None
+                        else client_label_map.get(cid, f"Client #{cid}")
+                    ),
+                )
+                st.caption(
+                    "Enter details below to create a client record if no existing client applies."
+                )
+                company_input = st.text_input(
+                    "Company name",
+                    value=(
+                        default_client_details.company_name
+                        if default_client_details and default_client_details.company_name
+                        else ""
+                    ),
+                )
+                first_name_input = st.text_input(
+                    "First name",
+                    value=(
+                        default_client_details.first_name
+                        if default_client_details and default_client_details.first_name
+                        else ""
+                    ),
+                )
+                last_name_input = st.text_input(
+                    "Last name",
+                    value=(
+                        default_client_details.last_name
+                        if default_client_details and default_client_details.last_name
+                        else ""
+                    ),
+                )
+                email_input = st.text_input(
+                    "Email",
+                    value=(
+                        default_client_details.email
+                        if default_client_details and default_client_details.email
+                        else ""
+                    ),
+                )
+                phone_input = st.text_input(
+                    "Phone",
+                    value=(
+                        default_client_details.phone
+                        if default_client_details and default_client_details.phone
+                        else ""
+                    ),
+                )
+                address_line1_input = st.text_input(
+                    "Address line 1",
+                    value=(
+                        default_client_details.address_line1
+                        if default_client_details and default_client_details.address_line1
+                        else ""
+                    ),
+                )
+                address_line2_input = st.text_input(
+                    "Address line 2",
+                    value=(
+                        default_client_details.address_line2
+                        if default_client_details and default_client_details.address_line2
+                        else ""
+                    ),
+                )
+                city_input = st.text_input(
+                    "City / Suburb",
+                    value=(
+                        default_client_details.city
+                        if default_client_details and default_client_details.city
+                        else ""
+                    ),
+                )
+                state_input = st.text_input(
+                    "State / Territory",
+                    value=(
+                        default_client_details.state
+                        if default_client_details and default_client_details.state
+                        else ""
+                    ),
+                )
+                postcode_input = st.text_input(
+                    "Postcode",
+                    value=(
+                        default_client_details.postcode
+                        if default_client_details and default_client_details.postcode
+                        else ""
+                    ),
+                )
+                client_country_default = (
+                    default_client_details.country
+                    if default_client_details and default_client_details.country
+                    else country_value
+                    if country_value
+                    else COUNTRY_DEFAULT
+                )
+                client_country_input = st.text_input(
+                    "Client country",
+                    value=client_country_default,
+                )
+                notes_input = st.text_area(
+                    "Notes",
+                    value=(
+                        default_client_details.notes
+                        if default_client_details and default_client_details.notes
+                        else ""
+                    ),
+                    height=80,
+                )
+                entered_client_details_form = ClientDetails(
+                    company_name=company_input,
+                    first_name=first_name_input,
+                    last_name=last_name_input,
+                    email=email_input,
+                    phone=phone_input,
+                    address_line1=address_line1_input,
+                    address_line2=address_line2_input,
+                    city=city_input,
+                    state=state_input,
+                    postcode=postcode_input,
+                    country=client_country_input,
+                    notes=notes_input,
+                )
+                match_choice_form = -1
+                if (
+                    selected_client_id_form is None
+                    and entered_client_details_form.has_any_data()
+                ):
+                    matches = find_client_matches(conn, entered_client_details_form)
+                    if matches:
+                        match_labels = {
+                            match.id: f"{match.display_name} ({match.reason})"
+                            for match in matches
+                        }
+                        warning_lines = "\n".join(
+                            f"- {label}" for label in match_labels.values()
+                        )
+                        st.warning(
+                            "Potential existing clients found:\n" + warning_lines
+                        )
+                        match_options = [-1] + list(match_labels.keys())
+                        default_choice = (
+                            client_match_choice_state
+                            if client_match_choice_state in match_options
+                            else -1
+                        )
+                        match_choice_form = st.selectbox(
+                            "Would you like to link one of these clients?",
+                            options=match_options,
+                            index=match_options.index(default_choice),
+                            format_func=lambda value: (
+                                "Create new client"
+                                if value == -1
+                                else match_labels.get(value, f"Client #{value}")
+                            ),
+                            key="quote_client_match_choice",
+                        )
+                    else:
+                        st.session_state.pop("quote_client_match_choice", None)
+                else:
+                    st.session_state.pop("quote_client_match_choice", None)
             submitted = st.form_submit_button("Calculate quote")
 
         stored_inputs = session_inputs
@@ -1731,33 +2007,56 @@ with connection_scope() as conn:
                 st.error("Origin and destination are required to calculate a quote.")
             else:
                 margin_to_apply = float(margin_percent_value) if apply_margin else None
-                quote_inputs = QuoteInput(
-                    origin=origin_value,
-                    destination=destination_value,
-                    cubic_m=float(cubic_m_value),
-                    quote_date=quote_date_value,
-                    modifiers=list(selected_modifier_ids),
-                    target_margin_percent=margin_to_apply,
-                    country=country_value or COUNTRY_DEFAULT,
-                )
-                try:
-                    result = calculate_quote(conn, quote_inputs)
-                except RuntimeError as exc:
-                    st.error(str(exc))
-                except ValueError as exc:
-                    st.error(str(exc))
+                selected_client_id_final = selected_client_id_form
+                client_details_to_store: Optional[ClientDetails]
+                if (
+                    entered_client_details_form
+                    and entered_client_details_form.has_any_data()
+                ):
+                    client_details_to_store = entered_client_details_form
                 else:
-                    st.session_state["quote_inputs"] = quote_inputs
-                    st.session_state["quote_result"] = result
-                    st.session_state["quote_manual_override_enabled"] = False
-                    st.session_state["quote_manual_override_amount"] = float(
-                        result.final_quote
+                    client_details_to_store = None
+
+                submission_valid = True
+                if selected_client_id_final is None and client_details_to_store is not None:
+                    if match_choice_form not in (-1, None):
+                        selected_client_id_final = int(match_choice_form)
+                    elif not client_details_to_store.has_identity():
+                        st.error(
+                            "Provide a company name or both first and last names when creating a client."
+                        )
+                        submission_valid = False
+
+                if submission_valid:
+                    quote_inputs = QuoteInput(
+                        origin=origin_value,
+                        destination=destination_value,
+                        cubic_m=float(cubic_m_value),
+                        quote_date=quote_date_value,
+                        modifiers=list(selected_modifier_ids),
+                        target_margin_percent=margin_to_apply,
+                        country=country_value or COUNTRY_DEFAULT,
+                        client_id=selected_client_id_final,
+                        client_details=client_details_to_store,
                     )
-                    st.session_state["quote_pin_override"] = _initial_pin_state(result)
-                    _set_query_params(view="Quote builder")
-                    st.success("Quote calculated. Review the breakdown below.")
-                    stored_inputs = quote_inputs
-                    quote_result = result
+                    try:
+                        result = calculate_quote(conn, quote_inputs)
+                    except RuntimeError as exc:
+                        st.error(str(exc))
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.session_state["quote_inputs"] = quote_inputs
+                        st.session_state["quote_result"] = result
+                        st.session_state["quote_manual_override_enabled"] = False
+                        st.session_state["quote_manual_override_amount"] = float(
+                            result.final_quote
+                        )
+                        st.session_state["quote_pin_override"] = _initial_pin_state(result)
+                        _set_query_params(view="Quote builder")
+                        st.success("Quote calculated. Review the breakdown below.")
+                        stored_inputs = quote_inputs
+                        quote_result = result
 
         stored_inputs = st.session_state.get("quote_inputs")
         quote_result = st.session_state.get("quote_result")
@@ -1790,6 +2089,13 @@ with connection_scope() as conn:
                 quote_result.manual_quote = None
             quote_result.summary_text = build_summary(stored_inputs, quote_result)
             st.session_state["quote_result"] = quote_result
+            client_label: Optional[str] = None
+            if stored_inputs.client_details and stored_inputs.client_details.display_name():
+                client_label = stored_inputs.client_details.display_name()
+            elif stored_inputs.client_id is not None:
+                client_label = client_label_map.get(stored_inputs.client_id)
+            if client_label:
+                st.write(f"**Client:** {client_label}")
             st.write(
                 f"**Route:** {quote_result.origin_resolved} → {quote_result.destination_resolved}"
             )

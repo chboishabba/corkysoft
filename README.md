@@ -79,7 +79,7 @@ Key visuals include:
 - Optional profitability tabs that compare $/m³ against $/km and contrast quoted vs cost-derived $/m³, including margin outlier tables.
 - An interactive Mapbox view showing each route with selectable colouring (job, client, origin city, or destination city) and toggles to focus on lines or points when clusters get dense.
 - A travel-time isochrone mode that shades the catchment around each corridor using inferred average speeds for rapid reach comparisons.
-- A live network map that blends historical job filters with real-time truck telemetry, colouring corridors by profitability band and highlighting active trucks/routes.
+- A live network map that blends historical job filters with real-time truck telemetry, colouring corridors by profitability band and highlighting active trucks/routes, with an optional density heatmap to spotlight live clusters.
 - A dynamic break-even engine that recalculates per-job cost floors using network-wide fuel, driver, maintenance and overhead settings stored in `global_parameters`.
 - Corridor insights summarising job counts, weighted $/m³ and below break-even ratios aggregated into bidirectional lanes for systemic diagnostics.
 - A non-technical optimizer tab that recommends corridor price uplifts from the filtered data and offers a CSV export for action lists.
@@ -94,6 +94,10 @@ Use the **Import historical jobs from CSV** expander in the sidebar to load data
 accepts the same headers as the CLI importer (`date`, `origin`, `destination`, `m3`, `quoted_price`, `client`) and will
 calculate per-m³ rates automatically if only revenue and volume are provided. Switch the dataset selector to **Saved quick
 quotes** to analyse submissions from the in-app quote builder alongside historical jobs.
+
+Inside the Quote builder tab you can expand the **Client details** panel to link the quote with an existing customer or create
+a new one. The UI highlights potential duplicates whenever the full name, phone number or complete address matches a stored
+client so you can reuse or update the right record without losing context.
 
 ### Export profitability summaries
 
