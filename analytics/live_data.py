@@ -112,6 +112,82 @@ def load_active_routes(
     return df
 
 
+def build_live_heatmap_source(
+    historical_routes: pd.DataFrame,
+    active_routes: pd.DataFrame,
+    trucks: pd.DataFrame,
+) -> pd.DataFrame:
+    """Return a point-based dataframe suitable for live network heatmaps.
+
+    Historical corridor endpoints contribute a baseline weight, active routes
+    are amplified so in-flight jobs stand out, and individual truck telemetry
+    receives the highest weighting so the density view reflects real-time
+    activity.
+    """
+
+    columns = ["lat", "lon", "weight", "source"]
+    frames: list[pd.DataFrame] = []
+
+    def _extract_points(
+        df: pd.DataFrame,
+        lat_column: str,
+        lon_column: str,
+        *,
+        weight: float,
+        source: str,
+    ) -> None:
+        if df.empty or lat_column not in df.columns or lon_column not in df.columns:
+            return
+        coords = df[[lat_column, lon_column]].apply(pd.to_numeric, errors="coerce").dropna()
+        if coords.empty:
+            return
+        frame = coords.rename(columns={lat_column: "lat", lon_column: "lon"}).astype(float)
+        frame["weight"] = float(weight)
+        frame["source"] = source
+        frames.append(frame)
+
+    _extract_points(
+        historical_routes,
+        "origin_lat",
+        "origin_lon",
+        weight=1.0,
+        source="Historical origin",
+    )
+    _extract_points(
+        historical_routes,
+        "dest_lat",
+        "dest_lon",
+        weight=1.0,
+        source="Historical destination",
+    )
+    _extract_points(
+        active_routes,
+        "origin_lat",
+        "origin_lon",
+        weight=3.0,
+        source="Active origin",
+    )
+    _extract_points(
+        active_routes,
+        "dest_lat",
+        "dest_lon",
+        weight=3.0,
+        source="Active destination",
+    )
+    _extract_points(
+        trucks,
+        "lat",
+        "lon",
+        weight=5.0,
+        source="Active truck",
+    )
+
+    if not frames:
+        return pd.DataFrame(columns=columns)
+
+    return pd.concat(frames, ignore_index=True)[columns]
+
+
 def _pick_candidate_routes(conn: sqlite3.Connection) -> list[dict[str, float]]:
     """Return historical jobs with geocoded endpoints suitable for routing."""
 
@@ -382,6 +458,7 @@ def run_mock_ingestor(
 
 __all__ = [
     "TRUCK_STATUS_COLOURS",
+    "build_live_heatmap_source",
     "MockTelemetryIngestor",
     "load_truck_positions",
     "load_active_routes",
