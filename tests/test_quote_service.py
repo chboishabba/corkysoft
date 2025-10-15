@@ -775,6 +775,54 @@ def test_route_distance_falls_back_to_haversine(monkeypatch: pytest.MonkeyPatch)
     assert "Used straight-line estimate due to missing road network" in resolved_dest.suggestions
 
 
+def test_route_distance_handles_missing_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = sqlite3.connect(":memory:")
+
+    class _Client:
+        def directions(self, *_, **__):
+            return {"routes": [{"summary": {}, "segments": []}]}
+
+        def nearest(self, *_, **__):
+            return {"features": []}
+
+    origin = GeocodeResult(lon=151.2093, lat=-33.8688, label="Sydney")
+    dest = GeocodeResult(lon=153.0260, lat=-27.4705, label="Brisbane")
+
+    def _fake_geocode(
+        _conn: sqlite3.Connection,
+        place: str,
+        _country: str,
+        *,
+        client: object | None = None,
+    ) -> GeocodeResult:
+        return origin if place == "Sydney" else dest
+
+    monkeypatch.setattr("corkysoft.routing.get_ors_client", lambda client=None: _Client())
+    monkeypatch.setattr("corkysoft.routing.geocode_cached", _fake_geocode)
+    monkeypatch.setattr("corkysoft.routing._snap_to_road", lambda *_, **__: None)
+
+    distance_km, duration_hr, resolved_origin, resolved_dest = route_distance(
+        conn,
+        "Sydney",
+        "Brisbane",
+        "Australia",
+    )
+
+    expected_distance = routing._haversine_km(
+        origin.lat,
+        origin.lon,
+        dest.lat,
+        dest.lon,
+    )
+    assert distance_km == pytest.approx(expected_distance)
+    expected_duration = (
+        expected_distance / routing.FALLBACK_SPEED_KMH if expected_distance > 0 else 0.0
+    )
+    assert duration_hr == pytest.approx(expected_duration)
+    assert "Used straight-line estimate due to missing road network" in resolved_origin.suggestions
+    assert "Used straight-line estimate due to missing road network" in resolved_dest.suggestions
+
+
 def test_snap_coordinates_to_road_adjusts_points(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
