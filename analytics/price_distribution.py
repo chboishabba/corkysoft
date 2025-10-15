@@ -75,9 +75,9 @@ PROFITABILITY_BAND_INTENSITY = {
     "Unknown": 2,
 }
 
-MAX_PROFITABILITY_WIDTH = 20.0
-MIN_PROFITABILITY_WIDTH = 11.5
-PROFITABILITY_WIDTH_CURVE_EXPONENT = 0.75
+MAX_LANE_WIDTH = 28.0
+MIN_LANE_WIDTH = 9.0
+LANE_WIDTH_CURVE_EXPONENT = 0.75
 ROUTE_WIDTH_METRE_SCALE = 0.25
 
 
@@ -85,17 +85,57 @@ def _profit_band_intensity(band: str) -> float:
     return PROFITABILITY_BAND_INTENSITY.get(band, PROFITABILITY_BAND_INTENSITY["Unknown"])
 
 
-def compute_profitability_line_width(profit_band: str) -> float:
-    """Return a tapered line width using a smooth, non-linear decay curve."""
+def compute_profitability_line_width(
+    profit_band: str, *, job_scale: Optional[float] = None
+) -> float:
+    """Return a tapered line width favouring busier, more-trafficked lanes.
 
-    band_index = _profit_band_intensity(profit_band)
-    max_index = max(PROFITABILITY_BAND_INTENSITY.values()) or 1
-    position = min(max(band_index / max_index, 0.0), 1.0)
-    width = MIN_PROFITABILITY_WIDTH + (
-        (MAX_PROFITABILITY_WIDTH - MIN_PROFITABILITY_WIDTH)
-        * (1 - position ** PROFITABILITY_WIDTH_CURVE_EXPONENT)
+    Parameters
+    ----------
+    profit_band:
+        Profitability bucket for the lane.  When ``job_scale`` is not provided
+        the function falls back to the relative profitability intensity so that
+        historical callers retain the previous behaviour.
+    job_scale:
+        Optional normalised value between ``0`` and ``1`` describing how busy a
+        lane is relative to the rest of the dataset.  ``0`` maps to the minimum
+        width while ``1`` expands to the maximum band width.
+    """
+
+    if job_scale is None:
+        band_index = _profit_band_intensity(profit_band)
+        max_index = max(PROFITABILITY_BAND_INTENSITY.values()) or 1
+        position = min(max(band_index / max_index, 0.0), 1.0)
+    else:
+        try:
+            position = float(job_scale)
+        except (TypeError, ValueError):
+            position = 0.0
+        position = min(max(position, 0.0), 1.0)
+
+    width = MIN_LANE_WIDTH + (
+        (MAX_LANE_WIDTH - MIN_LANE_WIDTH) * (position ** LANE_WIDTH_CURVE_EXPONENT)
     )
     return round(width, 2)
+
+
+def _normalise_job_counts(job_counts: pd.Series) -> pd.Series:
+    """Return a 0-1 scale representing how busy each lane is."""
+
+    if job_counts.empty:
+        return pd.Series(dtype="float64")
+
+    numeric = pd.to_numeric(job_counts, errors="coerce").fillna(0.0).astype(float)
+    log_counts = np.log1p(numeric)
+    min_log = float(log_counts.min())
+    max_log = float(log_counts.max())
+
+    if math.isclose(max_log, min_log):
+        baseline = 0.5 if max_log > 0 else 0.0
+        return pd.Series(baseline, index=job_counts.index, dtype="float64")
+
+    scale = (log_counts - min_log) / (max_log - min_log)
+    return scale.astype(float)
 
 
 def compute_tapered_route_polygon(row: pd.Series) -> list[list[float]]:
@@ -2083,7 +2123,7 @@ def prepare_profitability_route_data(
     df: pd.DataFrame,
     break_even: float,
 ) -> pd.DataFrame:
-    """Prepare per-job profitability records for the telemetry map."""
+    """Prepare profitability records aggregated by lane for the telemetry map."""
 
     required_columns = {
         "origin_lat",
@@ -2112,48 +2152,199 @@ def prepare_profitability_route_data(
     if map_df.empty:
         return map_df
 
-    price_series = pd.to_numeric(map_df["price_per_m3"], errors="coerce")
+    map_df["_origin_lat"] = pd.to_numeric(map_df["origin_lat"], errors="coerce")
+    map_df["_origin_lon"] = pd.to_numeric(map_df["origin_lon"], errors="coerce")
+    map_df["_dest_lat"] = pd.to_numeric(map_df["dest_lat"], errors="coerce")
+    map_df["_dest_lon"] = pd.to_numeric(map_df["dest_lon"], errors="coerce")
+    map_df = map_df.dropna(
+        subset=["_origin_lat", "_origin_lon", "_dest_lat", "_dest_lon"]
+    ).copy()
+    if map_df.empty:
+        return map_df
+
+    map_df["_price_numeric"] = pd.to_numeric(
+        map_df["price_per_m3"], errors="coerce"
+    )
     if "break_even_per_m3" in map_df.columns:
-        break_even_series = pd.to_numeric(map_df["break_even_per_m3"], errors="coerce").fillna(
-            break_even
+        map_df["_break_even_numeric"] = pd.to_numeric(
+            map_df["break_even_per_m3"], errors="coerce"
+        ).fillna(break_even)
+    else:
+        map_df["_break_even_numeric"] = pd.Series(
+            break_even, index=map_df.index, dtype="float64"
+        )
+
+    volume_column = _first_present(map_df.columns, VOLUME_COLUMNS)
+    if volume_column:
+        map_df["_volume_numeric"] = pd.to_numeric(
+            map_df[volume_column], errors="coerce"
         )
     else:
-        break_even_series = pd.Series(break_even, index=map_df.index, dtype="float64")
+        map_df["_volume_numeric"] = math.nan
 
-    map_df["profit_band"] = [
+    map_df["_route_label"] = map_df.apply(_route_display_name, axis=1)
+
+    def _lane_identifier(row: pd.Series) -> str:
+        label = row.get("_route_label") or "Unknown corridor"
+        origin = (row.get("_origin_lat"), row.get("_origin_lon"))
+        destination = (row.get("_dest_lat"), row.get("_dest_lon"))
+        return (
+            f"{label}|{origin[0]:.2f},{origin[1]:.2f}→"
+            f"{destination[0]:.2f},{destination[1]:.2f}"
+        )
+
+    map_df["_lane_key"] = map_df.apply(_lane_identifier, axis=1)
+
+    total_jobs = len(map_df)
+    lane_rows: list[dict[str, Any]] = []
+    grouped = map_df.groupby("_lane_key", dropna=False)
+    for lane_key, group in grouped:
+        job_count = int(len(group))
+        price_values = group["_price_numeric"].dropna()
+        priced_job_count = int(len(price_values))
+
+        if priced_job_count:
+            weights = (
+                group.loc[price_values.index, "_volume_numeric"].fillna(0.0)
+                if "_volume_numeric" in group
+                else pd.Series(0.0, index=price_values.index)
+            )
+            positive_weights = weights > 0
+            if positive_weights.any():
+                lane_price = float(
+                    np.average(
+                        price_values.loc[positive_weights],
+                        weights=weights.loc[positive_weights],
+                    )
+                )
+            else:
+                lane_price = float(price_values.mean())
+        else:
+            lane_price = math.nan
+
+        break_even_values = group["_break_even_numeric"].dropna()
+        lane_break_even = (
+            float(break_even_values.mean())
+            if not break_even_values.empty
+            else float(break_even)
+        )
+
+        lane_volume = group["_volume_numeric"].sum(min_count=1)
+        lane_volume = float(lane_volume) if pd.notna(lane_volume) else math.nan
+
+        lane_rows.append(
+            {
+                "lane_key": lane_key,
+                "corridor_display": group["_route_label"].iloc[0] or "Unknown corridor",
+                "origin_lat": float(group["_origin_lat"].mean()),
+                "origin_lon": float(group["_origin_lon"].mean()),
+                "dest_lat": float(group["_dest_lat"].mean()),
+                "dest_lon": float(group["_dest_lon"].mean()),
+                "price_per_m3": lane_price,
+                "break_even_per_m3": lane_break_even,
+                "job_count": job_count,
+                "priced_job_count": priced_job_count,
+                "total_volume_m3": lane_volume,
+                "share_of_jobs": job_count / total_jobs if total_jobs else 0.0,
+            }
+        )
+
+    lane_df = pd.DataFrame(lane_rows)
+    if lane_df.empty:
+        return map_df
+
+    lane_df["profit_band"] = [
         classify_profit_band(price, be)
-        for price, be in zip(price_series, break_even_series)
+        for price, be in zip(
+            lane_df["price_per_m3"], lane_df["break_even_per_m3"]
+        )
     ]
-    map_df["profitability_status"] = [
+    lane_df["profitability_status"] = [
         classify_profitability_status(price, be)
-        for price, be in zip(price_series, break_even_series)
+        for price, be in zip(
+            lane_df["price_per_m3"], lane_df["break_even_per_m3"]
+        )
     ]
-    map_df["colour"] = map_df["profit_band"].map(PROFITABILITY_COLOURS)
-    map_df["colour"] = map_df["colour"].apply(
+
+    lane_df["colour"] = lane_df["profit_band"].map(PROFITABILITY_COLOURS)
+    lane_df["colour"] = lane_df["colour"].apply(
         lambda value: value if isinstance(value, (list, tuple)) else [128, 128, 128]
     )
-    map_df["fill_colour"] = map_df["colour"].apply(
+    lane_df["fill_colour"] = lane_df["colour"].apply(
         lambda value: [int(component) for component in list(value)[:3]] + [102]
     )
-    map_df["line_width"] = map_df["profit_band"].apply(compute_profitability_line_width)
-    fallback_width = compute_profitability_line_width("Unknown")
-    map_df["line_width"] = map_df["line_width"].fillna(fallback_width)
 
-    map_df["route_polygon"] = map_df.apply(compute_tapered_route_polygon, axis=1)
+    job_scale = _normalise_job_counts(lane_df["job_count"])
+    lane_df["line_width"] = [
+        compute_profitability_line_width(band, job_scale=scale)
+        for band, scale in zip(lane_df["profit_band"], job_scale)
+    ]
+
+    lane_df["route_polygon"] = lane_df.apply(compute_tapered_route_polygon, axis=1)
 
     def _format_tooltip(row: pd.Series) -> str:
-        corridor = row.get("corridor_display", "Corridor")
-        price = row.get("price_per_m3")
-        price_text = "n/a" if pd.isna(price) else f"${price:,.0f} per m³"
+        corridor = row.get("corridor_display") or "Corridor"
         status = row.get("profitability_status") or row.get("profit_band", "Unknown")
         band = row.get("profit_band")
         if band and band not in {"Unknown", status}:
             descriptor = f"{status} – {band}"
         else:
             descriptor = status
-        return f"{corridor}: {descriptor} ({price_text})"
 
-    map_df["tooltip"] = map_df.apply(_format_tooltip, axis=1)
+        price = row.get("price_per_m3")
+        price_text = "n/a" if pd.isna(price) else f"${float(price):,.0f} per m³"
+        break_even_value = row.get("break_even_per_m3")
+        diff_detail: Optional[str] = None
+        if not pd.isna(price) and not pd.isna(break_even_value):
+            diff_value = float(price) - float(break_even_value)
+            diff_detail = f"Δ {diff_value:+.0f} vs break-even"
+
+        job_count_value = row.get("job_count")
+        job_detail: Optional[str] = None
+        if isinstance(job_count_value, (int, float)) and not math.isnan(job_count_value):
+            job_int = int(job_count_value)
+            job_suffix = "s" if job_int != 1 else ""
+            job_detail = f"{job_int} job{job_suffix}"
+
+        details = [detail for detail in (price_text, diff_detail, job_detail) if detail]
+        if details:
+            return f"{corridor}: {descriptor} ({'; '.join(details)})"
+        return f"{corridor}: {descriptor}"
+
+    lane_df["tooltip"] = lane_df.apply(_format_tooltip, axis=1)
+
+    lane_df = lane_df.set_index("lane_key")
+
+    drop_columns = [
+        "origin_lat",
+        "origin_lon",
+        "dest_lat",
+        "dest_lon",
+        "price_per_m3",
+        "break_even_per_m3",
+        "corridor_display",
+    ]
+    existing_drop = [column for column in drop_columns if column in map_df.columns]
+    if existing_drop:
+        map_df = map_df.drop(columns=existing_drop)
+
+    map_df = map_df.join(lane_df, on="_lane_key")
+
+    map_df = map_df.rename(columns={"_lane_key": "lane_key"})
+    cleanup_columns = [
+        "_route_label",
+        "_price_numeric",
+        "_break_even_numeric",
+        "_volume_numeric",
+        "_origin_lat",
+        "_origin_lon",
+        "_dest_lat",
+        "_dest_lon",
+    ]
+    drop_cleanup = [column for column in cleanup_columns if column in map_df.columns]
+    if drop_cleanup:
+        map_df = map_df.drop(columns=drop_cleanup)
+
     return map_df
 
 
