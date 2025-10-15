@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import json
 import math
 from datetime import date
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -484,6 +485,73 @@ def build_route_map(
 ) -> go.Figure:
     """Construct a Plotly Mapbox figure showing coloured routes and points."""
 
+    def _row_route_points(row: pd.Series) -> List[Tuple[float, float]]:
+        """Return the ordered ``(lat, lon)`` points for ``row`` when available."""
+
+        geojson_value = row.get("route_geojson")
+        if isinstance(geojson_value, str) and geojson_value.strip():
+            try:
+                return extract_route_path(geojson_value)
+            except Exception:
+                pass
+
+        path_value = row.get("route_path")
+        if isinstance(path_value, str):
+            raw = path_value.strip()
+            if not raw:
+                return []
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = None
+            else:
+                path_value = parsed
+
+        if isinstance(path_value, dict):
+            try:
+                return extract_route_path(json.dumps(path_value))
+            except Exception:
+                return []
+
+        if isinstance(path_value, (list, tuple)):
+            coords: List[Tuple[float, float]] = []
+            for point in path_value:
+                lon: Optional[float]
+                lat: Optional[float]
+                if isinstance(point, dict):
+                    lon = point.get("lon") or point.get("lng") or point.get("longitude")
+                    lat = point.get("lat") or point.get("latitude")
+                elif isinstance(point, (list, tuple)) and len(point) >= 2:
+                    lon, lat = point[0], point[1]
+                else:
+                    continue
+
+                try:
+                    coords.append((float(lat), float(lon)))
+                except (TypeError, ValueError):
+                    continue
+
+            if coords:
+                return coords
+
+        return []
+
+    palette = px.colors.qualitative.Bold or [
+        "#636EFA",
+        "#EF553B",
+        "#00CC96",
+        "#AB63FA",
+    ]
+    colour_values = list(dict.fromkeys(df["map_colour_value"].tolist()))
+    if not palette:
+        palette = ["#636EFA"]
+    if len(colour_values) > len(palette):
+        repeats = (len(colour_values) // len(palette)) + 1
+        palette = (palette * repeats)[: len(colour_values)]
+    colour_map = {
+        value: palette[idx % len(palette)] for idx, value in enumerate(colour_values)
+    }
+
     figure = go.Figure()
     plot_df = df.copy()
 
@@ -511,6 +579,44 @@ def build_route_map(
                     continue
                 display_value = (
                     category_df.get("map_colour_display", pd.Series([value])).iloc[0]
+    if show_routes:
+        for value in colour_values:
+            category_df = df[df["map_colour_value"] == value]
+            if category_df.empty:
+                continue
+            lat_values: list[float] = []
+            lon_values: list[float] = []
+            for _, row in category_df.iterrows():
+                route_points = _row_route_points(row)
+                if route_points:
+                    for lat, lon in route_points:
+                        lat_values.append(lat)
+                        lon_values.append(lon)
+                    lat_values.append(None)
+                    lon_values.append(None)
+                    continue
+
+                try:
+                    origin_lat = float(row["origin_lat"])
+                    dest_lat = float(row["dest_lat"])
+                    origin_lon = float(row["origin_lon"])
+                    dest_lon = float(row["dest_lon"])
+                except (TypeError, ValueError):
+                    continue
+
+                lat_values.extend([origin_lat, dest_lat, None])
+                lon_values.extend([origin_lon, dest_lon, None])
+
+            figure.add_trace(
+                go.Scattermap(
+                    lat=lat_values,
+                    lon=lon_values,
+                    mode="lines",
+                    line={"width": 2, "color": colour_map[value]},
+                    name=value,
+                    legendgroup=value,
+                    showlegend=False,
+                    hoverinfo="skip",
                 )
                 lat_values: list[float] = []
                 lon_values: list[float] = []
@@ -582,6 +688,32 @@ def build_route_map(
                         legendgroup=str(value),
                     )
                 )
+                try:
+                    origin_lat = float(row["origin_lat"])
+                    origin_lon = float(row["origin_lon"])
+                except (TypeError, ValueError):
+                    pass
+                else:
+                    marker_lat.append(origin_lat)
+                    marker_lon.append(origin_lon)
+                    marker_text.append(
+                        f"{colour_label}: {value}<br>Origin: {origin_label}<br>Job ID: {job_id}"
+                    )
+
+                try:
+                    dest_lat = float(row["dest_lat"])
+                    dest_lon = float(row["dest_lon"])
+                except (TypeError, ValueError):
+                    pass
+                else:
+                    marker_lat.append(dest_lat)
+                    marker_lon.append(dest_lon)
+                    marker_text.append(
+                        f"{colour_label}: {value}<br>Destination: {destination_label}<br>Job ID: {job_id}"
+                    )
+
+            if not marker_lat or not marker_lon:
+                continue
 
     elif colour_mode == "continuous":
         numeric_series = pd.to_numeric(plot_df["map_colour_value"], errors="coerce")
@@ -785,14 +917,34 @@ def render_network_map(
 
     historical_overlay = historical_routes.copy()
     if not historical_overlay.empty and "route_geojson" in historical_overlay.columns:
-        historical_overlay["route_path"] = historical_overlay["route_geojson"].apply(_geojson_to_path)
+        historical_overlay["route_path"] = historical_overlay["route_geojson"].apply(
+            _geojson_to_path
+        )
     else:
         historical_overlay["route_path"] = None
 
+    if not historical_overlay.empty and "lane_key" in historical_overlay.columns:
+        lane_overlay = historical_overlay.copy()
+        lane_overlay["_has_geojson"] = (
+            lane_overlay["route_path"].notna() if "route_path" in lane_overlay.columns else False
+        )
+        lane_overlay["_job_weight"] = pd.to_numeric(
+            lane_overlay.get("job_count", 0), errors="coerce"
+        ).fillna(0.0)
+        lane_overlay = (
+            lane_overlay.sort_values(
+                by=["_has_geojson", "_job_weight"], ascending=[False, False]
+            )
+            .drop(columns=["_has_geojson", "_job_weight"])
+            .drop_duplicates(subset=["lane_key"])
+        )
+    else:
+        lane_overlay = historical_overlay.copy()
+
     historical_has_paths = (
-        not historical_overlay.empty
-        and "route_path" in historical_overlay.columns
-        and historical_overlay["route_path"].notna().any()
+        not lane_overlay.empty
+        and "route_path" in lane_overlay.columns
+        and lane_overlay["route_path"].notna().any()
     )
     active_has_geometry = (
         not active_routes.empty
@@ -801,10 +953,10 @@ def render_network_map(
     )
     overlay_layers: list[pdk.Layer] = []
 
-    if show_live_overlay and not historical_routes.empty:
+    if show_live_overlay and not lane_overlay.empty:
         history_layer = pdk.Layer(
             "PolygonLayer",
-            data=historical_routes,
+            data=lane_overlay,
             get_polygon="route_polygon",
             get_fill_color="fill_colour",
             stroked=False,
@@ -827,10 +979,10 @@ def render_network_map(
 
         overlay_layers: list[pdk.Layer] = []
 
-        if show_live_overlay and not historical_routes.empty:
+        if show_live_overlay and not lane_overlay.empty:
             history_layer = pdk.Layer(
                 "PolygonLayer",
-                data=historical_routes,
+                data=lane_overlay,
                 get_polygon="route_polygon",
                 get_fill_color="fill_colour",
                 stroked=False,
@@ -939,9 +1091,9 @@ def render_network_map(
             )
             overlay_layers.append(active_layer)
 
-            if show_live_overlay and not historical_routes.empty:
+            if show_live_overlay and not lane_overlay.empty:
                 if show_actual_routes and historical_has_paths:
-                    history_paths = historical_overlay.dropna(subset=["route_path"])
+                    history_paths = lane_overlay.dropna(subset=["route_path"])
                     if not history_paths.empty:
                         history_layer = pdk.Layer(
                             "PathLayer",
@@ -957,7 +1109,7 @@ def render_network_map(
                 else:
                     history_layer = pdk.Layer(
                         "LineLayer",
-                        data=historical_routes,
+                        data=lane_overlay,
                         get_source_position="[origin_lon, origin_lat]",
                         get_target_position="[dest_lon, dest_lat]",
                         get_color="colour",

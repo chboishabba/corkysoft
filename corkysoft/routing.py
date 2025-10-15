@@ -82,26 +82,62 @@ def geocode_cached(
 ) -> GeocodeResult:
     norm = normalize_place(place)
     cache_key = f"{norm}, {country}"
-    row = conn.execute(
-        "SELECT lon, lat FROM geocode_cache WHERE place = ?",
-        (cache_key,),
-    ).fetchone()
+    try:
+        row = conn.execute(
+            """
+            SELECT lon, lat, postalcode, region_code, region, locality, county
+            FROM geocode_cache
+            WHERE place = ?
+            """,
+            (cache_key,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        row = conn.execute(
+            "SELECT lon, lat FROM geocode_cache WHERE place = ?",
+            (cache_key,),
+        ).fetchone()
+        if row:
+            return GeocodeResult(
+                lon=float(row[0]),
+                lat=float(row[1]),
+                label=None,
+                normalization=None,
+                search_candidates=[norm],
+            )
+        row = None
+
     if row:
-        return GeocodeResult(
-            lon=float(row[0]),
-            lat=float(row[1]),
-            label=None,
-            normalization=None,
-            search_candidates=[norm],
-        )
+        lon, lat, postalcode, region_code, region, locality, county = row
+        if any([postalcode, region_code, region, locality, county]):
+            return GeocodeResult(
+                lon=float(lon),
+                lat=float(lat),
+                label=None,
+                normalization=None,
+                search_candidates=[norm],
+                postalcode=postalcode,
+                region_code=region_code,
+                region=region,
+                locality=locality,
+                county=county,
+            )
 
     result = pelias_geocode(norm, country, client=client)
     conn.execute(
-        "INSERT OR REPLACE INTO geocode_cache(place, lon, lat, ts) VALUES (?,?,?,?)",
+        """
+        INSERT OR REPLACE INTO geocode_cache(
+            place, lon, lat, postalcode, region_code, region, locality, county, ts
+        ) VALUES (?,?,?,?,?,?,?,?,?)
+        """,
         (
             cache_key,
             result.lon,
             result.lat,
+            getattr(result, "postalcode", None),
+            getattr(result, "region_code", None),
+            getattr(result, "region", None),
+            getattr(result, "locality", None),
+            getattr(result, "county", None),
             datetime.now(timezone.utc).isoformat(),
         ),
     )

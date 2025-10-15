@@ -22,6 +22,11 @@ CREATE TABLE IF NOT EXISTS geocode_cache (
   place TEXT PRIMARY KEY,
   lon REAL NOT NULL,
   lat REAL NOT NULL,
+  postalcode TEXT,
+  region_code TEXT,
+  region TEXT,
+  locality TEXT,
+  county TEXT,
   ts  TEXT NOT NULL
 );
 
@@ -219,6 +224,11 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     """Ensure the quote tables exist in *conn*."""
 
     conn.executescript(SCHEMA_SQL)
+    _ensure_column(conn, "geocode_cache", "postalcode", "TEXT")
+    _ensure_column(conn, "geocode_cache", "region_code", "TEXT")
+    _ensure_column(conn, "geocode_cache", "region", "TEXT")
+    _ensure_column(conn, "geocode_cache", "locality", "TEXT")
+    _ensure_column(conn, "geocode_cache", "county", "TEXT")
     columns = {
         row[1]
         for row in conn.execute("PRAGMA table_info(quotes)")

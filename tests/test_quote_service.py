@@ -97,6 +97,43 @@ def _quote_result() -> QuoteResult:
     )
 
 
+def test_build_summary_includes_corrections() -> None:
+    inputs = _quote_input()
+    inputs.client_details = ClientDetails(company_name="JBWEB")
+
+    result = _quote_result()
+    result.origin_candidates = [
+        "50 Tucker Street Chapel Hill",
+        "50 Tucker Street Chapel Hill",
+    ]
+    result.origin_suggestions = [
+        "50 Tucker Street, Chapel Hill, QLD, Australia",
+        "50 Tucker Street",
+        "Tucker Street",
+    ]
+    result.destination_candidates = [
+        "12 Carlton Street Toowoomba*** (should be the correct destination)",
+    ]
+    result.destination_suggestions = [
+        "Toowoomba, QLD, Australia",
+        "Toowoomba",
+        "Queensland",
+    ]
+    result.origin_ambiguities = {"Street": ["St", "Street"]}
+
+    summary = build_summary(inputs, result)
+
+    assert summary.startswith("Quote output")
+    assert "Client: JBWEB" in summary
+    assert "Origin corrections & suggestions" in summary
+    assert "50 Tucker Street Chapel Hill" in summary
+    assert "Autocorrected place names from geocoding:" in summary
+    assert "Destination corrections & suggestions" in summary
+    assert "12 Carlton Street Toowoomba***" in summary
+    assert "Toowoomba, QLD, Australia" in summary
+    assert "Ambiguous tokens detected:" in summary
+
+
 def test_choose_pricing_model_progression() -> None:
     assert choose_pricing_model(50.0) == PRICING_MODELS[0]
     assert choose_pricing_model(200.0) == PRICING_MODELS[1]
@@ -239,6 +276,86 @@ def test_persist_quote_records_postcodes() -> None:
         ).fetchall()
     ]
     assert address_states == ["QLD", "NSW"]
+
+
+def test_geocode_cached_persists_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+
+    captured: list[tuple[str, str]] = []
+
+    def _fake_geocode(place: str, country: str, client=None):  # type: ignore[override]
+        captured.append((place, country))
+        return GeocodeResult(
+            lon=153.02,
+            lat=-27.47,
+            label="Brisbane, QLD",
+            postalcode="4000",
+            region_code="QLD",
+            region="Queensland",
+            locality="Brisbane",
+            county="Brisbane",
+        )
+
+    monkeypatch.setattr(routing, "pelias_geocode", _fake_geocode)
+
+    first = routing.geocode_cached(conn, "Brisbane", "Australia")
+    assert first.postalcode == "4000"
+    assert first.region_code == "QLD"
+
+    second = routing.geocode_cached(conn, "Brisbane", "Australia")
+    assert second.postalcode == "4000"
+    assert second.region_code == "QLD"
+
+    assert captured == [("Brisbane", "Australia")]
+
+    cached_row = conn.execute(
+        """
+        SELECT postalcode, region_code, region, locality, county
+        FROM geocode_cache
+        WHERE place = ?
+        """,
+        ("Brisbane, Australia",),
+    ).fetchone()
+    assert cached_row == ("4000", "QLD", "Queensland", "Brisbane", "Brisbane")
+
+
+def test_geocode_cached_refreshes_missing_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+
+    conn.execute(
+        "INSERT OR REPLACE INTO geocode_cache(place, lon, lat, ts) VALUES (?,?,?,?)",
+        ("Brisbane, Australia", 153.0, -27.5, datetime.now(timezone.utc).isoformat()),
+    )
+
+    calls: list[tuple[str, str]] = []
+
+    def _fake_geocode(place: str, country: str, client=None):  # type: ignore[override]
+        calls.append((place, country))
+        return GeocodeResult(
+            lon=153.02,
+            lat=-27.47,
+            label="Brisbane, QLD",
+            postalcode="4000",
+            region_code="QLD",
+            region="Queensland",
+            locality="Brisbane",
+            county="Brisbane",
+        )
+
+    monkeypatch.setattr(routing, "pelias_geocode", _fake_geocode)
+
+    result = routing.geocode_cached(conn, "Brisbane", "Australia")
+    assert result.postalcode == "4000"
+    assert result.region_code == "QLD"
+    assert calls == [("Brisbane", "Australia")]
+
+    enriched = conn.execute(
+        "SELECT postalcode, region_code FROM geocode_cache WHERE place = ?",
+        ("Brisbane, Australia",),
+    ).fetchone()
+    assert enriched == ("4000", "QLD")
 
 
 def test_persist_quote_creates_client_record() -> None:

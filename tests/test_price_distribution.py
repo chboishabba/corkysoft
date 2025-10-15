@@ -583,32 +583,56 @@ def test_create_metro_profitability_figure_has_multiple_traces(metro_profitabili
 def test_prepare_profitability_route_data_tags_profitability():
     df = pd.DataFrame(
         {
-            "id": [1, 2, 3],
-            "origin_lat": [-27.4705, -27.4705, -27.4705],
-            "origin_lon": [153.0260, 153.0260, 153.0260],
-            "dest_lat": [-33.8688, -33.8688, -33.8688],
-            "dest_lon": [151.2093, 151.2093, 151.2093],
-            "price_per_m3": [240.0, 252.0, 310.0],
-            "corridor_display": ["BNE-SYD", "BNE-SYD", "BNE-SYD"],
+            "id": [1, 2, 3, 4, 5, 6],
+            "origin_lat": [-27.4705] * 6,
+            "origin_lon": [153.0260] * 6,
+            "dest_lat": [
+                -33.8688,
+                -33.8688,
+                -33.8688,
+                -37.8136,
+                -37.8136,
+                -31.9505,
+            ],
+            "dest_lon": [
+                151.2093,
+                151.2093,
+                151.2093,
+                144.9631,
+                144.9631,
+                115.8605,
+            ],
+            "price_per_m3": [240.0, 240.0, 240.0, 252.0, 252.0, 310.0],
+            "corridor_display": [
+                "Brisbane → Sydney",
+                "Brisbane → Sydney",
+                "Brisbane → Sydney",
+                "Brisbane → Melbourne",
+                "Brisbane → Melbourne",
+                "Brisbane → Perth",
+            ],
         }
     )
 
     result = prepare_profitability_route_data(df, break_even=250.0)
-    statuses = result.set_index("id")["profitability_status"].to_dict()
+    unique = result.drop_duplicates("lane_key")
 
-    assert statuses[1] == "Loss-leading"
-    assert statuses[2] == "Break-even"
-    assert statuses[3] == "Profitable"
-    assert all(
-        any(keyword in tooltip for keyword in ("Break-even", "Loss-leading", "Profitable"))
-        for tooltip in result["tooltip"]
-    )
+    statuses = unique.set_index("corridor_display")["profitability_status"].to_dict()
 
-    widths = result.set_index("id")["line_width"].to_dict()
-    assert widths[1] > widths[2] > widths[3]
+    assert statuses["Brisbane → Sydney"] == "Loss-leading"
+    assert statuses["Brisbane → Melbourne"] == "Break-even"
+    assert statuses["Brisbane → Perth"] == "Profitable"
 
-    polygons = result.set_index("id")["route_polygon"].to_dict()
-    first_polygon = polygons[1]
+    widths = unique.set_index("corridor_display")["line_width"].to_dict()
+    assert widths["Brisbane → Sydney"] > widths["Brisbane → Melbourne"] > widths["Brisbane → Perth"]
+
+    for _, row in unique.iterrows():
+        tooltip = row["tooltip"]
+        assert row["corridor_display"] in tooltip
+        assert "per m³" in tooltip
+        assert "job" in tooltip
+
+    first_polygon = unique.iloc[0]["route_polygon"]
     assert isinstance(first_polygon, list)
     assert len(first_polygon) == 4
     origin = [df.iloc[0]["origin_lon"], df.iloc[0]["origin_lat"]]
@@ -620,7 +644,7 @@ def test_prepare_profitability_route_data_tags_profitability():
     assert first_polygon[1] != origin
     assert first_polygon[3] != destination
 
-    for fill in result["fill_colour"]:
+    for fill in unique["fill_colour"]:
         assert len(fill) == 4
         assert all(0 <= component <= 255 for component in fill)
 
@@ -631,19 +655,25 @@ def test_prepare_profitability_route_data_uses_row_break_even_values():
             "id": [1, 2, 3],
             "origin_lat": [-27.4705, -27.4705, -27.4705],
             "origin_lon": [153.0260, 153.0260, 153.0260],
-            "dest_lat": [-33.8688, -33.8688, -33.8688],
-            "dest_lon": [151.2093, 151.2093, 151.2093],
+            "dest_lat": [-33.8688, -37.8136, -31.9505],
+            "dest_lon": [151.2093, 144.9631, 115.8605],
             "price_per_m3": [220.0, 220.0, 220.0],
             "break_even_per_m3": [200.0, 220.0, 250.0],
+            "corridor_display": [
+                "Brisbane → Sydney",
+                "Brisbane → Melbourne",
+                "Brisbane → Perth",
+            ],
         }
     )
 
     result = prepare_profitability_route_data(df, break_even=230.0)
-    statuses = result.set_index("id")["profitability_status"].to_dict()
+    unique = result.drop_duplicates("lane_key")
+    statuses = unique.set_index("corridor_display")["profitability_status"].to_dict()
 
-    assert statuses[1] == "Profitable"
-    assert statuses[2] == "Break-even"
-    assert statuses[3] == "Loss-leading"
+    assert statuses["Brisbane → Sydney"] == "Profitable"
+    assert statuses["Brisbane → Melbourne"] == "Break-even"
+    assert statuses["Brisbane → Perth"] == "Loss-leading"
 
 
 def test_prepare_route_map_data_filters_missing_coordinates():
