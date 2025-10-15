@@ -643,6 +643,49 @@ def _snap_to_road(
     ], notes
 
 
+def snap_coordinates_to_road(
+    origin: Tuple[float, float],
+    destination: Tuple[float, float],
+    *,
+    client: Optional["ors.Client"] = None,
+) -> PinSnapResult:
+    """Return the nearest routable coordinates for *origin* and *destination*.
+
+    The helper mirrors the snapping logic used by :func:`route_distance` but
+    exposes it for interactive workflows (e.g. manual pin overrides in the
+    Streamlit quote builder).  When snapping succeeds the returned
+    :class:`PinSnapResult` includes the adjusted coordinates and notes
+    describing which endpoints moved.  If the OpenRouteService client cannot
+    provide a ``nearest`` endpoint the function raises ``RuntimeError`` so the
+    caller can surface an actionable error message to the user.
+    """
+
+    resolved_client = get_ors_client(client)
+    if not hasattr(resolved_client, "nearest"):
+        raise RuntimeError(
+            "openrouteservice client does not expose a 'nearest' endpoint; upgrade the client library."
+        )
+
+    origin_lon, origin_lat = origin
+    dest_lon, dest_lat = destination
+    origin_geo = GeocodeResult(lon=float(origin_lon), lat=float(origin_lat))
+    dest_geo = GeocodeResult(lon=float(dest_lon), lat=float(dest_lat))
+
+    snapped = _snap_to_road(resolved_client, origin_geo, dest_geo)
+    notes: Dict[str, str] = {}
+    changed = False
+    if snapped is not None:
+        _coords, notes = snapped
+        changed = bool(notes)
+
+    return PinSnapResult(
+        origin=(float(origin_geo.lon), float(origin_geo.lat)),
+        destination=(float(dest_geo.lon), float(dest_geo.lat)),
+        notes=notes,
+        changed=changed,
+    )
+
+
 def _haversine_km(
     lat1: float,
     lon1: float,
@@ -797,6 +840,14 @@ class QuoteResult:
     origin_ambiguities: Dict[str, Sequence[str]] = field(default_factory=dict)
     destination_ambiguities: Dict[str, Sequence[str]] = field(default_factory=dict)
     manual_quote: Optional[float] = None
+
+
+@dataclass
+class PinSnapResult:
+    origin: Tuple[float, float]
+    destination: Tuple[float, float]
+    notes: Dict[str, str] = field(default_factory=dict)
+    changed: bool = False
 
 
 def format_currency(amount: float) -> str:
@@ -1097,6 +1148,7 @@ __all__ = [
     "PricingModel",
     "QuoteInput",
     "QuoteResult",
+    "PinSnapResult",
     "SeasonalAdjustment",
     "calculate_quote",
     "compute_base_subtotal",
@@ -1106,4 +1158,5 @@ __all__ = [
     "persist_quote",
     "build_summary",
     "get_ors_client",
+    "snap_coordinates_to_road",
 ]

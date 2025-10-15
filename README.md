@@ -268,9 +268,10 @@ python routes_to_sqlite.py import-history historical_jobs.csv --geocode --route
 * Be polite: the script has built-in backoff between requests.
 * When ORS cannot snap a coordinate to the road network the quote builder now
   retries with the nearest road geometry. If that still fails you can drop
-  manual pins inside the UI to override the geocode before it finally falls
-  back to a straight-line distance estimate (all attempts are flagged in the UI
-  suggestions).
+  manual pins inside the UI, edit the latitude/longitude fields directly, or
+  use the **Snap pins to nearest road** action before it finally falls back to
+  a straight-line distance estimate (all attempts are flagged in the UI
+  suggestions and raise a modal warning).
 * If a route fails (e.g. invalid address), the row remains pending.
 
 ---
