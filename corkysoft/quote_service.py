@@ -104,14 +104,67 @@ def format_currency(amount: float) -> str:
 
 
 def build_summary(inputs: QuoteInput, result: QuoteResult) -> str:
-    lines = [
-        f"Quote date: {inputs.quote_date.isoformat()}",
-        f"Route: {result.origin_resolved} → {result.destination_resolved}",
-        f"Distance: {result.distance_km:.1f} km ({result.duration_hr:.1f} h)",
-        f"Volume: {inputs.cubic_m:.1f} m³",
-        "",
-        f"Base ({result.pricing_model.label}): {format_currency(result.base_subtotal)}",
-    ]
+    def _unique_nonempty(values: Sequence[str]) -> List[str]:
+        seen: set[str] = set()
+        ordered: List[str] = []
+        for value in values:
+            if not value:
+                continue
+            if value in seen:
+                continue
+            ordered.append(value)
+            seen.add(value)
+        return ordered
+
+    def _append_section(
+        lines: List[str],
+        title: str,
+        entries: Sequence[Tuple[str, Sequence[str]]],
+    ) -> None:
+        relevant = [
+            (label, _unique_nonempty(values))
+            for label, values in entries
+            if any(value for value in values)
+        ]
+        if not relevant:
+            return
+        if lines and lines[-1] != "":
+            lines.append("")
+        lines.append(title)
+        lines.append("")
+        for label, values in relevant:
+            lines.append(label)
+            lines.append("")
+            for value in values:
+                lines.append(f"    {value}")
+            if not values:
+                lines.append("    (none)")
+            lines.append("")
+        if lines and lines[-1] == "":
+            lines.pop()
+
+    lines: List[str] = ["Quote output", ""]
+
+    client_display: Optional[str] = None
+    if inputs.client_details and inputs.client_details.display_name():
+        client_display = inputs.client_details.display_name()
+    elif inputs.client_id is not None:
+        client_display = f"Client #{inputs.client_id}"
+
+    if client_display:
+        lines.append(f"Client: {client_display}")
+        lines.append("")
+
+    lines.extend(
+        [
+            f"Quote date: {inputs.quote_date.isoformat()}",
+            f"Route: {result.origin_resolved} → {result.destination_resolved}",
+            f"Distance: {result.distance_km:.1f} km ({result.duration_hr:.1f} h)",
+            f"Volume: {inputs.cubic_m:.1f} m³",
+            "",
+            f"Base ({result.pricing_model.label}): {format_currency(result.base_subtotal)}",
+        ]
+    )
     if result.modifier_details:
         lines.append("Modifiers:")
         for item in result.modifier_details:
@@ -145,6 +198,52 @@ def build_summary(inputs: QuoteInput, result: QuoteResult) -> str:
         lines.append(
             f"Manual quote override: {format_currency(result.manual_quote)}"
         )
+    _append_section(
+        lines,
+        "Origin corrections & suggestions",
+        [
+            (
+                "Candidates considered during normalization:",
+                result.origin_candidates,
+            ),
+            (
+                "Autocorrected place names from geocoding:",
+                result.origin_suggestions,
+            ),
+            (
+                "Ambiguous tokens detected:",
+                [
+                    f"{token}: {', '.join(options)}"
+                    for token, options in (result.origin_ambiguities or {}).items()
+                ],
+            ),
+        ],
+    )
+    _append_section(
+        lines,
+        "Destination corrections & suggestions",
+        [
+            (
+                "Candidates considered during normalization:",
+                result.destination_candidates,
+            ),
+            (
+                "Autocorrected place names from geocoding:",
+                result.destination_suggestions,
+            ),
+            (
+                "Ambiguous tokens detected:",
+                [
+                    f"{token}: {', '.join(options)}"
+                    for token, options in (result.destination_ambiguities or {}).items()
+                ],
+            ),
+        ],
+    )
+
+    while lines and lines[-1] == "":
+        lines.pop()
+
     return "\n".join(lines)
 
 
