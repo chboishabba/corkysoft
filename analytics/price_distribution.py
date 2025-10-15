@@ -5,7 +5,7 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Iterable, Literal, Optional, Sequence
+from typing import Any, Dict, Iterable, Literal, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -915,10 +915,23 @@ def load_quotes(
     safe_volume = volume_series.replace({0: np.nan})
     df["price_per_m3"] = quote_total / safe_volume
 
-    df["client"] = "Quote builder"
+    if "client_display" in df.columns:
+        df["client"] = df["client_display"].fillna("Quote builder")
+    else:
+        df["client"] = "Quote builder"
+
+    client_lookup: Dict[int, str] = {}
+    try:
+        for quote_id, client_display in conn.execute(
+            "SELECT id, client_display FROM quotes"
+        ):
+            if client_display:
+                client_lookup[int(quote_id)] = str(client_display)
+    except Exception:  # pragma: no cover - defensive fallback for legacy schemas
+        client_lookup = {}
 
     mapping = infer_columns(df)
-    return _prepare_loaded_jobs(
+    prepared_df, mapping = _prepare_loaded_jobs(
         df,
         mapping,
         base_costs,
@@ -928,6 +941,15 @@ def load_quotes(
         corridor=corridor,
         postcode_prefix=postcode_prefix,
     )
+
+    if client_lookup and "id" in prepared_df.columns:
+        mapped_clients = prepared_df["id"].map(client_lookup)
+        prepared_df["client_display"] = mapped_clients.where(
+            mapped_clients.notna(), prepared_df["client_display"]
+        )
+        prepared_df["client"] = prepared_df["client_display"].fillna("Quote builder")
+
+    return prepared_df, mapping
 
 
 def load_live_jobs(

@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS historical_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_date TEXT,
     client TEXT,
+    client_id INTEGER,
     corridor_display TEXT,
     price_per_m3 REAL,
     revenue_total REAL,
@@ -56,6 +57,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_date TEXT,
     client TEXT,
+    client_id INTEGER,
     origin TEXT,
     destination TEXT,
     price_per_m3 REAL,
@@ -163,6 +165,14 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
     """Create empty dashboard tables so the UI can load before data imports."""
 
     conn.executescript(_DASHBOARD_SCHEMA_SQL)
+    hist_columns = _table_columns(conn, "historical_jobs")
+    if "client_id" not in hist_columns:
+        conn.execute("ALTER TABLE historical_jobs ADD COLUMN client_id INTEGER")
+
+    job_columns = _table_columns(conn, "jobs")
+    if "client_id" not in job_columns:
+        conn.execute("ALTER TABLE jobs ADD COLUMN client_id INTEGER")
+
     ensure_historical_job_routes_table(conn)
     conn.commit()
 

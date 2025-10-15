@@ -59,12 +59,15 @@ from analytics.live_data import (
 from corkysoft.quote_service import (
     COUNTRY_DEFAULT,
     DEFAULT_MODIFIERS,
+    ClientDetails,
     build_summary,
     QuoteInput,
     QuoteResult,
     calculate_quote,
     ensure_schema as ensure_quote_schema,
+    format_client_display,
     format_currency,
+    find_client_matches,
     persist_quote,
 )
 from corkysoft.schema import ensure_schema as ensure_core_schema
@@ -1678,6 +1681,40 @@ with connection_scope() as conn:
         modifier_options = [mod.id for mod in DEFAULT_MODIFIERS]
         modifier_labels: Dict[str, str] = {mod.id: mod.label for mod in DEFAULT_MODIFIERS}
 
+        client_rows = conn.execute(
+            """
+            SELECT id, first_name, last_name, company_name, email, phone,
+                   address_line1, address_line2, city, state, postcode, country, notes
+            FROM clients
+            ORDER BY
+                CASE WHEN company_name IS NOT NULL AND TRIM(company_name) <> '' THEN 0 ELSE 1 END,
+                LOWER(COALESCE(company_name, '')),
+                LOWER(COALESCE(first_name, '')),
+                LOWER(COALESCE(last_name, ''))
+            """
+        ).fetchall()
+        client_option_values: List[Optional[int]] = [None] + [int(row[0]) for row in client_rows]
+        client_label_map: Dict[int, str] = {
+            int(row[0]): format_client_display(row[1], row[2], row[3])
+            for row in client_rows
+        }
+        default_client_id = session_inputs.client_id if session_inputs else None
+        default_client_details = session_inputs.client_details if session_inputs else None
+        client_match_choice_state = st.session_state.get("quote_client_match_choice", -1)
+        client_form_should_expand = bool(
+            (default_client_id and default_client_id in client_option_values)
+            or (
+                default_client_details
+                and hasattr(default_client_details, "has_any_data")
+                and default_client_details.has_any_data()
+            )
+        )
+        selected_client_id_form: Optional[int] = (
+            default_client_id if default_client_id in client_option_values else None
+        )
+        entered_client_details_form: Optional[ClientDetails] = default_client_details
+        match_choice_form = client_match_choice_state
+
         with st.form("quote_builder_form"):
             origin_value = st.text_input("Origin", value=default_origin)
             destination_value = st.text_input(
@@ -1722,6 +1759,177 @@ with connection_scope() as conn:
                     " is enabled."
                 ),
             )
+            with st.expander(
+                "Client details (optional)", expanded=client_form_should_expand
+            ):
+                existing_index = 0
+                if selected_client_id_form in client_option_values:
+                    existing_index = client_option_values.index(selected_client_id_form)
+                selected_client_id_form = st.selectbox(
+                    "Link to existing client",
+                    options=client_option_values,
+                    index=existing_index,
+                    format_func=lambda cid: (
+                        "No client linked"
+                        if cid is None
+                        else client_label_map.get(cid, f"Client #{cid}")
+                    ),
+                )
+                st.caption(
+                    "Enter details below to create a client record if no existing client applies."
+                )
+                company_input = st.text_input(
+                    "Company name",
+                    value=(
+                        default_client_details.company_name
+                        if default_client_details and default_client_details.company_name
+                        else ""
+                    ),
+                )
+                first_name_input = st.text_input(
+                    "First name",
+                    value=(
+                        default_client_details.first_name
+                        if default_client_details and default_client_details.first_name
+                        else ""
+                    ),
+                )
+                last_name_input = st.text_input(
+                    "Last name",
+                    value=(
+                        default_client_details.last_name
+                        if default_client_details and default_client_details.last_name
+                        else ""
+                    ),
+                )
+                email_input = st.text_input(
+                    "Email",
+                    value=(
+                        default_client_details.email
+                        if default_client_details and default_client_details.email
+                        else ""
+                    ),
+                )
+                phone_input = st.text_input(
+                    "Phone",
+                    value=(
+                        default_client_details.phone
+                        if default_client_details and default_client_details.phone
+                        else ""
+                    ),
+                )
+                address_line1_input = st.text_input(
+                    "Address line 1",
+                    value=(
+                        default_client_details.address_line1
+                        if default_client_details and default_client_details.address_line1
+                        else ""
+                    ),
+                )
+                address_line2_input = st.text_input(
+                    "Address line 2",
+                    value=(
+                        default_client_details.address_line2
+                        if default_client_details and default_client_details.address_line2
+                        else ""
+                    ),
+                )
+                city_input = st.text_input(
+                    "City / Suburb",
+                    value=(
+                        default_client_details.city
+                        if default_client_details and default_client_details.city
+                        else ""
+                    ),
+                )
+                state_input = st.text_input(
+                    "State / Territory",
+                    value=(
+                        default_client_details.state
+                        if default_client_details and default_client_details.state
+                        else ""
+                    ),
+                )
+                postcode_input = st.text_input(
+                    "Postcode",
+                    value=(
+                        default_client_details.postcode
+                        if default_client_details and default_client_details.postcode
+                        else ""
+                    ),
+                )
+                client_country_default = (
+                    default_client_details.country
+                    if default_client_details and default_client_details.country
+                    else country_value
+                    if country_value
+                    else COUNTRY_DEFAULT
+                )
+                client_country_input = st.text_input(
+                    "Client country",
+                    value=client_country_default,
+                )
+                notes_input = st.text_area(
+                    "Notes",
+                    value=(
+                        default_client_details.notes
+                        if default_client_details and default_client_details.notes
+                        else ""
+                    ),
+                    height=80,
+                )
+                entered_client_details_form = ClientDetails(
+                    company_name=company_input,
+                    first_name=first_name_input,
+                    last_name=last_name_input,
+                    email=email_input,
+                    phone=phone_input,
+                    address_line1=address_line1_input,
+                    address_line2=address_line2_input,
+                    city=city_input,
+                    state=state_input,
+                    postcode=postcode_input,
+                    country=client_country_input,
+                    notes=notes_input,
+                )
+                match_choice_form = -1
+                if (
+                    selected_client_id_form is None
+                    and entered_client_details_form.has_any_data()
+                ):
+                    matches = find_client_matches(conn, entered_client_details_form)
+                    if matches:
+                        match_labels = {
+                            match.id: f"{match.display_name} ({match.reason})"
+                            for match in matches
+                        }
+                        warning_lines = "\n".join(
+                            f"- {label}" for label in match_labels.values()
+                        )
+                        st.warning(
+                            "Potential existing clients found:\n" + warning_lines
+                        )
+                        match_options = [-1] + list(match_labels.keys())
+                        default_choice = (
+                            client_match_choice_state
+                            if client_match_choice_state in match_options
+                            else -1
+                        )
+                        match_choice_form = st.selectbox(
+                            "Would you like to link one of these clients?",
+                            options=match_options,
+                            index=match_options.index(default_choice),
+                            format_func=lambda value: (
+                                "Create new client"
+                                if value == -1
+                                else match_labels.get(value, f"Client #{value}")
+                            ),
+                            key="quote_client_match_choice",
+                        )
+                    else:
+                        st.session_state.pop("quote_client_match_choice", None)
+                else:
+                    st.session_state.pop("quote_client_match_choice", None)
             submitted = st.form_submit_button("Calculate quote")
 
         stored_inputs = session_inputs
@@ -1731,33 +1939,56 @@ with connection_scope() as conn:
                 st.error("Origin and destination are required to calculate a quote.")
             else:
                 margin_to_apply = float(margin_percent_value) if apply_margin else None
-                quote_inputs = QuoteInput(
-                    origin=origin_value,
-                    destination=destination_value,
-                    cubic_m=float(cubic_m_value),
-                    quote_date=quote_date_value,
-                    modifiers=list(selected_modifier_ids),
-                    target_margin_percent=margin_to_apply,
-                    country=country_value or COUNTRY_DEFAULT,
-                )
-                try:
-                    result = calculate_quote(conn, quote_inputs)
-                except RuntimeError as exc:
-                    st.error(str(exc))
-                except ValueError as exc:
-                    st.error(str(exc))
+                selected_client_id_final = selected_client_id_form
+                client_details_to_store: Optional[ClientDetails]
+                if (
+                    entered_client_details_form
+                    and entered_client_details_form.has_any_data()
+                ):
+                    client_details_to_store = entered_client_details_form
                 else:
-                    st.session_state["quote_inputs"] = quote_inputs
-                    st.session_state["quote_result"] = result
-                    st.session_state["quote_manual_override_enabled"] = False
-                    st.session_state["quote_manual_override_amount"] = float(
-                        result.final_quote
+                    client_details_to_store = None
+
+                submission_valid = True
+                if selected_client_id_final is None and client_details_to_store is not None:
+                    if match_choice_form not in (-1, None):
+                        selected_client_id_final = int(match_choice_form)
+                    elif not client_details_to_store.has_identity():
+                        st.error(
+                            "Provide a company name or both first and last names when creating a client."
+                        )
+                        submission_valid = False
+
+                if submission_valid:
+                    quote_inputs = QuoteInput(
+                        origin=origin_value,
+                        destination=destination_value,
+                        cubic_m=float(cubic_m_value),
+                        quote_date=quote_date_value,
+                        modifiers=list(selected_modifier_ids),
+                        target_margin_percent=margin_to_apply,
+                        country=country_value or COUNTRY_DEFAULT,
+                        client_id=selected_client_id_final,
+                        client_details=client_details_to_store,
                     )
-                    st.session_state["quote_pin_override"] = _initial_pin_state(result)
-                    _set_query_params(view="Quote builder")
-                    st.success("Quote calculated. Review the breakdown below.")
-                    stored_inputs = quote_inputs
-                    quote_result = result
+                    try:
+                        result = calculate_quote(conn, quote_inputs)
+                    except RuntimeError as exc:
+                        st.error(str(exc))
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.session_state["quote_inputs"] = quote_inputs
+                        st.session_state["quote_result"] = result
+                        st.session_state["quote_manual_override_enabled"] = False
+                        st.session_state["quote_manual_override_amount"] = float(
+                            result.final_quote
+                        )
+                        st.session_state["quote_pin_override"] = _initial_pin_state(result)
+                        _set_query_params(view="Quote builder")
+                        st.success("Quote calculated. Review the breakdown below.")
+                        stored_inputs = quote_inputs
+                        quote_result = result
 
         stored_inputs = st.session_state.get("quote_inputs")
         quote_result = st.session_state.get("quote_result")
@@ -1790,6 +2021,13 @@ with connection_scope() as conn:
                 quote_result.manual_quote = None
             quote_result.summary_text = build_summary(stored_inputs, quote_result)
             st.session_state["quote_result"] = quote_result
+            client_label: Optional[str] = None
+            if stored_inputs.client_details and stored_inputs.client_details.display_name():
+                client_label = stored_inputs.client_details.display_name()
+            elif stored_inputs.client_id is not None:
+                client_label = client_label_map.get(stored_inputs.client_id)
+            if client_label:
+                st.write(f"**Client:** {client_label}")
             st.write(
                 f"**Route:** {quote_result.origin_resolved} → {quote_result.destination_resolved}"
             )
