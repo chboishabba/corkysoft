@@ -61,21 +61,23 @@ from analytics.live_data import (
     load_active_routes,
     load_truck_positions,
 )
+from corkysoft.pricing import DEFAULT_MODIFIERS
 from corkysoft.quote_service import (
     COUNTRY_DEFAULT,
-    DEFAULT_MODIFIERS,
-    ClientDetails,
-    build_summary,
     QuoteInput,
     QuoteResult,
+    build_summary,
     calculate_quote,
-    ensure_schema as ensure_quote_schema,
-    format_client_display,
     format_currency,
-    find_client_matches,
-    persist_quote,
-    snap_coordinates_to_road,
 )
+from corkysoft.repo import (
+    ClientDetails,
+    ensure_schema as ensure_quote_schema,
+    find_client_matches,
+    format_client_display,
+    persist_quote,
+)
+from corkysoft.routing import snap_coordinates_to_road
 from corkysoft.schema import ensure_schema as ensure_core_schema
 
 

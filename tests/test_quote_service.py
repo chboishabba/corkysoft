@@ -32,22 +32,29 @@ if "openrouteservice" not in sys.modules:
 from analytics.db import ensure_dashboard_tables
 from analytics.price_distribution import load_quotes
 import corkysoft.quote_service as quote_service
-
-from corkysoft.quote_service import (
+import corkysoft.routing as routing
+from corkysoft.au_address import GeocodeResult
+from corkysoft.pricing import (
+    DEFAULT_MODIFIERS,
     PRICING_MODELS,
-    ClientDetails,
+    choose_pricing_model,
+    compute_base_subtotal,
+    compute_modifiers,
+)
+from corkysoft.quote_service import (
     QuoteInput,
     QuoteResult,
     build_summary,
     calculate_quote,
+)
+from corkysoft.repo import (
+    ClientDetails,
     ensure_schema,
     find_client_matches,
     format_client_display,
     persist_quote,
-    route_distance,
-    snap_coordinates_to_road,
 )
-from corkysoft.au_address import GeocodeResult
+from corkysoft.routing import route_distance, snap_coordinates_to_road
 
 
 def _quote_input() -> QuoteInput:
@@ -90,14 +97,37 @@ def _quote_result() -> QuoteResult:
     )
 
 
-def test_get_ors_client_requires_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
-    import corkysoft.quote_service as quote_service
+def test_choose_pricing_model_progression() -> None:
+    assert choose_pricing_model(50.0) == PRICING_MODELS[0]
+    assert choose_pricing_model(200.0) == PRICING_MODELS[1]
+    assert choose_pricing_model(999.0) == PRICING_MODELS[2]
 
-    monkeypatch.setattr(quote_service, "ors", None)
-    monkeypatch.setattr(quote_service, "_ORS_CLIENT", None)
+
+def test_compute_base_subtotal_includes_components() -> None:
+    model = PRICING_MODELS[0]
+    subtotal, components = compute_base_subtotal(100.0, 25.0, model)
+    assert subtotal > model.base_callout
+    assert components["effective_m3"] >= model.minimum_m3
+    assert components["linehaul_cost"] > 0
+
+
+def test_compute_modifiers_handles_flat_and_percent() -> None:
+    base = 1000.0
+    selected = {DEFAULT_MODIFIERS[0].id, DEFAULT_MODIFIERS[1].id}
+    total, details = compute_modifiers(base, selected)
+    assert total > 0
+    ids = {item["id"] for item in details}
+    assert selected == ids
+    percent_item = next(item for item in details if item["id"] == DEFAULT_MODIFIERS[1].id)
+    assert pytest.approx(percent_item["amount"]) == base * DEFAULT_MODIFIERS[1].value
+
+
+def test_get_ors_client_requires_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(routing, "ors", None)
+    monkeypatch.setattr(routing, "_ORS_CLIENT", None)
 
     with pytest.raises(RuntimeError, match="openrouteservice client is unavailable"):
-        quote_service.get_ors_client()
+        routing.get_ors_client()
 
 
 def test_persist_quote_stores_manual_override() -> None:
@@ -258,29 +288,6 @@ def test_persist_quote_creates_client_record() -> None:
 )
 def test_persist_quote_skips_client_creation_without_identity(
     details: ClientDetails, expected_display: str
-def test_persist_quote_requires_client_identity() -> None:
-    conn = sqlite3.connect(":memory:")
-    ensure_schema(conn)
-    ensure_dashboard_tables(conn)
-
-    inputs = _quote_input()
-    inputs.client_details = ClientDetails(email="noname@example.com")
-    result = _quote_result()
-    result.summary_text = build_summary(inputs, result)
-
-    with pytest.raises(ValueError, match="Client requires a company name"):
-        persist_quote(conn, inputs, result)
-
-
-@pytest.mark.parametrize(
-    "details",
-    [
-        ClientDetails(first_name="Taylor"),
-        ClientDetails(last_name="Jordan"),
-    ],
-)
-def test_persist_quote_requires_both_names_without_company(
-    details: ClientDetails,
 ) -> None:
     conn = sqlite3.connect(":memory:")
     ensure_schema(conn)
@@ -301,6 +308,18 @@ def test_persist_quote_requires_both_names_without_company(
         (rowid,),
     ).fetchone()
     assert quote_client == (None, expected_display)
+
+
+def test_persist_quote_requires_client_identity() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    ensure_dashboard_tables(conn)
+
+    inputs = _quote_input()
+    inputs.client_details = ClientDetails(notes="No identity provided")
+    result = _quote_result()
+    result.summary_text = build_summary(inputs, result)
+
     with pytest.raises(ValueError, match="Client requires a company name"):
         persist_quote(conn, inputs, result)
 
@@ -404,7 +423,7 @@ def test_is_routable_point_error_handles_dict_in_second_arg(
             self.status_code = status_code
 
     fake_exceptions = types.SimpleNamespace(ApiError=FakeApiError)
-    monkeypatch.setattr(quote_service, "ors_exceptions", fake_exceptions)
+    monkeypatch.setattr(routing, "ors_exceptions", fake_exceptions)
 
     exc = FakeApiError(
         404,
@@ -416,7 +435,7 @@ def test_is_routable_point_error_handles_dict_in_second_arg(
         },
     )
 
-    assert quote_service._is_routable_point_error(exc)
+    assert routing._is_routable_point_error(exc)
 
 
 def test_is_routable_point_error_handles_string_args(
@@ -428,11 +447,11 @@ def test_is_routable_point_error_handles_string_args(
             self.status_code = status_code
 
     fake_exceptions = types.SimpleNamespace(ApiError=FakeApiError)
-    monkeypatch.setattr(quote_service, "ors_exceptions", fake_exceptions)
+    monkeypatch.setattr(routing, "ors_exceptions", fake_exceptions)
 
     exc = FakeApiError(404, "Could not find routable point within a radius")
 
-    assert quote_service._is_routable_point_error(exc)
+    assert routing._is_routable_point_error(exc)
 
 
 def test_route_distance_snaps_and_retries(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -496,10 +515,10 @@ def test_route_distance_snaps_and_retries(monkeypatch: pytest.MonkeyPatch) -> No
 
     client_instance = _Client()
     monkeypatch.setattr(
-        "corkysoft.quote_service.get_ors_client",
+        "corkysoft.routing.get_ors_client",
         lambda client=None: client_instance,
     )
-    monkeypatch.setattr("corkysoft.quote_service.geocode_cached", _fake_geocode)
+    monkeypatch.setattr("corkysoft.routing.geocode_cached", _fake_geocode)
 
     distance_km, duration_hr, resolved_origin, resolved_dest = route_distance(
         conn,
@@ -543,15 +562,15 @@ def test_route_distance_manual_overrides(monkeypatch: pytest.MonkeyPatch) -> Non
 
     client_instance = _Client()
     monkeypatch.setattr(
-        "corkysoft.quote_service.get_ors_client",
+        "corkysoft.routing.get_ors_client",
         lambda client=None: client_instance,
     )
-    monkeypatch.setattr("corkysoft.quote_service.geocode_cached", _fake_geocode)
+    monkeypatch.setattr("corkysoft.routing.geocode_cached", _fake_geocode)
 
     origin_override = (153.02, -27.45)
     destination_override = (153.10, -27.48)
 
-    distance_km, duration_hr, resolved_origin, resolved_dest = quote_service.route_distance(
+    distance_km, duration_hr, resolved_origin, resolved_dest = route_distance(
         conn,
         "Origin",
         "Destination",
@@ -608,8 +627,8 @@ def test_route_distance_falls_back_to_haversine(monkeypatch: pytest.MonkeyPatch)
     ) -> GeocodeResult:
         return origin if place == "Origin" else dest
 
-    monkeypatch.setattr("corkysoft.quote_service.get_ors_client", lambda client=None: _Client())
-    monkeypatch.setattr("corkysoft.quote_service.geocode_cached", _fake_geocode)
+    monkeypatch.setattr("corkysoft.routing.get_ors_client", lambda client=None: _Client())
+    monkeypatch.setattr("corkysoft.routing.geocode_cached", _fake_geocode)
 
     distance_km, duration_hr, resolved_origin, resolved_dest = route_distance(
         conn,
@@ -618,7 +637,7 @@ def test_route_distance_falls_back_to_haversine(monkeypatch: pytest.MonkeyPatch)
         "Australia",
     )
 
-    expected_distance = quote_service._haversine_km(
+    expected_distance = routing._haversine_km(
         origin.lat,
         origin.lon,
         dest.lat,
@@ -626,7 +645,7 @@ def test_route_distance_falls_back_to_haversine(monkeypatch: pytest.MonkeyPatch)
     )
     assert distance_km == pytest.approx(expected_distance)
     expected_duration = (
-        expected_distance / quote_service.FALLBACK_SPEED_KMH
+        expected_distance / routing.FALLBACK_SPEED_KMH
         if expected_distance > 0
         else 0.0
     )
@@ -657,7 +676,7 @@ def test_snap_coordinates_to_road_adjusts_points(
 
     client_instance = _Client()
     monkeypatch.setattr(
-        "corkysoft.quote_service.get_ors_client",
+        "corkysoft.routing.get_ors_client",
         lambda client=None: client_instance,
     )
 
@@ -689,7 +708,7 @@ def test_snap_coordinates_to_road_handles_unchanged_points(
 
     client_instance = _Client()
     monkeypatch.setattr(
-        "corkysoft.quote_service.get_ors_client",
+        "corkysoft.routing.get_ors_client",
         lambda client=None: client_instance,
     )
 
@@ -710,7 +729,7 @@ def test_snap_coordinates_to_road_requires_nearest_endpoint(
         pass
 
     monkeypatch.setattr(
-        "corkysoft.quote_service.get_ors_client",
+        "corkysoft.routing.get_ors_client",
         lambda client=None: _Client(),
     )
 
