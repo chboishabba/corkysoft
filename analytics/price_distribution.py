@@ -1,11 +1,13 @@
 """Helpers for the price-distribution Streamlit view."""
 from __future__ import annotations
 
+import logging
 import math
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Iterable, Literal, Optional, Sequence
+from typing import Any, Dict, Iterable, Literal, Optional, Sequence, TYPE_CHECKING
+
 
 import numpy as np
 import pandas as pd
@@ -23,6 +25,20 @@ from .db import (
     migrate_geojson_to_routes,
     set_parameter_value,
 )
+
+
+try:  # pragma: no cover - availability exercised via tests
+    from corkysoft.quote_service import get_ors_client as _get_ors_client
+except Exception:  # pragma: no cover - optional dependency
+    _get_ors_client = None
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from openrouteservice import Client as ORSClient
+else:
+    ORSClient = Any  # type: ignore[misc, assignment]
+
+
+logger = logging.getLogger(__name__)
 
 
 PROFITABILITY_BANDS: Sequence[tuple[float, float, str]] = (
@@ -667,10 +683,12 @@ def _historical_jobs_query() -> str:
             d.postcode AS destination_postcode,
             d.country AS destination_country,
             d.lon AS dest_lon,
-            d.lat AS dest_lat
+            d.lat AS dest_lat,
+            hr.geojson AS route_geojson
         FROM historical_jobs AS hj
         LEFT JOIN addresses AS o ON hj.origin_address_id = o.id
         LEFT JOIN addresses AS d ON hj.destination_address_id = d.id
+        LEFT JOIN historical_job_routes AS hr ON hr.historical_job_id = hj.id
     """
 
 
@@ -988,10 +1006,23 @@ def load_quotes(
     safe_volume = volume_series.replace({0: np.nan})
     df["price_per_m3"] = quote_total / safe_volume
 
-    df["client"] = "Quote builder"
+    if "client_display" in df.columns:
+        df["client"] = df["client_display"].fillna("Quote builder")
+    else:
+        df["client"] = "Quote builder"
+
+    client_lookup: Dict[int, str] = {}
+    try:
+        for quote_id, client_display in conn.execute(
+            "SELECT id, client_display FROM quotes"
+        ):
+            if client_display:
+                client_lookup[int(quote_id)] = str(client_display)
+    except Exception:  # pragma: no cover - defensive fallback for legacy schemas
+        client_lookup = {}
 
     mapping = infer_columns(df)
-    return _prepare_loaded_jobs(
+    prepared_df, mapping = _prepare_loaded_jobs(
         df,
         mapping,
         base_costs,
@@ -1001,6 +1032,15 @@ def load_quotes(
         corridor=corridor,
         postcode_prefix=postcode_prefix,
     )
+
+    if client_lookup and "id" in prepared_df.columns:
+        mapped_clients = prepared_df["id"].map(client_lookup)
+        prepared_df["client_display"] = mapped_clients.where(
+            mapped_clients.notna(), prepared_df["client_display"]
+        )
+        prepared_df["client"] = prepared_df["client_display"].fillna("Quote builder")
+
+    return prepared_df, mapping
 
 
 def load_live_jobs(
@@ -2109,6 +2149,92 @@ def _circle_coordinates(
     return latitudes, longitudes
 
 
+def _geometry_to_coordinates(geometry: Any) -> tuple[list[float], list[float]]:
+    """Extract latitude and longitude sequences from a GeoJSON geometry."""
+
+    if not isinstance(geometry, dict):
+        return [], []
+
+    geom_type = geometry.get("type")
+    coordinates = geometry.get("coordinates")
+    if not coordinates:
+        return [], []
+
+    ring: Optional[Sequence[Sequence[float]]]
+    if geom_type == "Polygon":
+        ring = coordinates[0] if isinstance(coordinates, Sequence) else None
+    elif geom_type == "MultiPolygon":
+        if (
+            isinstance(coordinates, Sequence)
+            and coordinates
+            and isinstance(coordinates[0], Sequence)
+            and coordinates[0]
+            and isinstance(coordinates[0][0], Sequence)
+        ):
+            ring = coordinates[0][0]
+        else:
+            ring = None
+    else:
+        return [], []
+
+    if not ring:
+        return [], []
+
+    latitudes: list[float] = []
+    longitudes: list[float] = []
+    for point in ring:
+        if not isinstance(point, Sequence) or len(point) < 2:
+            continue
+        lon_val, lat_val = point[0], point[1]
+        if not isinstance(lon_val, (int, float)) or not isinstance(lat_val, (int, float)):
+            continue
+        longitudes.append(float(lon_val))
+        latitudes.append(float(lat_val))
+
+    if not latitudes or not longitudes:
+        return [], []
+
+    if latitudes[0] != latitudes[-1] or longitudes[0] != longitudes[-1]:
+        latitudes.append(latitudes[0])
+        longitudes.append(longitudes[0])
+
+    return latitudes, longitudes
+
+
+def _extract_isochrone_coordinates(feature_collection: Any) -> tuple[list[float], list[float]]:
+    """Return the first polygon ring from an ORS isochrone feature collection."""
+
+    if not isinstance(feature_collection, dict):
+        return [], []
+
+    features = feature_collection.get("features")
+    if not isinstance(features, Sequence):
+        return [], []
+
+    sortable: list[tuple[float, Any]] = []
+    for feature in features:
+        if not isinstance(feature, dict):
+            continue
+        properties = feature.get("properties")
+        value = float(properties.get("value")) if isinstance(properties, dict) and "value" in properties else float("inf")
+        sortable.append((value, feature))
+
+    for _, feature in sorted(sortable, key=lambda item: item[0]):
+        latitudes, longitudes = _geometry_to_coordinates(feature.get("geometry"))
+        if latitudes and longitudes:
+            return latitudes, longitudes
+
+    # Fall back to iterating in original order if properties/value metadata is missing.
+    for feature in features:
+        if not isinstance(feature, dict):
+            continue
+        latitudes, longitudes = _geometry_to_coordinates(feature.get("geometry"))
+        if latitudes and longitudes:
+            return latitudes, longitudes
+
+    return [], []
+
+
 def build_isochrone_polygons(
     df: pd.DataFrame,
     *,
@@ -2117,6 +2243,8 @@ def build_isochrone_polygons(
     default_speed_kmh: float = 70.0,
     max_routes: int = 50,
     points: int = 60,
+    ors_client: Optional[ORSClient] = None,
+    ors_profile: str = "driving-hgv",
 ) -> pd.DataFrame:
     """Return approximate isochrone polygons for each route in ``df``.
 
@@ -2145,13 +2273,23 @@ def build_isochrone_polygons(
         from being overwhelmed by hundreds of polygons.
     points:
         Number of vertices used to approximate each circular polygon.
+    ors_client:
+        Optional OpenRouteService client to use for travel-time isochrones.
+        When ``None`` the helper attempts to create a shared client via
+        :func:`corkysoft.quote_service.get_ors_client`.  If a client cannot be
+        acquired the function falls back to circular approximations.
+    ors_profile:
+        Routing profile supplied to the OpenRouteService isochrone request.  The
+        default of ``"driving-hgv"`` aligns with heavy vehicle routing.
 
     Returns
     -------
     pandas.DataFrame
         Dataframe with ``label``, ``centre_lat``, ``centre_lon``,
         ``radius_km``, ``speed_kmh``, ``latitudes``, ``longitudes`` and
-        ``tooltip`` columns.  Each row describes one isochrone polygon.
+        ``tooltip`` columns.  Each row describes one isochrone polygon, using
+        network-aware shapes when OpenRouteService is available and circular
+        fallbacks otherwise.
     """
 
     if df.empty:
@@ -2218,6 +2356,22 @@ def build_isochrone_polygons(
         None,
     )
 
+    client: Optional[ORSClient] = None
+    if ors_client is not None:
+        client = ors_client
+    elif _get_ors_client is not None:
+        try:
+            client = _get_ors_client()
+        except Exception as exc:  # pragma: no cover - exercised via fallback path
+            logger.debug("Unable to initialise ORS client for isochrones: %s", exc)
+            client = None
+
+    range_seconds: list[int] = []
+    if horizon_hours > 0 and math.isfinite(horizon_hours):
+        seconds = int(round(horizon_hours * 3600.0))
+        if seconds > 0:
+            range_seconds = [seconds]
+
     records: list[dict[str, Any]] = []
     for _, row in df.iterrows():
         lat_value = _coerce_float(row.get(lat_column))
@@ -2246,16 +2400,44 @@ def build_isochrone_polygons(
         if radius_km <= 0 or not math.isfinite(radius_km):
             continue
 
-        latitudes, longitudes = _circle_coordinates(
-            lat_value,
-            lon_value,
-            radius_km,
-            points=points,
-        )
+        label = _route_display_name(row)
+
+        latitudes: list[float]
+        longitudes: list[float]
+        if client is not None and range_seconds:
+            try:
+                response = client.isochrones(
+                    locations=[[float(lon_value), float(lat_value)]],
+                    profile=ors_profile,
+                    range=range_seconds,
+                )
+            except Exception as exc:  # pragma: no cover - network failures are environment-dependent
+                logger.debug("ORS isochrone request failed for %s: %s", label, exc)
+                latitudes, longitudes = _circle_coordinates(
+                    lat_value,
+                    lon_value,
+                    radius_km,
+                    points=points,
+                )
+            else:
+                latitudes, longitudes = _extract_isochrone_coordinates(response)
+                if not latitudes or not longitudes:
+                    latitudes, longitudes = _circle_coordinates(
+                        lat_value,
+                        lon_value,
+                        radius_km,
+                        points=points,
+                    )
+        else:
+            latitudes, longitudes = _circle_coordinates(
+                lat_value,
+                lon_value,
+                radius_km,
+                points=points,
+            )
         if not latitudes or not longitudes:
             continue
 
-        label = _route_display_name(row)
         tooltip = (
             f"{label} — {horizon_hours:.1f} hr reach ≈ {radius_km:.0f} km "
             f"(avg {speed_kmh:.0f} km/h)"

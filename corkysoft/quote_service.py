@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 _ORS_CLIENT: Optional["ors.Client"] = None
 POSTCODE_RE = re.compile(r"\b(\d{4})\b")
+STATE_RE = re.compile(r"\b(ACT|NSW|NT|QLD|SA|TAS|VIC|WA)\b", re.IGNORECASE)
 
 
 def get_ors_client(client: Optional[ors.Client] = None) -> ors.Client:
@@ -78,6 +79,24 @@ CREATE TABLE IF NOT EXISTS geocode_cache (
   ts  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS clients (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  first_name TEXT,
+  last_name TEXT,
+  company_name TEXT,
+  email TEXT,
+  phone TEXT,
+  address_line1 TEXT,
+  address_line2 TEXT,
+  city TEXT,
+  state TEXT,
+  postcode TEXT,
+  country TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS quotes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT NOT NULL,
@@ -102,6 +121,8 @@ CREATE TABLE IF NOT EXISTS quotes (
   seasonal_label TEXT NOT NULL,
   total_before_margin REAL NOT NULL,
   margin_percent REAL,
+  client_id INTEGER,
+  client_display TEXT,
   manual_quote REAL,
   final_quote REAL NOT NULL,
   summary TEXT NOT NULL
@@ -119,6 +140,10 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     }
     if "manual_quote" not in columns:
         conn.execute("ALTER TABLE quotes ADD COLUMN manual_quote REAL")
+    if "client_id" not in columns:
+        conn.execute("ALTER TABLE quotes ADD COLUMN client_id INTEGER")
+    if "client_display" not in columns:
+        conn.execute("ALTER TABLE quotes ADD COLUMN client_display TEXT")
     conn.commit()
 
 
@@ -138,6 +163,25 @@ def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
     return any(row[1] == column for row in rows)
 
 
+def _ensure_column(
+    conn: sqlite3.Connection,
+    table: str,
+    column: str,
+    definition: str,
+) -> None:
+    """Add *column* to *table* if it is missing.
+
+    This helper is intentionally simple and only supports ``ALTER TABLE``
+    additions which are backwards compatible with existing data.  It keeps the
+    quote persistence logic resilient when existing installations are running
+    against databases created before postcode/state fields were introduced.
+    """
+
+    if _column_exists(conn, table, column):
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def _extract_postcode(*values: Optional[str]) -> Optional[str]:
     for value in values:
         if not value:
@@ -145,6 +189,198 @@ def _extract_postcode(*values: Optional[str]) -> Optional[str]:
         match = POSTCODE_RE.search(value)
         if match:
             return match.group(1)
+    return None
+
+
+CLIENT_FIELD_NAMES = (
+    "first_name",
+    "last_name",
+    "company_name",
+    "email",
+    "phone",
+    "address_line1",
+    "address_line2",
+    "city",
+    "state",
+    "postcode",
+    "country",
+    "notes",
+)
+
+
+@dataclass
+class ClientDetails:
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    company_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address_line1: Optional[str] = None
+    address_line2: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postcode: Optional[str] = None
+    country: Optional[str] = None
+    notes: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        for field_name in CLIENT_FIELD_NAMES:
+            value = getattr(self, field_name)
+            if isinstance(value, str):
+                cleaned = value.strip()
+                setattr(self, field_name, cleaned or None)
+
+    def has_any_data(self) -> bool:
+        return any(getattr(self, field_name) for field_name in CLIENT_FIELD_NAMES)
+
+    def has_identity(self) -> bool:
+        if self.company_name:
+            return True
+        if self.first_name and self.last_name:
+            return True
+        return False
+
+    def display_name(self) -> Optional[str]:
+        if self.company_name:
+            return self.company_name
+        parts = [part for part in (self.first_name, self.last_name) if part]
+        if parts:
+            return " ".join(parts)
+        return None
+
+    @property
+    def normalized_phone(self) -> Optional[str]:
+        if not self.phone:
+            return None
+        digits = re.sub(r"\D+", "", self.phone)
+        return digits or None
+
+    @property
+    def name_key(self) -> Optional[Tuple[str, str]]:
+        if self.first_name and self.last_name:
+            return (self.first_name.lower(), self.last_name.lower())
+        return None
+
+    @property
+    def address_key(self) -> Optional[str]:
+        if not self.address_line1 or not self.city:
+            return None
+        if not (self.postcode or self.state):
+            return None
+        parts = [
+            self.address_line1.lower(),
+            (self.address_line2 or "").lower(),
+            self.city.lower(),
+        ]
+        if self.state:
+            parts.append(self.state.lower())
+        if self.postcode:
+            parts.append(self.postcode.lower())
+        if self.country:
+            parts.append(self.country.lower())
+        return "|".join(part for part in parts if part)
+
+
+@dataclass
+class ClientMatch:
+    id: int
+    display_name: str
+    reason: str
+
+
+def format_client_display(
+    first_name: Optional[str],
+    last_name: Optional[str],
+    company_name: Optional[str],
+) -> str:
+    details = ClientDetails(
+        first_name=first_name,
+        last_name=last_name,
+        company_name=company_name,
+    )
+    display = details.display_name()
+    return display or "Unnamed client"
+
+
+def _fetch_client_row(
+    conn: sqlite3.Connection, client_id: int
+) -> Optional[Sequence[Optional[str]]]:
+    cursor = conn.execute(
+        """
+        SELECT id, first_name, last_name, company_name, email, phone,
+               address_line1, address_line2, city, state, postcode, country,
+               notes
+        FROM clients
+        WHERE id = ?
+        """,
+        (client_id,),
+    )
+    return cursor.fetchone()
+
+
+def _client_details_from_row(row: Sequence[Optional[str]]) -> ClientDetails:
+    return ClientDetails(
+        first_name=row[1],
+        last_name=row[2],
+        company_name=row[3],
+        email=row[4],
+        phone=row[5],
+        address_line1=row[6],
+        address_line2=row[7],
+        city=row[8],
+        state=row[9],
+        postcode=row[10],
+        country=row[11],
+        notes=row[12],
+    )
+
+
+def find_client_matches(
+    conn: sqlite3.Connection, details: ClientDetails
+) -> List[ClientMatch]:
+    if not details.has_any_data():
+        return []
+
+    name_key = details.name_key
+    phone_key = details.normalized_phone
+    address_key = details.address_key
+    if not any((name_key, phone_key, address_key)):
+        return []
+
+    rows = conn.execute(
+        """
+        SELECT id, first_name, last_name, company_name, email, phone,
+               address_line1, address_line2, city, state, postcode, country,
+               notes
+        FROM clients
+        """
+    ).fetchall()
+
+    matches: List[ClientMatch] = []
+    for row in rows:
+        row_details = _client_details_from_row(row)
+        reasons: List[str] = []
+        if name_key and row_details.name_key == name_key:
+            reasons.append("matching name")
+        if phone_key and row_details.normalized_phone == phone_key:
+            reasons.append("matching phone")
+        if address_key and row_details.address_key == address_key:
+            reasons.append("matching address")
+        if reasons:
+            display = row_details.display_name() or f"Client #{row[0]}"
+            matches.append(
+                ClientMatch(id=int(row[0]), display_name=display, reason=", ".join(reasons))
+            )
+    return matches
+
+
+def _extract_state(*values: Optional[str]) -> Optional[str]:
+    for value in values:
+        if not value:
+            continue
+        match = STATE_RE.search(value)
+        if match:
+            return match.group(1).upper()
     return None
 
 
@@ -157,15 +393,20 @@ def _ensure_address_record(
     country: str,
     *,
     postcode: Optional[str] = None,
+    state: Optional[str] = None,
 ) -> Optional[int]:
     if not _table_exists(conn, "addresses"):
         return None
+
+    _ensure_column(conn, "addresses", "state", "TEXT")
+    _ensure_column(conn, "addresses", "postcode", "TEXT")
 
     normalized = normalize_place(resolved or raw_input)
     if not normalized:
         normalized = normalize_place(raw_input)
 
     has_postcode = _column_exists(conn, "addresses", "postcode")
+    has_state = _column_exists(conn, "addresses", "state")
 
     row = conn.execute(
         """
@@ -177,57 +418,47 @@ def _ensure_address_record(
     ).fetchone()
     if row is not None:
         address_id = int(row[0])
+        update_fields = ["lon = COALESCE(?, lon)", "lat = COALESCE(?, lat)"]
+        params: List[Optional[object]] = [lon, lat]
+        if has_state:
+            update_fields.append("state = COALESCE(?, state)")
+            params.append(state)
         if has_postcode:
-            conn.execute(
-                """
-                UPDATE addresses
-                SET lon = COALESCE(?, lon),
-                    lat = COALESCE(?, lat),
-                    postcode = COALESCE(?, postcode)
-                WHERE id = ?
-                """,
-                (lon, lat, postcode, address_id),
-            )
-        else:
-            conn.execute(
-                "UPDATE addresses SET lon = COALESCE(?, lon), lat = COALESCE(?, lat) WHERE id = ?",
-                (lon, lat, address_id),
-            )
+            update_fields.append("postcode = COALESCE(?, postcode)")
+            params.append(postcode)
+        params.append(address_id)
+        conn.execute(
+            f"UPDATE addresses SET {', '.join(update_fields)} WHERE id = ?",
+            tuple(params),
+        )
         return address_id
 
+    columns = ["raw_input", "normalized", "city", "country", "lon", "lat"]
+    values: List[Optional[object]] = [
+        raw_input,
+        normalized,
+        resolved or normalized,
+        country,
+        lon,
+        lat,
+    ]
+    if has_state:
+        columns.append("state")
+        values.append(state)
     if has_postcode:
-        cursor = conn.execute(
-            """
-            INSERT INTO addresses (
-                raw_input, normalized, city, country, lon, lat, postcode
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                raw_input,
-                normalized,
-                resolved or normalized,
-                country,
-                lon,
-                lat,
-                postcode,
-            ),
-        )
-    else:
-        cursor = conn.execute(
-            """
-            INSERT INTO addresses (
-                raw_input, normalized, city, country, lon, lat
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                raw_input,
-                normalized,
-                resolved or normalized,
-                country,
-                lon,
-                lat,
-            ),
-        )
+        columns.append("postcode")
+        values.append(postcode)
+
+    placeholders = ", ".join(["?"] * len(columns))
+    column_list = ", ".join(columns)
+    cursor = conn.execute(
+        f"""
+        INSERT INTO addresses (
+            {column_list}
+        ) VALUES ({placeholders})
+        """,
+        tuple(values),
+    )
     return int(cursor.lastrowid)
 
 
@@ -237,13 +468,22 @@ def _insert_historical_job(
     result: QuoteResult,
     stored_amount: float,
     created_at: str,
+    client_id: Optional[int],
+    client_display: Optional[str],
     origin_address_id: Optional[int],
     destination_address_id: Optional[int],
     origin_postcode: Optional[str],
     destination_postcode: Optional[str],
+    origin_state: Optional[str],
+    destination_state: Optional[str],
 ) -> None:
     if not _table_exists(conn, "historical_jobs"):
         return
+
+    _ensure_column(conn, "historical_jobs", "origin_postcode", "TEXT")
+    _ensure_column(conn, "historical_jobs", "destination_postcode", "TEXT")
+    _ensure_column(conn, "historical_jobs", "origin_state", "TEXT")
+    _ensure_column(conn, "historical_jobs", "destination_state", "TEXT")
 
     cubic_m = inputs.cubic_m
     price_per_m3: Optional[float]
@@ -258,37 +498,72 @@ def _insert_historical_job(
     )
     corridor_display = f"{origin_label} → {destination_label}"
 
+    has_origin_state = _column_exists(conn, "historical_jobs", "origin_state")
+    has_destination_state = _column_exists(
+        conn, "historical_jobs", "destination_state"
+    )
+    has_client_id = _column_exists(conn, "historical_jobs", "client_id")
+
+    columns = [
+        "job_date",
+        "client",
+        "corridor_display",
+        "price_per_m3",
+        "revenue_total",
+        "revenue",
+        "volume_m3",
+        "volume",
+        "distance_km",
+        "final_cost",
+        "origin",
+        "destination",
+        "origin_postcode",
+        "destination_postcode",
+        "origin_address_id",
+        "destination_address_id",
+        "created_at",
+        "updated_at",
+    ]
+    values: List[Optional[object]] = [
+        inputs.quote_date.isoformat(),
+        client_display,
+        corridor_display,
+        price_per_m3,
+        stored_amount,
+        stored_amount,
+        cubic_m,
+        cubic_m,
+        result.distance_km,
+        result.total_before_margin,
+        origin_label,
+        destination_label,
+        origin_postcode,
+        destination_postcode,
+        origin_address_id,
+        destination_address_id,
+        created_at,
+        created_at,
+    ]
+
+    if has_client_id:
+        columns.insert(2, "client_id")
+        values.insert(2, client_id)
+
+    if has_origin_state:
+        columns.append("origin_state")
+        values.append(origin_state)
+    if has_destination_state:
+        columns.append("destination_state")
+        values.append(destination_state)
+
+    placeholders = ", ".join(["?"] * len(columns))
     conn.execute(
-        """
+        f"""
         INSERT INTO historical_jobs (
-            job_date, client, corridor_display,
-            price_per_m3, revenue_total, revenue,
-            volume_m3, volume, distance_km, final_cost,
-            origin, destination, origin_postcode, destination_postcode,
-            origin_address_id, destination_address_id,
-            created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            {', '.join(columns)}
+        ) VALUES ({placeholders})
         """,
-        (
-            inputs.quote_date.isoformat(),
-            None,
-            corridor_display,
-            price_per_m3,
-            stored_amount,
-            stored_amount,
-            cubic_m,
-            cubic_m,
-            result.distance_km,
-            result.total_before_margin,
-            origin_label,
-            destination_label,
-            origin_postcode,
-            destination_postcode,
-            origin_address_id,
-            destination_address_id,
-            created_at,
-            created_at,
-        ),
+        tuple(values),
     )
 
 
@@ -608,6 +883,49 @@ def _snap_to_road(
     ], notes
 
 
+def snap_coordinates_to_road(
+    origin: Tuple[float, float],
+    destination: Tuple[float, float],
+    *,
+    client: Optional["ors.Client"] = None,
+) -> PinSnapResult:
+    """Return the nearest routable coordinates for *origin* and *destination*.
+
+    The helper mirrors the snapping logic used by :func:`route_distance` but
+    exposes it for interactive workflows (e.g. manual pin overrides in the
+    Streamlit quote builder).  When snapping succeeds the returned
+    :class:`PinSnapResult` includes the adjusted coordinates and notes
+    describing which endpoints moved.  If the OpenRouteService client cannot
+    provide a ``nearest`` endpoint the function raises ``RuntimeError`` so the
+    caller can surface an actionable error message to the user.
+    """
+
+    resolved_client = get_ors_client(client)
+    if not hasattr(resolved_client, "nearest"):
+        raise RuntimeError(
+            "openrouteservice client does not expose a 'nearest' endpoint; upgrade the client library."
+        )
+
+    origin_lon, origin_lat = origin
+    dest_lon, dest_lat = destination
+    origin_geo = GeocodeResult(lon=float(origin_lon), lat=float(origin_lat))
+    dest_geo = GeocodeResult(lon=float(dest_lon), lat=float(dest_lat))
+
+    snapped = _snap_to_road(resolved_client, origin_geo, dest_geo)
+    notes: Dict[str, str] = {}
+    changed = False
+    if snapped is not None:
+        _coords, notes = snapped
+        changed = bool(notes)
+
+    return PinSnapResult(
+        origin=(float(origin_geo.lon), float(origin_geo.lat)),
+        destination=(float(dest_geo.lon), float(dest_geo.lat)),
+        notes=notes,
+        changed=changed,
+    )
+
+
 def _haversine_km(
     lat1: float,
     lon1: float,
@@ -732,6 +1050,8 @@ class QuoteInput:
     country: str = COUNTRY_DEFAULT
     origin_coordinates: Optional[Tuple[float, float]] = None
     destination_coordinates: Optional[Tuple[float, float]] = None
+    client_id: Optional[int] = None
+    client_details: Optional[ClientDetails] = None
 
 
 @dataclass
@@ -762,6 +1082,14 @@ class QuoteResult:
     origin_ambiguities: Dict[str, Sequence[str]] = field(default_factory=dict)
     destination_ambiguities: Dict[str, Sequence[str]] = field(default_factory=dict)
     manual_quote: Optional[float] = None
+
+
+@dataclass
+class PinSnapResult:
+    origin: Tuple[float, float]
+    destination: Tuple[float, float]
+    notes: Dict[str, str] = field(default_factory=dict)
+    changed: bool = False
 
 
 def format_currency(amount: float) -> str:
@@ -927,6 +1255,122 @@ def calculate_quote(
     return result
 
 
+def _update_client_missing_fields(
+    conn: sqlite3.Connection,
+    client_id: int,
+    details: Optional[ClientDetails],
+    timestamp: str,
+) -> None:
+    if details is None or not details.has_any_data():
+        return
+
+    updates: List[str] = []
+    params: List[Optional[str]] = []
+    for field_name in CLIENT_FIELD_NAMES:
+        value = getattr(details, field_name)
+        if value:
+            updates.append(f"{field_name} = COALESCE({field_name}, ?)")
+            params.append(value)
+    if not updates:
+        return
+
+    updates.append("updated_at = ?")
+    params.append(timestamp)
+    params.append(client_id)
+    conn.execute(
+        f"UPDATE clients SET {', '.join(updates)} WHERE id = ?",
+        tuple(params),
+    )
+
+
+def _ephemeral_client_display(details: ClientDetails) -> Optional[str]:
+    display = details.display_name()
+    if display:
+        return display
+    if details.email:
+        return details.email
+    if details.phone:
+        return details.phone
+    return None
+
+
+def _ensure_client_record(
+    conn: sqlite3.Connection,
+    inputs: QuoteInput,
+    timestamp: str,
+) -> Tuple[Optional[int], Optional[str]]:
+    client_id = inputs.client_id
+    details = inputs.client_details
+
+    if client_id is not None:
+        row = _fetch_client_row(conn, client_id)
+        if row is None:
+            inputs.client_id = None
+            client_id = None
+        else:
+            _update_client_missing_fields(conn, client_id, details, timestamp)
+            display = format_client_display(row[1], row[2], row[3])
+            return client_id, display
+
+    if details and details.has_any_data():
+        normalized_details = ClientDetails(
+            first_name=details.first_name,
+            last_name=details.last_name,
+            company_name=details.company_name,
+            email=details.email,
+            phone=details.phone,
+            address_line1=details.address_line1,
+            address_line2=details.address_line2,
+            city=details.city,
+            state=details.state,
+            postcode=details.postcode,
+            country=details.country or inputs.country,
+            notes=details.notes,
+        )
+
+        if not normalized_details.has_identity():
+            display = _ephemeral_client_display(normalized_details)
+            if display:
+                inputs.client_details = normalized_details
+                return None, display
+            raise ValueError(
+                "Client requires a company name or both first and last names to be saved."
+            )
+
+        cursor = conn.execute(
+            """
+            INSERT INTO clients (
+                first_name, last_name, company_name, email, phone,
+                address_line1, address_line2, city, state, postcode,
+                country, notes, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                normalized_details.first_name,
+                normalized_details.last_name,
+                normalized_details.company_name,
+                normalized_details.email,
+                normalized_details.phone,
+                normalized_details.address_line1,
+                normalized_details.address_line2,
+                normalized_details.city,
+                normalized_details.state,
+                normalized_details.postcode,
+                normalized_details.country,
+                normalized_details.notes,
+                timestamp,
+                timestamp,
+            ),
+        )
+        client_id = int(cursor.lastrowid)
+        display = normalized_details.display_name() or f"Client #{client_id}"
+        inputs.client_id = client_id
+        inputs.client_details = normalized_details
+        return client_id, display
+
+    return None, None
+
+
 def persist_quote(
     conn: sqlite3.Connection,
     inputs: QuoteInput,
@@ -939,6 +1383,8 @@ def persist_quote(
         else result.manual_quote
     )
     created_at = datetime.now(timezone.utc).isoformat()
+    client_id, client_display = _ensure_client_record(conn, inputs, created_at)
+    stored_client_display = client_display or "Quote builder"
     cursor = conn.execute(
         """
         INSERT INTO quotes (
@@ -951,8 +1397,9 @@ def persist_quote(
             modifiers_applied, modifiers_total,
             seasonal_multiplier, seasonal_label,
             total_before_margin, margin_percent,
+            client_id, client_display,
             manual_quote, final_quote, summary
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             created_at,
@@ -977,6 +1424,8 @@ def persist_quote(
             result.seasonal_label,
             result.total_before_margin,
             result.margin_percent,
+            client_id,
+            stored_client_display,
             manual_value,
             result.final_quote,
             result.summary_text,
@@ -1003,6 +1452,19 @@ def persist_quote(
         *(result.destination_suggestions or []),
     )
 
+    origin_state = _extract_state(
+        result.origin_resolved,
+        inputs.origin,
+        *(result.origin_candidates or []),
+        *(result.origin_suggestions or []),
+    )
+    destination_state = _extract_state(
+        result.destination_resolved,
+        inputs.destination,
+        *(result.destination_candidates or []),
+        *(result.destination_suggestions or []),
+    )
+
     origin_address_id = _ensure_address_record(
         conn,
         inputs.origin,
@@ -1011,6 +1473,7 @@ def persist_quote(
         result.origin_lat,
         inputs.country,
         postcode=origin_postcode,
+        state=origin_state,
     )
     destination_address_id = _ensure_address_record(
         conn,
@@ -1020,6 +1483,7 @@ def persist_quote(
         result.dest_lat,
         inputs.country,
         postcode=destination_postcode,
+        state=destination_state,
     )
     _insert_historical_job(
         conn,
@@ -1027,10 +1491,14 @@ def persist_quote(
         result,
         stored_amount,
         created_at,
+        client_id,
+        stored_client_display,
         origin_address_id,
         destination_address_id,
         origin_postcode,
         destination_postcode,
+        origin_state,
+        destination_state,
     )
     conn.commit()
     return quote_rowid
@@ -1042,16 +1510,22 @@ __all__ = [
     "GEOCODE_BACKOFF",
     "ROUTE_BACKOFF",
     "Modifier",
+    "ClientDetails",
+    "ClientMatch",
     "PricingModel",
     "QuoteInput",
     "QuoteResult",
+    "PinSnapResult",
     "SeasonalAdjustment",
     "calculate_quote",
     "compute_base_subtotal",
     "compute_modifiers",
     "ensure_schema",
     "format_currency",
+    "format_client_display",
+    "find_client_matches",
     "persist_quote",
     "build_summary",
     "get_ors_client",
+    "snap_coordinates_to_road",
 ]
