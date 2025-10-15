@@ -36,6 +36,7 @@ from analytics.price_distribution import (
     create_m3_margin_figure,
     create_m3_vs_km_figure,
     ensure_break_even_parameter,
+    enrich_missing_route_coordinates,
     import_historical_jobs_from_dataframe,
     load_historical_jobs,
     load_quotes,
@@ -1797,11 +1798,22 @@ with connection_scope() as conn:
             st.session_state[_QUOTE_COUNTRY_STATE_KEY] = initial_country
 
         active_country = st.session_state.get(_QUOTE_COUNTRY_STATE_KEY)
+        normalized_country: Optional[str]
+        if isinstance(active_country, str):
+            normalized_country = active_country.strip() or None
+        else:
+            normalized_country = None
 
-        if map_columns.issubset(filtered_df.columns):
-            map_routes = filtered_df.dropna(subset=list(map_columns)).copy()
-            if isinstance(active_country, str) and active_country.strip():
-                map_routes = filter_routes_by_country(map_routes, active_country)
+        quote_prefill_df = enrich_missing_route_coordinates(
+            filtered_df,
+            conn,
+            country=normalized_country,
+        )
+
+        if map_columns.issubset(quote_prefill_df.columns):
+            map_routes = quote_prefill_df.dropna(subset=list(map_columns)).copy()
+            if isinstance(normalized_country, str) and normalized_country:
+                map_routes = filter_routes_by_country(map_routes, normalized_country)
             if not map_routes.empty:
                 map_routes = map_routes.reset_index(drop=True)
                 map_routes["route_label"] = map_routes.apply(_format_route_label, axis=1)

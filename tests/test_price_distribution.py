@@ -25,6 +25,7 @@ from analytics.price_distribution import (
     create_m3_margin_figure,
     create_m3_vs_km_figure,
     build_profitability_export,
+    enrich_missing_route_coordinates,
     filter_jobs_by_distance,
     filter_metro_jobs,
     filter_routes_by_country,
@@ -823,6 +824,51 @@ def test_prepare_route_map_data_missing_columns_raise():
 
     with pytest.raises(KeyError):
         prepare_route_map_data(df, "id")
+
+
+def test_enrich_missing_route_coordinates_geocodes_when_columns_absent(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "origin": ["Brisbane, QLD"],
+            "destination": ["Sydney, NSW"],
+        }
+    )
+    conn = sqlite3.connect(":memory:")
+    calls: list[tuple[str, str]] = []
+
+    class DummyGeo:
+        def __init__(self, lon: float, lat: float) -> None:
+            self.lon = lon
+            self.lat = lat
+
+    def fake_geocode(
+        conn_arg: sqlite3.Connection,
+        place: str,
+        country: str,
+        *,
+        client: object = None,
+    ) -> DummyGeo:
+        calls.append((place, country))
+        if "Brisbane" in place:
+            return DummyGeo(153.0260, -27.4705)
+        return DummyGeo(151.2093, -33.8688)
+
+    monkeypatch.setattr(
+        "analytics.price_distribution.geocode_cached",
+        fake_geocode,
+    )
+
+    enriched = enrich_missing_route_coordinates(df, conn, country="Australia")
+
+    assert "origin_lon" not in df.columns
+    assert enriched.loc[0, "origin_lon"] == pytest.approx(153.0260)
+    assert enriched.loc[0, "origin_lat"] == pytest.approx(-27.4705)
+    assert enriched.loc[0, "dest_lon"] == pytest.approx(151.2093)
+    assert enriched.loc[0, "dest_lat"] == pytest.approx(-33.8688)
+    assert calls == [
+        ("Brisbane, QLD", "Australia"),
+        ("Sydney, NSW", "Australia"),
+    ]
 
 
 def test_aggregate_corridor_performance_combines_bidirectional_lanes():

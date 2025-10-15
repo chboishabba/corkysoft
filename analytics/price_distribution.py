@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Dict, Iterable, Literal, Optional, Sequence, TYPE_CHECKING
@@ -31,6 +32,8 @@ try:  # pragma: no cover - availability exercised via tests
     from corkysoft.routing import get_ors_client as _get_ors_client
 except Exception:  # pragma: no cover - optional dependency
     _get_ors_client = None
+    geocode_cached = None  # type: ignore[assignment]
+    _QUOTE_COUNTRY_DEFAULT = "Australia"
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from openrouteservice import Client as ORSClient
@@ -452,6 +455,138 @@ def _coalesce_string_columns(
     )
     combined = primary_series.where(primary_series != "", fallback_series)
     df[target] = combined.replace("", np.nan)
+
+
+def _first_non_empty_value(row: pd.Series, columns: Sequence[str]) -> Optional[str]:
+    for column in columns:
+        if column not in row:
+            continue
+        value = row[column]
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            continue
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if cleaned:
+                return cleaned
+            continue
+        if pd.isna(value):
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def enrich_missing_route_coordinates(
+    df: pd.DataFrame,
+    conn: sqlite3.Connection,
+    *,
+    country: Optional[str] = None,
+    origin_candidates: Optional[Sequence[str]] = None,
+    destination_candidates: Optional[Sequence[str]] = None,
+) -> pd.DataFrame:
+    """Ensure ``df`` contains latitude/longitude columns by geocoding missing values."""
+
+    if df.empty:
+        return df
+
+    if geocode_cached is None:  # pragma: no cover - dependency not available
+        return df
+
+    if conn is None:  # pragma: no cover - defensive guard for callers
+        return df
+
+    map_columns = ("origin_lon", "origin_lat", "dest_lon", "dest_lat")
+    columns = set(df.columns)
+    needs_enrichment = any(column not in columns for column in map_columns)
+    if not needs_enrichment:
+        needs_enrichment = any(
+            df[column].isna().all()
+            for column in map_columns
+            if column in df.columns
+        )
+
+    if not needs_enrichment:
+        return df
+
+    working = df.copy()
+    for column in map_columns:
+        if column not in working.columns:
+            working[column] = pd.Series(np.nan, index=working.index, dtype=float)
+
+    resolved_origin_candidates = origin_candidates or (
+        "origin_resolved",
+        "origin_normalized",
+        "origin",
+        "origin_raw",
+        "origin_city",
+    )
+    resolved_destination_candidates = destination_candidates or (
+        "destination_resolved",
+        "destination_normalized",
+        "destination",
+        "destination_raw",
+        "destination_city",
+    )
+
+    default_country = (country or "").strip() or _QUOTE_COUNTRY_DEFAULT
+    origin_cache: dict[tuple[str, str], Optional[tuple[float, float]]] = {}
+    destination_cache: dict[tuple[str, str], Optional[tuple[float, float]]] = {}
+
+    for idx, row in working.iterrows():
+        if pd.isna(working.at[idx, "origin_lon"]) or pd.isna(working.at[idx, "origin_lat"]):
+            origin_place = _first_non_empty_value(row, resolved_origin_candidates)
+            if origin_place:
+                origin_country = _first_non_empty_value(row, ("origin_country",)) or default_country
+                cache_key = (origin_place, origin_country)
+                coords = origin_cache.get(cache_key)
+                if cache_key not in origin_cache:
+                    try:
+                        result = geocode_cached(conn, origin_place, origin_country)
+                    except Exception as exc:  # pragma: no cover - surfaces via logging
+                        logger.warning(
+                            "Failed to geocode origin '%s' for country '%s': %s",
+                            origin_place,
+                            origin_country,
+                            exc,
+                        )
+                        origin_cache[cache_key] = None
+                        coords = None
+                    else:
+                        coords = (float(result.lon), float(result.lat))
+                        origin_cache[cache_key] = coords
+                if coords:
+                    working.at[idx, "origin_lon"] = coords[0]
+                    working.at[idx, "origin_lat"] = coords[1]
+
+        if pd.isna(working.at[idx, "dest_lon"]) or pd.isna(working.at[idx, "dest_lat"]):
+            destination_place = _first_non_empty_value(row, resolved_destination_candidates)
+            if destination_place:
+                destination_country = (
+                    _first_non_empty_value(row, ("destination_country",)) or default_country
+                )
+                cache_key = (destination_place, destination_country)
+                coords = destination_cache.get(cache_key)
+                if cache_key not in destination_cache:
+                    try:
+                        result = geocode_cached(conn, destination_place, destination_country)
+                    except Exception as exc:  # pragma: no cover - surfaces via logging
+                        logger.warning(
+                            "Failed to geocode destination '%s' for country '%s': %s",
+                            destination_place,
+                            destination_country,
+                            exc,
+                        )
+                        destination_cache[cache_key] = None
+                        coords = None
+                    else:
+                        coords = (float(result.lon), float(result.lat))
+                        destination_cache[cache_key] = coords
+                if coords:
+                    working.at[idx, "dest_lon"] = coords[0]
+                    working.at[idx, "dest_lat"] = coords[1]
+
+    return working
 
 
 def import_historical_jobs_from_dataframe(
