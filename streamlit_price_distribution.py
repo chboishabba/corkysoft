@@ -700,6 +700,7 @@ def render_network_map(
             extruded=False,
             parameters={"depthTest": False},
         )
+        overlay_layers.append(history_layer)
 
     if show_live_overlay and not active_routes.empty:
         if "job_id" in active_routes.columns and not historical_routes.empty:
