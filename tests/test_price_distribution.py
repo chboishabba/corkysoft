@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 import sqlite3
 import warnings
+from typing import Any
 
 import pytest
 
@@ -607,17 +608,15 @@ def test_prepare_profitability_route_data_tags_profitability():
     polygons = result.set_index("id")["route_polygon"].to_dict()
     first_polygon = polygons[1]
     assert isinstance(first_polygon, list)
-    assert len(first_polygon) >= 6
+    assert len(first_polygon) == 4
     origin = [df.iloc[0]["origin_lon"], df.iloc[0]["origin_lat"]]
     destination = [df.iloc[0]["dest_lon"], df.iloc[0]["dest_lat"]]
     assert pytest.approx(first_polygon[0][0]) == origin[0]
     assert pytest.approx(first_polygon[0][1]) == origin[1]
-    midpoint_index = len(first_polygon) // 2
-    assert pytest.approx(first_polygon[midpoint_index][0]) == destination[0]
-    assert pytest.approx(first_polygon[midpoint_index][1]) == destination[1]
+    assert pytest.approx(first_polygon[2][0]) == destination[0]
+    assert pytest.approx(first_polygon[2][1]) == destination[1]
     assert first_polygon[1] != origin
-    assert first_polygon[midpoint_index - 1] != destination
-    assert first_polygon[-1] != origin
+    assert first_polygon[3] != destination
 
     for fill in result["fill_colour"]:
         assert len(fill) == 4
@@ -895,6 +894,32 @@ def test_aggregate_corridor_performance_handles_missing_columns():
 
 
 def test_build_isochrone_polygons_uses_duration_for_speed():
+    class DummyIsochroneClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def isochrones(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(kwargs)
+            return {
+                "features": [
+                    {
+                        "properties": {"value": kwargs["range"][0]},
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [
+                                [
+                                    [153.0260, -27.4705],
+                                    [153.2260, -27.4705],
+                                    [153.2260, -27.6705],
+                                    [153.0260, -27.6705],
+                                    [153.0260, -27.4705],
+                                ]
+                            ],
+                        },
+                    }
+                ]
+            }
+
     df = pd.DataFrame(
         {
             "origin_lat": [-27.4705],
@@ -907,6 +932,7 @@ def test_build_isochrone_polygons_uses_duration_for_speed():
         }
     )
 
+    client = DummyIsochroneClient()
     iso_df = build_isochrone_polygons(
         df,
         centre="origin",
@@ -914,17 +940,35 @@ def test_build_isochrone_polygons_uses_duration_for_speed():
         default_speed_kmh=60.0,
         max_routes=5,
         points=12,
+        ors_client=client,
     )
 
     assert len(iso_df) == 1
     record = iso_df.iloc[0]
     assert record["label"] == "Brisbane → Sydney"
-    assert record["latitudes"][0] != record["latitudes"][1]
-    assert len(record["latitudes"]) == 13
-    assert len(record["longitudes"]) == 13
+    assert record["latitudes"] == [
+        -27.4705,
+        -27.4705,
+        -27.6705,
+        -27.6705,
+        -27.4705,
+    ]
+    assert record["longitudes"] == [
+        153.026,
+        153.226,
+        153.226,
+        153.026,
+        153.026,
+    ]
     assert record["speed_kmh"] == pytest.approx(92.0, rel=1e-6)
     assert record["radius_km"] == pytest.approx(184.0, rel=1e-6)
     assert "hr reach" in record["tooltip"]
+
+    assert len(client.calls) == 1
+    call = client.calls[0]
+    assert call["profile"] == "driving-hgv"
+    assert call["locations"] == [[153.0260, -27.4705]]
+    assert call["range"] == [int(2.0 * 3600)]
 
 
 def test_build_isochrone_polygons_handles_missing_inputs():

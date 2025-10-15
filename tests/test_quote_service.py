@@ -1,6 +1,6 @@
 import sqlite3
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 import types
 from typing import List, Optional
@@ -35,13 +35,17 @@ import corkysoft.quote_service as quote_service
 
 from corkysoft.quote_service import (
     PRICING_MODELS,
+    ClientDetails,
     QuoteInput,
     QuoteResult,
     build_summary,
     calculate_quote,
     ensure_schema,
+    find_client_matches,
+    format_client_display,
     persist_quote,
     route_distance,
+    snap_coordinates_to_road,
 )
 from corkysoft.au_address import GeocodeResult
 
@@ -149,6 +153,16 @@ def test_persist_quote_creates_historical_job_entry() -> None:
     address_count = conn.execute("SELECT COUNT(*) FROM addresses").fetchone()[0]
     assert address_count == 2
 
+    hist_client = conn.execute(
+        "SELECT client, client_id FROM historical_jobs"
+    ).fetchone()
+    assert hist_client == ("Quote builder", None)
+
+    quote_client = conn.execute(
+        "SELECT client_display, client_id FROM quotes"
+    ).fetchone()
+    assert quote_client == ("Quote builder", None)
+
 
 def test_persist_quote_records_postcodes() -> None:
     conn = sqlite3.connect(":memory:")
@@ -183,6 +197,153 @@ def test_persist_quote_records_postcodes() -> None:
         ).fetchall()
     ]
     assert address_postcodes == ["4000", "2000"]
+
+    address_states = [
+        row[0]
+        for row in conn.execute(
+            "SELECT state FROM addresses ORDER BY id"
+        ).fetchall()
+    ]
+    assert address_states == ["QLD", "NSW"]
+
+
+def test_persist_quote_creates_client_record() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    ensure_dashboard_tables(conn)
+
+    inputs = _quote_input()
+    inputs.client_details = ClientDetails(
+        first_name="Taylor",
+        last_name="Jordan",
+        email="taylor@example.com",
+        phone="0412000123",
+    )
+    result = _quote_result()
+    result.summary_text = build_summary(inputs, result)
+
+    rowid = persist_quote(conn, inputs, result)
+
+    client_row = conn.execute(
+        "SELECT id, first_name, last_name, email, phone FROM clients"
+    ).fetchone()
+    assert client_row is not None
+    client_id, first_name, last_name, email, phone = client_row
+    assert first_name == "Taylor"
+    assert last_name == "Jordan"
+    assert email == "taylor@example.com"
+    assert phone == "0412000123"
+    assert inputs.client_id == client_id
+
+    quote_client = conn.execute(
+        "SELECT client_id, client_display FROM quotes WHERE id = ?",
+        (rowid,),
+    ).fetchone()
+    assert quote_client == (client_id, "Taylor Jordan")
+
+    hist_client = conn.execute(
+        "SELECT client, client_id FROM historical_jobs"
+    ).fetchone()
+    assert hist_client == ("Taylor Jordan", client_id)
+
+
+@pytest.mark.parametrize(
+    "details, expected_display",
+    [
+        (ClientDetails(first_name="Taylor"), "Taylor"),
+        (ClientDetails(last_name="Jordan"), "Jordan"),
+        (ClientDetails(email="noname@example.com"), "noname@example.com"),
+        (ClientDetails(phone="0412 000 123"), "0412 000 123"),
+    ],
+)
+def test_persist_quote_skips_client_creation_without_identity(
+    details: ClientDetails, expected_display: str
+def test_persist_quote_requires_client_identity() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    ensure_dashboard_tables(conn)
+
+    inputs = _quote_input()
+    inputs.client_details = ClientDetails(email="noname@example.com")
+    result = _quote_result()
+    result.summary_text = build_summary(inputs, result)
+
+    with pytest.raises(ValueError, match="Client requires a company name"):
+        persist_quote(conn, inputs, result)
+
+
+@pytest.mark.parametrize(
+    "details",
+    [
+        ClientDetails(first_name="Taylor"),
+        ClientDetails(last_name="Jordan"),
+    ],
+)
+def test_persist_quote_requires_both_names_without_company(
+    details: ClientDetails,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    ensure_dashboard_tables(conn)
+
+    inputs = _quote_input()
+    inputs.client_details = details
+    result = _quote_result()
+    result.summary_text = build_summary(inputs, result)
+
+    rowid = persist_quote(conn, inputs, result)
+
+    client_row = conn.execute("SELECT COUNT(*) FROM clients").fetchone()
+    assert client_row == (0,)
+
+    quote_client = conn.execute(
+        "SELECT client_id, client_display FROM quotes WHERE id = ?",
+        (rowid,),
+    ).fetchone()
+    assert quote_client == (None, expected_display)
+    with pytest.raises(ValueError, match="Client requires a company name"):
+        persist_quote(conn, inputs, result)
+
+
+def test_find_client_matches_detects_phone() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    timestamp = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        INSERT INTO clients (
+            first_name, last_name, company_name, email, phone,
+            address_line1, address_line2, city, state, postcode,
+            country, notes, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "Jordan",
+            "Miles",
+            None,
+            "jordan@example.com",
+            "0412000123",
+            "1 Sample St",
+            None,
+            "Brisbane",
+            "QLD",
+            "4000",
+            "Australia",
+            None,
+            timestamp,
+            timestamp,
+        ),
+    )
+
+    matches = find_client_matches(conn, ClientDetails(phone="(0412) 000 123"))
+    assert matches
+    assert matches[0].id == 1
+    assert "matching phone" in matches[0].reason
+
+
+def test_format_client_display_prefers_company() -> None:
+    display = format_client_display("A", "B", "Acme Pty Ltd")
+    assert display == "Acme Pty Ltd"
 
 
 def test_build_summary_mentions_manual_amount() -> None:
@@ -474,12 +635,96 @@ def test_route_distance_falls_back_to_haversine(monkeypatch: pytest.MonkeyPatch)
     assert "Used straight-line estimate due to missing road network" in resolved_dest.suggestions
 
 
+def test_snap_coordinates_to_road_adjusts_points(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.calls: list[list[list[float]]] = []
+
+        def nearest(self, *, coordinates, number):  # type: ignore[override]
+            self.calls.append(coordinates)
+            lon, lat = coordinates[0]
+            return {
+                "features": [
+                    {
+                        "geometry": {
+                            "coordinates": [lon + 0.01, lat + 0.02],
+                        }
+                    }
+                ]
+            }
+
+    client_instance = _Client()
+    monkeypatch.setattr(
+        "corkysoft.quote_service.get_ors_client",
+        lambda client=None: client_instance,
+    )
+
+    result = snap_coordinates_to_road((150.0, -33.0), (151.0, -34.0))
+
+    assert client_instance.calls and len(client_instance.calls) == 2
+    assert result.changed is True
+    assert result.notes == {
+        "origin": "Snapped to nearest routable road",
+        "destination": "Snapped to nearest routable road",
+    }
+    assert result.origin[0] == pytest.approx(150.01)
+    assert result.origin[1] == pytest.approx(-32.98)
+    assert result.destination[0] == pytest.approx(151.01)
+    assert result.destination[1] == pytest.approx(-33.98)
+
+
+def test_snap_coordinates_to_road_handles_unchanged_points(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Client:
+        def nearest(self, *, coordinates, number):  # type: ignore[override]
+            lon, lat = coordinates[0]
+            return {
+                "features": [
+                    {"geometry": {"coordinates": [lon, lat]}},
+                ]
+            }
+
+    client_instance = _Client()
+    monkeypatch.setattr(
+        "corkysoft.quote_service.get_ors_client",
+        lambda client=None: client_instance,
+    )
+
+    result = snap_coordinates_to_road((150.0, -33.0), (151.0, -34.0))
+
+    assert result.changed is False
+    assert result.notes == {}
+    assert result.origin[0] == pytest.approx(150.0)
+    assert result.origin[1] == pytest.approx(-33.0)
+    assert result.destination[0] == pytest.approx(151.0)
+    assert result.destination[1] == pytest.approx(-34.0)
+
+
+def test_snap_coordinates_to_road_requires_nearest_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Client:
+        pass
+
+    monkeypatch.setattr(
+        "corkysoft.quote_service.get_ors_client",
+        lambda client=None: _Client(),
+    )
+
+    with pytest.raises(RuntimeError, match="nearest"):
+        snap_coordinates_to_road((150.0, -33.0), (151.0, -34.0))
+
+
 def test_load_quotes_returns_saved_quote() -> None:
     conn = sqlite3.connect(":memory:")
     ensure_schema(conn)
     ensure_dashboard_tables(conn)
 
     inputs = _quote_input()
+    inputs.client_details = ClientDetails(company_name="Acme Logistics")
     result = _quote_result()
     result.manual_quote = 1100.0
     result.summary_text = build_summary(inputs, result)
@@ -493,7 +738,7 @@ def test_load_quotes_returns_saved_quote() -> None:
     assert mapping.volume in {"volume_m3", "volume"}
 
     row = df.iloc[0]
-    assert row["client_display"] == "Quote builder"
+    assert row["client_display"] == "Acme Logistics"
     assert row["corridor_display"] == "Origin → Destination"
     assert row["price_per_m3"] == pytest.approx(result.manual_quote / inputs.cubic_m)
     assert row["final_cost_total"] == pytest.approx(result.total_before_margin)
