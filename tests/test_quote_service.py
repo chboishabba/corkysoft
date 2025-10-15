@@ -660,17 +660,19 @@ def test_snap_coordinates_to_road_adjusts_points(
     class _Client:
         def __init__(self) -> None:
             self.calls: list[list[list[float]]] = []
+            self.radii: list[int] = []
 
-        def nearest(self, *, coordinates, number):  # type: ignore[override]
-            self.calls.append(coordinates)
-            lon, lat = coordinates[0]
+        def snap(self, *, profile, locations, radius, format):  # type: ignore[override]
+            assert profile == "driving-car"
+            assert format == "json"
+            self.calls.append(locations)
+            self.radii.append(radius)
+            if radius < 300:
+                return {"locations": [None]}
+            lon, lat = locations[0]
             return {
-                "features": [
-                    {
-                        "geometry": {
-                            "coordinates": [lon + 0.01, lat + 0.02],
-                        }
-                    }
+                "locations": [
+                    {"location": [lon + 0.01, lat + 0.02]},
                 ]
             }
 
@@ -682,7 +684,8 @@ def test_snap_coordinates_to_road_adjusts_points(
 
     result = snap_coordinates_to_road((150.0, -33.0), (151.0, -34.0))
 
-    assert client_instance.calls and len(client_instance.calls) == 2
+    assert client_instance.calls and len(client_instance.calls) == 6
+    assert client_instance.radii == list(routing.SNAP_SEARCH_RADII[:3]) * 2
     assert result.changed is True
     assert result.notes == {
         "origin": "Snapped to nearest routable road",
@@ -698,11 +701,13 @@ def test_snap_coordinates_to_road_handles_unchanged_points(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class _Client:
-        def nearest(self, *, coordinates, number):  # type: ignore[override]
-            lon, lat = coordinates[0]
+        def snap(self, *, profile, locations, radius, format):  # type: ignore[override]
+            assert profile == "driving-car"
+            assert format == "json"
+            lon, lat = locations[0]
             return {
-                "features": [
-                    {"geometry": {"coordinates": [lon, lat]}},
+                "locations": [
+                    {"location": [lon, lat]},
                 ]
             }
 
@@ -733,8 +738,42 @@ def test_snap_coordinates_to_road_requires_nearest_endpoint(
         lambda client=None: _Client(),
     )
 
-    with pytest.raises(RuntimeError, match="nearest"):
+    with pytest.raises(RuntimeError, match="snap" ):
         snap_coordinates_to_road((150.0, -33.0), (151.0, -34.0))
+
+
+def test_snap_coordinates_to_road_falls_back_to_nearest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.calls: list[list[list[float]]] = []
+
+        def nearest(self, *, coordinates, number):  # type: ignore[override]
+            self.calls.append(coordinates)
+            lon, lat = coordinates[0]
+            return {
+                "features": [
+                    {
+                        "geometry": {
+                            "coordinates": [lon + 0.05, lat + 0.01],
+                        }
+                    }
+                ]
+            }
+
+    client_instance = _Client()
+    monkeypatch.setattr(
+        "corkysoft.routing.get_ors_client",
+        lambda client=None: client_instance,
+    )
+
+    result = snap_coordinates_to_road((150.0, -33.0), (151.0, -34.0))
+
+    assert client_instance.calls and len(client_instance.calls) == 2
+    assert result.changed is True
+    assert result.origin == pytest.approx((150.05, -32.99))
+    assert result.destination == pytest.approx((151.05, -33.99))
 
 
 def test_load_quotes_returns_saved_quote() -> None:
