@@ -536,42 +536,37 @@ def build_route_map(
 
         return []
 
-    palette = px.colors.qualitative.Bold or [
-        "#636EFA",
-        "#EF553B",
-        "#00CC96",
-        "#AB63FA",
-    ]
-    colour_values = list(dict.fromkeys(df["map_colour_value"].tolist()))
-    if not palette:
-        palette = ["#636EFA"]
-    if len(colour_values) > len(palette):
-        repeats = (len(colour_values) // len(palette)) + 1
-        palette = (palette * repeats)[: len(colour_values)]
-    colour_map = {
-        value: palette[idx % len(palette)] for idx, value in enumerate(colour_values)
-    }
-
-    figure = go.Figure()
-    plot_df = df.copy()
-
-    if colour_mode == "categorical":
+    def _build_colour_map(values: Sequence[object]) -> Dict[object, str]:
         palette = px.colors.qualitative.Bold or [
             "#636EFA",
             "#EF553B",
             "#00CC96",
             "#AB63FA",
         ]
-        colour_values = list(dict.fromkeys(plot_df["map_colour_value"].tolist()))
         if not palette:
             palette = ["#636EFA"]
-        if len(colour_values) > len(palette):
-            repeats = (len(colour_values) // len(palette)) + 1
-            palette = (palette * repeats)[: len(colour_values)]
-        colour_map = {
-            value: palette[idx % len(palette)] for idx, value in enumerate(colour_values)
-        }
+        if values:
+            if len(values) > len(palette):
+                repeats = (len(values) // len(palette)) + 1
+                palette = (palette * repeats)[: len(values)]
+            return {
+                value: palette[idx % len(palette)]
+                for idx, value in enumerate(values)
+            }
+        return {}
 
+    def _coerce_float(value: Any) -> Optional[float]:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    figure = go.Figure()
+    plot_df = df.copy()
+    colour_values = list(dict.fromkeys(plot_df["map_colour_value"].tolist()))
+    colour_map = _build_colour_map(colour_values)
+
+    if colour_mode == "categorical":
         if show_routes:
             for value in colour_values:
                 category_df = plot_df[plot_df["map_colour_value"] == value]
@@ -579,62 +574,46 @@ def build_route_map(
                     continue
                 display_value = (
                     category_df.get("map_colour_display", pd.Series([value])).iloc[0]
-    if show_routes:
-        for value in colour_values:
-            category_df = df[df["map_colour_value"] == value]
-            if category_df.empty:
-                continue
-            lat_values: list[float] = []
-            lon_values: list[float] = []
-            for _, row in category_df.iterrows():
-                route_points = _row_route_points(row)
-                if route_points:
-                    for lat, lon in route_points:
-                        lat_values.append(lat)
-                        lon_values.append(lon)
-                    lat_values.append(None)
-                    lon_values.append(None)
-                    continue
-
-                try:
-                    origin_lat = float(row["origin_lat"])
-                    dest_lat = float(row["dest_lat"])
-                    origin_lon = float(row["origin_lon"])
-                    dest_lon = float(row["dest_lon"])
-                except (TypeError, ValueError):
-                    continue
-
-                lat_values.extend([origin_lat, dest_lat, None])
-                lon_values.extend([origin_lon, dest_lon, None])
-
-            figure.add_trace(
-                go.Scattermap(
-                    lat=lat_values,
-                    lon=lon_values,
-                    mode="lines",
-                    line={"width": 2, "color": colour_map[value]},
-                    name=value,
-                    legendgroup=value,
-                    showlegend=False,
-                    hoverinfo="skip",
                 )
                 lat_values: list[float] = []
                 lon_values: list[float] = []
                 for _, row in category_df.iterrows():
-                    lat_values.extend([row["origin_lat"], row["dest_lat"], None])
-                    lon_values.extend([row["origin_lon"], row["dest_lon"], None])
-                figure.add_trace(
-                    go.Scattermap(
-                        lat=lat_values,
-                        lon=lon_values,
-                        mode="lines",
-                        line={"width": 2, "color": colour_map[value]},
-                        name=str(display_value),
-                        legendgroup=str(value),
-                        showlegend=False,
-                        hoverinfo="skip",
+                    route_points = _row_route_points(row)
+                    if route_points:
+                        for lat, lon in route_points:
+                            lat_values.append(lat)
+                            lon_values.append(lon)
+                        lat_values.append(None)
+                        lon_values.append(None)
+                        continue
+
+                    origin_lat = _coerce_float(row.get("origin_lat"))
+                    origin_lon = _coerce_float(row.get("origin_lon"))
+                    dest_lat = _coerce_float(row.get("dest_lat"))
+                    dest_lon = _coerce_float(row.get("dest_lon"))
+                    if (
+                        origin_lat is not None
+                        and origin_lon is not None
+                        and dest_lat is not None
+                        and dest_lon is not None
+                    ):
+                        lat_values.extend([origin_lat, dest_lat, None])
+                        lon_values.extend([origin_lon, dest_lon, None])
+
+                if lat_values and lon_values:
+                    colour = colour_map.get(value, "#636EFA")
+                    figure.add_trace(
+                        go.Scattermapbox(
+                            lat=lat_values,
+                            lon=lon_values,
+                            mode="lines",
+                            line={"width": 2, "color": colour},
+                            name=str(display_value),
+                            legendgroup=str(value),
+                            showlegend=False,
+                            hoverinfo="skip",
+                        )
                     )
-                )
 
         if show_points:
             for value in colour_values:
@@ -661,59 +640,43 @@ def build_route_map(
                         or row.get("destination_raw")
                         or "Destination"
                     )
-                    marker_lat.append(row["origin_lat"])
-                    marker_lon.append(row["origin_lon"])
-                    marker_text.append(
-                        f"{colour_label}: {display_value}<br>Origin: {origin_label}<br>Job ID: {job_id}"
-                    )
-                    marker_lat.append(row["dest_lat"])
-                    marker_lon.append(row["dest_lon"])
-                    marker_text.append(
-                        f"{colour_label}: {display_value}<br>Destination: {destination_label}<br>Job ID: {job_id}"
-                    )
 
-                figure.add_trace(
-                    go.Scattermap(
-                        lat=marker_lat,
-                        lon=marker_lon,
-                        mode="markers",
-                        marker={
-                            "size": 9,
-                            "color": colour_map[value],
-                            "opacity": 0.85,
-                        },
-                        text=marker_text,
-                        hovertemplate="%{text}<extra></extra>",
-                        name=str(display_value),
-                        legendgroup=str(value),
-                    )
-                )
-                try:
-                    origin_lat = float(row["origin_lat"])
-                    origin_lon = float(row["origin_lon"])
-                except (TypeError, ValueError):
-                    pass
-                else:
-                    marker_lat.append(origin_lat)
-                    marker_lon.append(origin_lon)
-                    marker_text.append(
-                        f"{colour_label}: {value}<br>Origin: {origin_label}<br>Job ID: {job_id}"
-                    )
+                    origin_lat = _coerce_float(row.get("origin_lat"))
+                    origin_lon = _coerce_float(row.get("origin_lon"))
+                    if origin_lat is not None and origin_lon is not None:
+                        marker_lat.append(origin_lat)
+                        marker_lon.append(origin_lon)
+                        marker_text.append(
+                            f"{colour_label}: {display_value}<br>Origin: {origin_label}<br>Job ID: {job_id}"
+                        )
 
-                try:
-                    dest_lat = float(row["dest_lat"])
-                    dest_lon = float(row["dest_lon"])
-                except (TypeError, ValueError):
-                    pass
-                else:
-                    marker_lat.append(dest_lat)
-                    marker_lon.append(dest_lon)
-                    marker_text.append(
-                        f"{colour_label}: {value}<br>Destination: {destination_label}<br>Job ID: {job_id}"
-                    )
+                    dest_lat = _coerce_float(row.get("dest_lat"))
+                    dest_lon = _coerce_float(row.get("dest_lon"))
+                    if dest_lat is not None and dest_lon is not None:
+                        marker_lat.append(dest_lat)
+                        marker_lon.append(dest_lon)
+                        marker_text.append(
+                            f"{colour_label}: {display_value}<br>Destination: {destination_label}<br>Job ID: {job_id}"
+                        )
 
-            if not marker_lat or not marker_lon:
-                continue
+                if marker_lat and marker_lon:
+                    colour = colour_map.get(value, "#636EFA")
+                    figure.add_trace(
+                        go.Scattermapbox(
+                            lat=marker_lat,
+                            lon=marker_lon,
+                            mode="markers",
+                            marker={
+                                "size": 9,
+                                "color": colour,
+                                "opacity": 0.85,
+                            },
+                            text=marker_text,
+                            hovertemplate="%{text}<extra></extra>",
+                            name=str(display_value),
+                            legendgroup=str(value),
+                        )
+                    )
 
     elif colour_mode == "continuous":
         numeric_series = pd.to_numeric(plot_df["map_colour_value"], errors="coerce")
@@ -744,10 +707,21 @@ def build_route_map(
                 for _, row in plot_df.iterrows():
                     value = float(row["map_colour_value"])
                     colour = _to_colour(value)
-                    lat_values = [row["origin_lat"], row["dest_lat"], None]
-                    lon_values = [row["origin_lon"], row["dest_lon"], None]
+                    origin_lat = _coerce_float(row.get("origin_lat"))
+                    origin_lon = _coerce_float(row.get("origin_lon"))
+                    dest_lat = _coerce_float(row.get("dest_lat"))
+                    dest_lon = _coerce_float(row.get("dest_lon"))
+                    if (
+                        origin_lat is None
+                        or origin_lon is None
+                        or dest_lat is None
+                        or dest_lon is None
+                    ):
+                        continue
+                    lat_values = [origin_lat, dest_lat, None]
+                    lon_values = [origin_lon, dest_lon, None]
                     figure.add_trace(
-                        go.Scattermap(
+                        go.Scattermapbox(
                             lat=lat_values,
                             lon=lon_values,
                             mode="lines",
@@ -781,54 +755,70 @@ def build_route_map(
                         or row.get("destination_raw")
                         or "Destination"
                     )
-                    marker_lat.extend([row["origin_lat"], row["dest_lat"]])
-                    marker_lon.extend([row["origin_lon"], row["dest_lon"]])
-                    marker_text.append(
-                        f"{colour_label}: {display_value}<br>Origin: {origin_label}<br>Job ID: {job_id}"
-                    )
-                    marker_text.append(
-                        f"{colour_label}: {display_value}<br>Destination: {destination_label}<br>Job ID: {job_id}"
-                    )
-                    marker_values.extend([value, value])
+                    origin_lat = _coerce_float(row.get("origin_lat"))
+                    origin_lon = _coerce_float(row.get("origin_lon"))
+                    if origin_lat is not None and origin_lon is not None:
+                        marker_lat.append(origin_lat)
+                        marker_lon.append(origin_lon)
+                        marker_text.append(
+                            f"{colour_label}: {display_value}<br>Origin: {origin_label}<br>Job ID: {job_id}"
+                        )
+                        marker_values.append(value)
 
-                figure.add_trace(
-                    go.Scattermap(
-                        lat=marker_lat,
-                        lon=marker_lon,
-                        mode="markers",
-                        marker={
-                            "size": 9,
-                            "color": marker_values,
-                            "colorscale": colour_scale,
-                            "cmin": min_value,
-                            "cmax": max_value,
-                            "opacity": 0.85,
-                            "colorbar": colorbar_dict,
-                        },
-                        text=marker_text,
-                        hovertemplate="%{text}<extra></extra>",
-                        showlegend=False,
+                    dest_lat = _coerce_float(row.get("dest_lat"))
+                    dest_lon = _coerce_float(row.get("dest_lon"))
+                    if dest_lat is not None and dest_lon is not None:
+                        marker_lat.append(dest_lat)
+                        marker_lon.append(dest_lon)
+                        marker_text.append(
+                            f"{colour_label}: {display_value}<br>Destination: {destination_label}<br>Job ID: {job_id}"
+                        )
+                        marker_values.append(value)
+
+                if marker_lat and marker_lon:
+                    figure.add_trace(
+                        go.Scattermapbox(
+                            lat=marker_lat,
+                            lon=marker_lon,
+                            mode="markers",
+                            marker={
+                                "size": 9,
+                                "color": marker_values,
+                                "colorscale": colour_scale,
+                                "cmin": min_value,
+                                "cmax": max_value,
+                                "opacity": 0.85,
+                                "colorbar": colorbar_dict,
+                            },
+                            text=marker_text,
+                            hovertemplate="%{text}<extra></extra>",
+                            showlegend=False,
+                        )
                     )
-                )
             else:
-                figure.add_trace(
-                    go.Scattermap(
-                        lat=plot_df["origin_lat"].tolist(),
-                        lon=plot_df["origin_lon"].tolist(),
-                        mode="markers",
-                        marker={
-                            "size": 0.0001,
-                            "color": numeric_values.tolist(),
-                            "colorscale": colour_scale,
-                            "cmin": min_value,
-                            "cmax": max_value,
-                            "colorbar": colorbar_dict,
-                            "opacity": 0.0,
-                        },
-                        hoverinfo="skip",
-                        showlegend=False,
-                    )
+                coords_df = plot_df[["origin_lat", "origin_lon"]].apply(
+                    pd.to_numeric, errors="coerce"
                 )
+                coords_df = coords_df.dropna()
+                if not coords_df.empty:
+                    figure.add_trace(
+                        go.Scattermapbox(
+                            lat=coords_df["origin_lat"].tolist(),
+                            lon=coords_df["origin_lon"].tolist(),
+                            mode="markers",
+                            marker={
+                                "size": 0.0001,
+                                "color": numeric_values.loc[coords_df.index].tolist(),
+                                "colorscale": colour_scale,
+                                "cmin": min_value,
+                                "cmax": max_value,
+                                "colorbar": colorbar_dict,
+                                "opacity": 0.0,
+                            },
+                            hoverinfo="skip",
+                            showlegend=False,
+                        )
+                    )
 
     all_lat = pd.concat([plot_df.get("origin_lat", pd.Series(dtype=float)), plot_df.get("dest_lat", pd.Series(dtype=float))])
     all_lon = pd.concat([plot_df.get("origin_lon", pd.Series(dtype=float)), plot_df.get("dest_lon", pd.Series(dtype=float))])
