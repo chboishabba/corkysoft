@@ -80,6 +80,8 @@ MIN_LANE_WIDTH = 9.0
 LANE_WIDTH_CURVE_EXPONENT = 0.75
 ROUTE_WIDTH_METRE_SCALE = 0.25
 
+METRO_HISTOGRAM_BINS = 15
+
 
 def _profit_band_intensity(band: str) -> float:
     return PROFITABILITY_BAND_INTENSITY.get(band, PROFITABILITY_BAND_INTENSITY["Unknown"])
@@ -3182,10 +3184,10 @@ def create_metro_profitability_figure(
             cost_ratio_series = cost_ratio_series.dropna()
     cost_available = not cost_ratio_series.empty
 
-    subplot_titles = ["Price vs $/km (metro)"]
+    subplot_titles = ["Prices ($/m³)"]
     specs: list[dict[str, str]] = [{"type": "xy"}]
     if margin_available:
-        subplot_titles.append("Margin $/m³ (metro)")
+        subplot_titles.append("Margins ($/m³)")
         specs.append({"type": "xy"})
     if cost_available:
         subplot_titles.append("Cost vs quote share")
@@ -3237,7 +3239,7 @@ def create_metro_profitability_figure(
                 "color": scatter_df["margin_per_m3_pct"],
                 "colorscale": "RdYlGn",
                 "showscale": True,
-                "colorbar": {"title": "Margin %", "tickformat": ".0%"},
+                "colorbar": {"title": "Margin % sensitivity", "tickformat": ".0%"},
             }
         )
 
@@ -3255,8 +3257,8 @@ def create_metro_profitability_figure(
         col=1,
     )
 
-    fig.update_xaxes(title_text="Quoted $ per m³", row=1, col=1)
-    fig.update_yaxes(title_text="Revenue $ per km", row=1, col=1)
+    fig.update_xaxes(title_text="Prices ($/m³)", row=1, col=1)
+    fig.update_yaxes(title_text="Revenue ($/km)", row=1, col=1)
 
     current_col = 2
     if margin_available:
@@ -3264,14 +3266,15 @@ def create_metro_profitability_figure(
         fig.add_trace(
             go.Histogram(
                 x=margin_series,
-                name="Margin $/m³",
+                name="Margins ($/m³)",
+                nbinsx=METRO_HISTOGRAM_BINS,
                 marker=dict(color="rgba(91, 192, 222, 0.85)"),
                 hovertemplate="Margin $/m³: %{x:,.2f}<br>Count: %{y}<extra></extra>",
             ),
             row=1,
             col=current_col,
         )
-        fig.update_xaxes(title_text="Margin $ per m³", row=1, col=current_col)
+        fig.update_xaxes(title_text="Margins ($/m³)", row=1, col=current_col)
         fig.update_yaxes(title_text="Job count", row=1, col=current_col)
         current_col += 1
 
@@ -3280,6 +3283,7 @@ def create_metro_profitability_figure(
             go.Histogram(
                 x=cost_ratio_series,
                 name="Cost sensitivity",
+                nbinsx=METRO_HISTOGRAM_BINS,
                 marker=dict(color="rgba(217, 83, 79, 0.7)"),
                 hovertemplate="Cost/price: %{x:.1%}<br>Count: %{y}<extra></extra>",
             ),
@@ -3299,6 +3303,13 @@ def create_metro_profitability_figure(
         bargap=0.05,
         hovermode="closest",
         legend_title_text=None,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.25,
+            xanchor="center",
+            x=0.5,
+        ),
     )
 
     return fig
