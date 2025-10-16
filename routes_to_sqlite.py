@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-import os, time, sqlite3, datetime, json, re
+import datetime as dt
+import os, time, sqlite3, json, re
 import openrouteservice as ors
-from datetime import datetime, timezone
+from datetime import timezone
 import argparse, csv, sys
 from typing import Optional
 
@@ -193,7 +194,7 @@ def normalize_postcode(value: Optional[str]) -> Optional[str]:
     return match.group(1)
 
 
-def parse_date(value: str) -> datetime.date:
+def parse_date(value: str) -> dt.date:
     value = value.strip()
     # Try a set of common formats (ISO, AU, US) before falling back to date.fromisoformat
     candidates = (
@@ -204,11 +205,11 @@ def parse_date(value: str) -> datetime.date:
     )
     for fmt in candidates:
         try:
-            return datetime.datetime.strptime(value, fmt).date()
+            return dt.datetime.strptime(value, fmt).date()
         except ValueError:
             continue
     try:
-        return datetime.date.fromisoformat(value)
+        return dt.date.fromisoformat(value)
     except ValueError as exc:
         raise ValueError(f"Unrecognised date format: {value!r}") from exc
 
@@ -255,7 +256,7 @@ def geocode_cached(conn: sqlite3.Connection, place: str, country: str) -> Geocod
             f"{place}, {country}",
             result.lon,
             result.lat,
-            datetime.now(timezone.utc).isoformat(),
+            dt.datetime.now(timezone.utc).isoformat(),
         )
     )
     conn.commit()
@@ -334,7 +335,7 @@ def refresh_internal_cost_total(conn: sqlite3.Connection, job_id: int) -> float:
         SET internal_cost_total = ?, internal_cost_updated_at = ?
         WHERE id = ?
         """,
-        (total, datetime.now(timezone.utc).isoformat(), job_id),
+        (total, dt.datetime.now(timezone.utc).isoformat(), job_id),
     )
     conn.commit()
     return total
@@ -360,7 +361,7 @@ def add_cost_component(
     else:
         total = float(total_override)
     _ensure_job_exists(conn, job_id)
-    now = datetime.now(timezone.utc).isoformat()
+    now = dt.datetime.now(timezone.utc).isoformat()
     cur = conn.execute(
         """
         INSERT INTO job_cost_components (
@@ -487,7 +488,7 @@ def import_historical_jobs(
 
     inserted = 0
     updated = 0
-    now = datetime.datetime.now(timezone.utc).isoformat()
+    now = dt.datetime.now(timezone.utc).isoformat()
 
     with open(csv_path, newline="") as f:
         reader = csv.DictReader(f)
@@ -684,7 +685,7 @@ def process_pending(conn: sqlite3.Connection, limit: int = 1000):
                     dest_geo.lon,
                     dest_geo.lat,
                     route_geojson,
-                 datetime.now(timezone.utc).isoformat(), jid)
+                 dt.datetime.now(timezone.utc).isoformat(), jid)
             )
             conn.commit()
             print(f"[OK] #{jid} {origin} → {dest} | {distance_km:.1f} km | {duration_hr:.2f} h | ${cost_total:,.2f}")
