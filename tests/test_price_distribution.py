@@ -802,6 +802,95 @@ def test_prepare_metric_route_map_data_requires_numeric_values():
     assert result.iloc[0]["map_colour_display"] == "$2,500.00"
 
 
+def test_build_route_map_hovertext_includes_route_labels_categorical():
+    df = pd.DataFrame(
+        [
+            {
+                "id": 1,
+                "map_colour_value": "Client A",
+                "map_colour_display": "Client A",
+                "origin_city": "Melbourne",
+                "origin_lat": -37.8136,
+                "origin_lon": 144.9631,
+                "destination_city": "Sydney",
+                "dest_lat": -33.8688,
+                "dest_lon": 151.2093,
+                "route_path": [
+                    {"lat": -37.8136, "lon": 144.9631},
+                    {"lat": -35.5, "lon": 148.0},
+                    {"lat": -33.8688, "lon": 151.2093},
+                ],
+            }
+        ]
+    )
+
+    figure = build_route_map(
+        df,
+        "Client",
+        show_routes=True,
+        show_points=True,
+        colour_mode="categorical",
+    )
+
+    line_traces = [trace for trace in figure.data if getattr(trace, "mode", "") == "lines"]
+    assert line_traces, "Expected a line trace when routes are requested"
+    route_texts = [text for text in list(getattr(line_traces[0], "text", [])) if text]
+    assert route_texts, "Route trace should include hover text"
+    assert all("Route: Melbourne → Sydney" in text for text in route_texts)
+    assert line_traces[0].hovertemplate == "%{text}<extra></extra>"
+
+    marker_traces = [trace for trace in figure.data if getattr(trace, "mode", "") == "markers"]
+    assert marker_traces, "Expected marker traces when points are requested"
+    marker_texts = list(getattr(marker_traces[0], "text", []))
+    assert marker_texts, "Marker trace should include hover text"
+    assert any("Point: Origin" in text for text in marker_texts)
+    assert any("Point: Destination" in text for text in marker_texts)
+    assert all("Route: Melbourne → Sydney" in text for text in marker_texts)
+    assert marker_traces[0].hovertemplate == "%{text}<extra></extra>"
+
+
+def test_build_route_map_hovertext_includes_route_labels_continuous():
+    df = pd.DataFrame(
+        [
+            {
+                "id": 7,
+                "map_colour_value": 82.5,
+                "map_colour_display": "82.5%",
+                "origin_city": "Brisbane",
+                "origin_lat": -27.4705,
+                "origin_lon": 153.0260,
+                "destination_city": "Cairns",
+                "dest_lat": -16.92,
+                "dest_lon": 145.77,
+            }
+        ]
+    )
+
+    figure = build_route_map(
+        df,
+        "Margin %",
+        show_routes=True,
+        show_points=True,
+        colour_mode="continuous",
+    )
+
+    line_traces = [trace for trace in figure.data if getattr(trace, "mode", "") == "lines"]
+    assert line_traces, "Expected a line trace in continuous mode"
+    line_texts = [text for text in list(getattr(line_traces[0], "text", [])) if text]
+    assert line_texts, "Continuous route trace should include hover text"
+    assert all("Route: Brisbane → Cairns" in text for text in line_texts)
+    assert line_traces[0].hovertemplate == "%{text}<extra></extra>"
+
+    marker_traces = [trace for trace in figure.data if getattr(trace, "mode", "") == "markers"]
+    assert marker_traces, "Expected markers when show_points is enabled"
+    marker_texts = list(getattr(marker_traces[0], "text", []))
+    assert marker_texts, "Continuous marker trace should include hover text"
+    assert any("Point: Origin" in text for text in marker_texts)
+    assert any("Point: Destination" in text for text in marker_texts)
+    assert all("Route: Brisbane → Cairns" in text for text in marker_texts)
+    assert marker_traces[0].hovertemplate == "%{text}<extra></extra>"
+
+
 def test_build_route_map_uses_route_path_for_continuous_mode():
     df = pd.DataFrame(
         [
