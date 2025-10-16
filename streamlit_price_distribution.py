@@ -582,6 +582,29 @@ def build_route_map(
     colour_values = list(dict.fromkeys(plot_df["map_colour_value"].tolist()))
     colour_map = _build_colour_map(colour_values)
 
+    def _route_heading(row: pd.Series) -> tuple[str, str]:
+        origin_label = (
+            row.get("origin_city")
+            or row.get("origin")
+            or row.get("origin_raw")
+            or "Origin"
+        )
+        destination_label = (
+            row.get("destination_city")
+            or row.get("destination")
+            or row.get("destination_raw")
+            or "Destination"
+        )
+        return str(origin_label), str(destination_label)
+
+    def _route_hover_text(row: pd.Series, display_value: object) -> tuple[str, str, str, str]:
+        origin_label, destination_label = _route_heading(row)
+        route_label = f"Route: {origin_label} → {destination_label}"
+        job_id = row.get("id", "n/a")
+        header = f"{colour_label}: {display_value}"
+        base_text = f"{header}<br>{route_label}<br>Job ID: {job_id}"
+        return origin_label, destination_label, route_label, base_text
+
     if colour_mode == "categorical":
         if show_routes:
             for value in colour_values:
@@ -593,14 +616,18 @@ def build_route_map(
                 )
                 lat_values: list[float] = []
                 lon_values: list[float] = []
+                text_values: list[str] = []
                 for _, row in category_df.iterrows():
+                    _, _, _, base_text = _route_hover_text(row, display_value)
                     route_points = _row_route_points(row)
                     if route_points:
                         for lat, lon in route_points:
                             lat_values.append(lat)
                             lon_values.append(lon)
+                            text_values.append(base_text)
                         lat_values.append(None)
                         lon_values.append(None)
+                        text_values.append("")
                         continue
 
                     origin_lat = _coerce_float(row.get("origin_lat"))
@@ -615,6 +642,7 @@ def build_route_map(
                     ):
                         lat_values.extend([origin_lat, dest_lat, None])
                         lon_values.extend([origin_lon, dest_lon, None])
+                        text_values.extend([base_text, base_text, ""])
 
                 if lat_values and lon_values:
                     colour = colour_map.get(value, "#636EFA")
@@ -627,7 +655,8 @@ def build_route_map(
                             name=str(display_value),
                             legendgroup=str(value),
                             showlegend=False,
-                            hoverinfo="skip",
+                            text=text_values,
+                            hovertemplate="%{text}<extra></extra>",
                         )
                     )
 
@@ -643,37 +672,26 @@ def build_route_map(
                 marker_lon: list[float] = []
                 marker_text: list[str] = []
                 for _, row in category_df.iterrows():
-                    job_id = row.get("id", "n/a")
-                    origin_label = (
-                        row.get("origin_city")
-                        or row.get("origin")
-                        or row.get("origin_raw")
-                        or "Origin"
-                    )
-                    destination_label = (
-                        row.get("destination_city")
-                        or row.get("destination")
-                        or row.get("destination_raw")
-                        or "Destination"
-                    )
+                    (
+                        _origin_label,
+                        _destination_label,
+                        _route_label,
+                        base_text,
+                    ) = _route_hover_text(row, display_value)
 
                     origin_lat = _coerce_float(row.get("origin_lat"))
                     origin_lon = _coerce_float(row.get("origin_lon"))
                     if origin_lat is not None and origin_lon is not None:
                         marker_lat.append(origin_lat)
                         marker_lon.append(origin_lon)
-                        marker_text.append(
-                            f"{colour_label}: {display_value}<br>Origin: {origin_label}<br>Job ID: {job_id}"
-                        )
+                        marker_text.append(f"{base_text}<br>Point: Origin")
 
                     dest_lat = _coerce_float(row.get("dest_lat"))
                     dest_lon = _coerce_float(row.get("dest_lon"))
                     if dest_lat is not None and dest_lon is not None:
                         marker_lat.append(dest_lat)
                         marker_lon.append(dest_lon)
-                        marker_text.append(
-                            f"{colour_label}: {display_value}<br>Destination: {destination_label}<br>Job ID: {job_id}"
-                        )
+                        marker_text.append(f"{base_text}<br>Point: Destination")
 
                 if marker_lat and marker_lon:
                     colour = colour_map.get(value, "#636EFA")
@@ -725,14 +743,22 @@ def build_route_map(
                     colour = _to_colour(value)
                     lat_values: list[float | None] = []
                     lon_values: list[float | None] = []
+                    text_values: list[str] = []
+                    display_value = row.get(
+                        "map_colour_display",
+                        f"{value:,.2f}",
+                    )
+                    _, _, _, base_text = _route_hover_text(row, display_value)
 
                     route_points = _row_route_points(row)
                     if route_points:
                         for lat, lon in route_points:
                             lat_values.append(lat)
                             lon_values.append(lon)
+                            text_values.append(base_text)
                         lat_values.append(None)
                         lon_values.append(None)
+                        text_values.append("")
                     else:
                         origin_lat = _coerce_float(row.get("origin_lat"))
                         origin_lon = _coerce_float(row.get("origin_lon"))
@@ -747,6 +773,7 @@ def build_route_map(
                             continue
                         lat_values = [origin_lat, dest_lat, None]
                         lon_values = [origin_lon, dest_lon, None]
+                        text_values = [base_text, base_text, ""]
 
                     if not lat_values or not lon_values:
                         continue
@@ -758,7 +785,8 @@ def build_route_map(
                             mode="lines",
                             line={"width": 3, "color": colour},
                             showlegend=False,
-                            hoverinfo="skip",
+                            text=text_values,
+                            hovertemplate="%{text}<extra></extra>",
                         )
                     )
 
@@ -773,27 +801,13 @@ def build_route_map(
                         "map_colour_display",
                         f"{value:,.2f}",
                     )
-                    job_id = row.get("id", "n/a")
-                    origin_label = (
-                        row.get("origin_city")
-                        or row.get("origin")
-                        or row.get("origin_raw")
-                        or "Origin"
-                    )
-                    destination_label = (
-                        row.get("destination_city")
-                        or row.get("destination")
-                        or row.get("destination_raw")
-                        or "Destination"
-                    )
+                    _, _, _, base_text = _route_hover_text(row, display_value)
                     origin_lat = _coerce_float(row.get("origin_lat"))
                     origin_lon = _coerce_float(row.get("origin_lon"))
                     if origin_lat is not None and origin_lon is not None:
                         marker_lat.append(origin_lat)
                         marker_lon.append(origin_lon)
-                        marker_text.append(
-                            f"{colour_label}: {display_value}<br>Origin: {origin_label}<br>Job ID: {job_id}"
-                        )
+                        marker_text.append(f"{base_text}<br>Point: Origin")
                         marker_values.append(value)
 
                     dest_lat = _coerce_float(row.get("dest_lat"))
@@ -801,9 +815,7 @@ def build_route_map(
                     if dest_lat is not None and dest_lon is not None:
                         marker_lat.append(dest_lat)
                         marker_lon.append(dest_lon)
-                        marker_text.append(
-                            f"{colour_label}: {display_value}<br>Destination: {destination_label}<br>Job ID: {job_id}"
-                        )
+                        marker_text.append(f"{base_text}<br>Point: Destination")
                         marker_values.append(value)
 
                 if marker_lat and marker_lon:
@@ -827,26 +839,50 @@ def build_route_map(
                         )
                     )
             else:
-                coords_df = plot_df[["origin_lat", "origin_lon"]].apply(
-                    pd.to_numeric, errors="coerce"
-                )
-                coords_df = coords_df.dropna()
-                if not coords_df.empty:
+                marker_lat: list[float] = []
+                marker_lon: list[float] = []
+                marker_text: list[str] = []
+                marker_values: list[float] = []
+                for _, row in plot_df.iterrows():
+                    value = float(row["map_colour_value"])
+                    display_value = row.get(
+                        "map_colour_display",
+                        f"{value:,.2f}",
+                    )
+                    _, _, _, base_text = _route_hover_text(row, display_value)
+                    origin_lat = _coerce_float(row.get("origin_lat"))
+                    origin_lon = _coerce_float(row.get("origin_lon"))
+                    if origin_lat is not None and origin_lon is not None:
+                        marker_lat.append(origin_lat)
+                        marker_lon.append(origin_lon)
+                        marker_text.append(f"{base_text}<br>Point: Origin")
+                        marker_values.append(value)
+
+                    dest_lat = _coerce_float(row.get("dest_lat"))
+                    dest_lon = _coerce_float(row.get("dest_lon"))
+                    if dest_lat is not None and dest_lon is not None:
+                        marker_lat.append(dest_lat)
+                        marker_lon.append(dest_lon)
+                        marker_text.append(f"{base_text}<br>Point: Destination")
+                        marker_values.append(value)
+
+                if marker_lat and marker_lon:
                     figure.add_trace(
                         go.Scattermapbox(
-                            lat=coords_df["origin_lat"].tolist(),
-                            lon=coords_df["origin_lon"].tolist(),
+                            lat=marker_lat,
+                            lon=marker_lon,
                             mode="markers",
                             marker={
                                 "size": 0.0001,
-                                "color": numeric_values.loc[coords_df.index].tolist(),
+                                "color": marker_values,
                                 "colorscale": colour_scale,
                                 "cmin": min_value,
                                 "cmax": max_value,
                                 "colorbar": colorbar_dict,
                                 "opacity": 0.0,
                             },
-                            hoverinfo="skip",
+                            text=marker_text,
+                            hovertemplate="%{text}<extra></extra>",
                             showlegend=False,
                         )
                     )
