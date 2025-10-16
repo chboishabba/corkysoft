@@ -114,3 +114,33 @@ def test_geocode_prefers_feature_matching_input_tokens() -> None:
     assert result.label == "Alice Springs NT, Australia"
     assert abs(result.lon - 133.88) < 1e-6
     assert abs(result.lat - (-23.7)) < 1e-6
+
+
+def test_geocode_prioritises_specific_address_in_autocorrect() -> None:
+    fake_client = FakePeliasClient(
+        {
+            "12 Carlton Street Toowoomba, Australia": {
+                "features": [
+                    {
+                        "geometry": {"coordinates": [151.95, -27.56]},
+                        "properties": {
+                            "label": "Toowoomba, QLD, Australia",
+                            "name": "Toowoomba",
+                            "locality": "Toowoomba",
+                        },
+                    }
+                ]
+            }
+        }
+    )
+
+    result = geocode_with_normalization(
+        fake_client,
+        "12 carlton st toowoomba",
+        "Australia",
+    )
+
+    assert result.normalization is not None
+    assert result.normalization.autocorrections
+    first_suggestion = result.normalization.autocorrections[0]
+    assert first_suggestion.startswith("12 Carlton Street Toowoomba")
