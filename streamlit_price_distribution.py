@@ -1699,6 +1699,7 @@ with connection_scope() as conn:
     tab_labels = [
         "Histogram",
         "Profitability insights",
+        "Live network overview",
         "Route maps",
         "Quote builder",
         "Optimizer",
@@ -1750,12 +1751,13 @@ with connection_scope() as conn:
     active_routes = load_active_routes(conn)
     map_routes = prepare_profitability_route_data(filtered_df, break_even_value)
 
-    render_network_map(
-        map_routes,
-        truck_positions,
-        active_routes,
-        toggle_key="network_map_live_overlay_toggle_overview",
-    )
+    with tab_map["Live network overview"]:
+        render_network_map(
+            map_routes,
+            truck_positions,
+            active_routes,
+            toggle_key="network_map_live_overlay_toggle_overview",
+        )
 
     with tab_map["Histogram"]:
         if has_filtered_data:
@@ -2223,13 +2225,6 @@ with connection_scope() as conn:
                 )
                 st.plotly_chart(figure, use_container_width=True)
 
-        network_routes = prepare_profitability_map_data(scoped_df, break_even_value)
-        render_network_map(
-            network_routes,
-            truck_positions,
-            active_routes,
-            toggle_key="network_map_live_overlay_toggle_tab",
-        )
 
     with tab_map["Quote builder"]:
         saved_rowid = st.session_state.pop("quote_saved_rowid", None)
