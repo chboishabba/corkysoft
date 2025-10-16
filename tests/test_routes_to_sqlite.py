@@ -8,9 +8,14 @@ from unittest.mock import MagicMock
 import pytest
 
 
-def _import_routes_to_sqlite(monkeypatch: pytest.MonkeyPatch):
-    """Import the module with a dummy ORS key set for the client."""
-    monkeypatch.setenv("ORS_API_KEY", "dummy-key")
+def _import_routes_to_sqlite(
+    monkeypatch: pytest.MonkeyPatch, *, set_dummy_key: bool = True
+):
+    """Import the module, optionally configuring a dummy ORS key."""
+    if set_dummy_key:
+        monkeypatch.setenv("ORS_API_KEY", "dummy-key")
+    else:
+        monkeypatch.delenv("ORS_API_KEY", raising=False)
     # Ensure a clean import so env vars are read freshly.
     project_root = Path(__file__).resolve().parents[1]
     if str(project_root) not in sys.path:
@@ -25,14 +30,16 @@ def _import_routes_to_sqlite(monkeypatch: pytest.MonkeyPatch):
         mock_ors.Client = _DummyClient
         sys.modules["openrouteservice"] = mock_ors
     sys.modules.pop("routes_to_sqlite", None)
-    return importlib.import_module("routes_to_sqlite")
+    module = importlib.import_module("routes_to_sqlite")
+    monkeypatch.setattr(module, "_ors_client", None, raising=False)
+    return module
 
 
 def test_pelias_geocode_uses_iterable_filters(monkeypatch: pytest.MonkeyPatch):
     module = _import_routes_to_sqlite(monkeypatch)
 
     mock_client = MagicMock()
-    monkeypatch.setattr(module, "client", mock_client)
+    monkeypatch.setattr(module, "get_ors_client", lambda: mock_client)
 
     mock_client.pelias_search.side_effect = [
         {"features": []},
@@ -83,3 +90,29 @@ def test_ensure_schema_creates_historical_jobs(tmp_path: Path, monkeypatch: pyte
     conn.close()
 
     assert "historical_jobs" in tables
+
+
+def test_cli_add_does_not_require_ors_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    db_path = tmp_path / "cli.db"
+    monkeypatch.setenv("ROUTES_DB", str(db_path))
+    module = _import_routes_to_sqlite(monkeypatch, set_dummy_key=False)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["routes_to_sqlite.py", "add", "Brisbane", "Sydney"],
+        raising=False,
+    )
+
+    module.cli()
+
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT origin, destination FROM jobs ORDER BY id"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert rows == [("Brisbane", "Sydney")]

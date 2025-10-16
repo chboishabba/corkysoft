@@ -62,6 +62,11 @@ Optional environment variables:
 * `ROUTES_DB` → SQLite database path (default: `routes.db`)
 * `ORS_COUNTRY` → Default country context (default: `Australia`)
 
+> 💡 Commands that do not invoke geocoding or routing (`add`, `add-csv`,
+> `list`, `cost`, and `map` when route geometry is already stored) run fine
+> without `ORS_API_KEY`. Provide the key only when you need to call
+> OpenRouteService (e.g. `run` or `import-history --geocode/--route`).
+
 ---
 
 ## 🚀 Usage
