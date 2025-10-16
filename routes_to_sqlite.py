@@ -40,9 +40,27 @@ CREATE TABLE IF NOT EXISTS jobs (
   cost_time REAL,
   cost_distance REAL,
   cost_total REAL,
+  internal_cost_total REAL DEFAULT 0,
+  internal_cost_updated_at TEXT,
   updated_at TEXT,
   UNIQUE(origin, destination)
 );
+
+CREATE TABLE IF NOT EXISTS job_cost_components (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL,
+  category TEXT NOT NULL,
+  description TEXT DEFAULT '',
+  quantity REAL NOT NULL DEFAULT 0,
+  unit TEXT DEFAULT '',
+  rate REAL NOT NULL DEFAULT 0,
+  total REAL NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT,
+  FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_cost_components_job_id ON job_cost_components(job_id);
 
 CREATE TABLE IF NOT EXISTS historical_jobs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,6 +104,31 @@ def migrate_schema(conn: sqlite3.Connection):
     add("dest_lon", "REAL")
     add("dest_lat", "REAL")
     add("route_geojson", "TEXT")  # full driving lines
+    add("internal_cost_total", "REAL DEFAULT 0")
+    add("internal_cost_updated_at", "TEXT")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS job_cost_components (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL,
+            category TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            quantity REAL NOT NULL DEFAULT 0,
+            unit TEXT DEFAULT '',
+            rate REAL NOT NULL DEFAULT 0,
+            total REAL NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_job_cost_components_job_id
+        ON job_cost_components(job_id)
+        """
+    )
     conn.commit()
 
 # ---------- Address normalization (AU-focused) ----------
@@ -255,6 +298,167 @@ def cost_breakdown(distance_km: float, duration_hr: float, hourly_rate: float, p
     cost_time = duration_hr * hourly_rate
     cost_dist = distance_km * per_km_rate
     return cost_time, cost_dist, (cost_time + cost_dist)
+
+
+def _ensure_job_exists(conn: sqlite3.Connection, job_id: int) -> None:
+    row = conn.execute("SELECT 1 FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"Job {job_id} does not exist")
+
+
+def refresh_internal_cost_total(conn: sqlite3.Connection, job_id: int) -> float:
+    """Recompute the summed component cost for *job_id* and store it on the job row."""
+
+    _ensure_job_exists(conn, job_id)
+    total_row = conn.execute(
+        "SELECT COALESCE(SUM(total), 0) FROM job_cost_components WHERE job_id = ?",
+        (job_id,),
+    ).fetchone()
+    total = float(total_row[0] or 0)
+    conn.execute(
+        """
+        UPDATE jobs
+        SET internal_cost_total = ?, internal_cost_updated_at = ?
+        WHERE id = ?
+        """,
+        (total, datetime.now(timezone.utc).isoformat(), job_id),
+    )
+    conn.commit()
+    return total
+
+
+def add_cost_component(
+    conn: sqlite3.Connection,
+    job_id: int,
+    category: str,
+    quantity: Optional[float] = None,
+    rate: Optional[float] = None,
+    *,
+    unit: str = "",
+    description: str = "",
+    total_override: Optional[float] = None,
+) -> int:
+    """Insert a cost component row for *job_id* and return the new component ID."""
+
+    if total_override is None:
+        if quantity is None or rate is None:
+            raise ValueError("Provide either total_override or both quantity and rate")
+        total = float(quantity) * float(rate)
+    else:
+        total = float(total_override)
+    _ensure_job_exists(conn, job_id)
+    now = datetime.now(timezone.utc).isoformat()
+    cur = conn.execute(
+        """
+        INSERT INTO job_cost_components (
+            job_id, category, description, quantity, unit, rate, total, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            job_id,
+            category,
+            description or "",
+            float(quantity) if quantity is not None else 0.0,
+            unit or "",
+            float(rate) if rate is not None else 0.0,
+            total,
+            now,
+            now,
+        ),
+    )
+    component_id = cur.lastrowid
+    conn.commit()
+    refresh_internal_cost_total(conn, job_id)
+    return int(component_id)
+
+
+def delete_cost_component(conn: sqlite3.Connection, component_id: int) -> None:
+    """Delete a cost component row by *component_id* and refresh the job summary."""
+
+    row = conn.execute(
+        "SELECT job_id FROM job_cost_components WHERE id = ?", (component_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Cost component {component_id} does not exist")
+    job_id = int(row[0])
+    conn.execute("DELETE FROM job_cost_components WHERE id = ?", (component_id,))
+    conn.commit()
+    refresh_internal_cost_total(conn, job_id)
+
+
+def fetch_cost_components(conn: sqlite3.Connection, job_id: int) -> list[sqlite3.Row]:
+    """Return all cost component rows for *job_id* ordered by creation time."""
+
+    _ensure_job_exists(conn, job_id)
+    previous_factory = conn.row_factory
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, category, description, quantity, unit, rate, total, created_at, updated_at
+            FROM job_cost_components
+            WHERE job_id = ?
+            ORDER BY created_at, id
+            """,
+            (job_id,),
+        ).fetchall()
+    finally:
+        conn.row_factory = previous_factory
+    return rows
+
+
+def summarise_cost_components(conn: sqlite3.Connection, job_id: int) -> tuple[dict[str, float], float]:
+    """Return a mapping of totals per category and the overall total for *job_id*."""
+
+    rows = fetch_cost_components(conn, job_id)
+    per_category: dict[str, float] = {}
+    for row in rows:
+        cat = row["category"]
+        per_category[cat] = per_category.get(cat, 0.0) + float(row["total"])
+    total = sum(per_category.values())
+    return per_category, total
+
+
+def print_cost_components(conn: sqlite3.Connection, job_id: int) -> None:
+    """Pretty-print cost components and totals for *job_id*."""
+
+    rows = fetch_cost_components(conn, job_id)
+    if not rows:
+        print("No cost components recorded for this job.")
+        return
+
+    headers = ["ID", "Category", "Description", "Qty", "Unit", "Rate", "Total"]
+    widths = [5, 14, 32, 8, 8, 12, 12]
+    print("  ".join(h.ljust(w) for h, w in zip(headers, widths)))
+    print("-" * (sum(widths) + 2 * (len(widths) - 1)))
+
+    overall = 0.0
+    for row in rows:
+        total = float(row["total"])
+        overall += total
+        quantity = row["quantity"]
+        rate = row["rate"]
+        print(
+            "  ".join(
+                [
+                    str(row["id"]).ljust(widths[0]),
+                    (row["category"] or "")[: widths[1] - 1].ljust(widths[1]),
+                    (row["description"] or "")[: widths[2] - 1].ljust(widths[2]),
+                    (
+                        f"{quantity:.2f}" if quantity is not None else ""
+                    ).rjust(widths[3]),
+                    (row["unit"] or "").ljust(widths[4]),
+                    (
+                        f"{rate:,.2f}" if rate is not None else ""
+                    ).rjust(widths[5]),
+                    f"{total:,.2f}".rjust(widths[6]),
+                ]
+            )
+        )
+
+    print("-" * (sum(widths) + 2 * (len(widths) - 1)))
+    print(f"Total: {overall:,.2f} AUD")
 
 # ---------- Historical job import ----------
 def import_historical_jobs(
@@ -507,6 +711,7 @@ def list_jobs(conn):
              ROUND(distance_km,1) AS km,
              ROUND(duration_hr,2) AS hours,
              ROUND(cost_total,2) AS total,
+             ROUND(internal_cost_total,2) AS internal_total,
              updated_at
       FROM jobs
       ORDER BY updated_at DESC NULLS LAST, id
@@ -516,12 +721,22 @@ def list_jobs(conn):
         print("No jobs found.")
         return
 
-    headers = ["ID", "Origin", "→ Origin (resolved)", "Destination", "→ Destination (resolved)",
-               "Km", "Hours", "Total $", "Updated (UTC)"]
-    widths  = [4, 18, 34, 20, 34, 7, 7, 12, 25]
+    headers = [
+        "ID",
+        "Origin",
+        "→ Origin (resolved)",
+        "Destination",
+        "→ Destination (resolved)",
+        "Km",
+        "Hours",
+        "Total $",
+        "Internal $",
+        "Updated (UTC)",
+    ]
+    widths  = [4, 18, 34, 20, 34, 7, 7, 12, 12, 25]
 
     def fmt_row(r):
-        id_, o, or_, d, dr_, km, hr, tot, upd = r
+        id_, o, or_, d, dr_, km, hr, tot, internal_tot, upd = r
         items = [
             f"{id_}".ljust(widths[0]),
             (o or "")[:widths[1]-1].ljust(widths[1]),
@@ -531,7 +746,8 @@ def list_jobs(conn):
             (f"{km:.1f}" if km is not None else "").rjust(widths[5]),
             (f"{hr:.2f}" if hr is not None else "").rjust(widths[6]),
             (f"{tot:,.2f}" if tot is not None else "").rjust(widths[7]),
-            (upd or "").ljust(widths[8]),
+            (f"{internal_tot:,.2f}" if internal_tot is not None else "").rjust(widths[8]),
+            (upd or "").ljust(widths[9]),
         ]
         return "  ".join(items)
 
@@ -647,6 +863,31 @@ def cli():
     a_map = sub.add_parser("map")
     a_map.add_argument("--out", default="routes_map.html", help="Output HTML map path")
 
+    cost_parser = sub.add_parser("cost", help="Manage per-job private cost components")
+    cost_sub = cost_parser.add_subparsers(dest="cost_cmd", required=True)
+
+    cost_add = cost_sub.add_parser("add", help="Add a cost component to a job")
+    cost_add.add_argument("job_id", type=int)
+    cost_add.add_argument("category", help="Category label, e.g. crew, truck, fuel")
+    cost_add.add_argument("--quantity", type=float, help="Quantity such as hours or litres")
+    cost_add.add_argument("--rate", type=float, help="Unit rate in AUD")
+    cost_add.add_argument("--unit", default="", help="Unit label to display (e.g. hr, km, L)")
+    cost_add.add_argument("--description", default="", help="Free text description")
+    cost_add.add_argument(
+        "--total",
+        type=float,
+        help="Explicit total cost in AUD (overrides quantity * rate)",
+    )
+
+    cost_list = cost_sub.add_parser("list", help="Show all cost components recorded for a job")
+    cost_list.add_argument("job_id", type=int)
+
+    cost_delete = cost_sub.add_parser("delete", help="Remove a cost component by its ID")
+    cost_delete.add_argument("component_id", type=int)
+
+    cost_summary = cost_sub.add_parser("summary", help="Show per-category totals for a job")
+    cost_summary.add_argument("job_id", type=int)
+
     args = p.parse_args()
     conn = sqlite3.connect(DB_PATH)
     ensure_schema(conn)
@@ -666,6 +907,41 @@ def cli():
         process_pending(conn)
     elif args.cmd == "map":
         map_jobs(conn, out_html=args.out)
+    elif args.cmd == "cost":
+        if args.cost_cmd == "add":
+            try:
+                component_id = add_cost_component(
+                    conn,
+                    args.job_id,
+                    args.category,
+                    quantity=args.quantity,
+                    rate=args.rate,
+                    unit=args.unit,
+                    description=args.description,
+                    total_override=args.total,
+                )
+            except ValueError as exc:
+                raise SystemExit(str(exc)) from exc
+            else:
+                print(f"Component #{component_id} recorded.")
+        elif args.cost_cmd == "list":
+            print_cost_components(conn, args.job_id)
+        elif args.cost_cmd == "delete":
+            try:
+                delete_cost_component(conn, args.component_id)
+            except ValueError as exc:
+                raise SystemExit(str(exc)) from exc
+            else:
+                print("Deleted.")
+        elif args.cost_cmd == "summary":
+            per_category, total = summarise_cost_components(conn, args.job_id)
+            if not per_category:
+                print("No cost components recorded for this job.")
+            else:
+                for cat, value in sorted(per_category.items()):
+                    print(f"{cat}: {value:,.2f} AUD")
+                print("---")
+                print(f"Total: {total:,.2f} AUD")
     conn.close()
 
 if __name__ == "__main__":
