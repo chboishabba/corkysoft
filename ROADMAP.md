@@ -62,6 +62,7 @@ This merges everything from:
 | **Seasonal margin uplift (20–80 %)**                     |   🔜   | Add seasonal coefficient.              |
 | **Backhaul / container sharing**                         |   🔜   | Handle under-/over-utilisation.        |
 | **Truck / driver cost baselines**                        |    ✅   | Base fuel/driver/maintenance + overhead parameters drive break-even engine. |
+| **Private cost component ledger**                        |    ✅   | Record crew, truck, fuel and other cost inputs per job inside SQLite.       |
 
 ---
 
