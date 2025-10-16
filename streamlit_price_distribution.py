@@ -1,18 +1,9 @@
-"""Streamlit dashboard for the price distribution analysis."""
+"""Streamlit entrypoint for the price distribution dashboard."""
 from __future__ import annotations
 
-import io
-import json
-import math
-from datetime import date
-from typing import Any, Dict, List, Optional, Sequence, Tuple
-
-import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-import pydeck as pdk
 import streamlit as st
 
+from dashboard.app import render_price_distribution_dashboard
 try:
     import folium
     from streamlit_folium import st_folium
@@ -236,18 +227,18 @@ def _render_pin_picker(
     st.session_state["quote_pin_override"] = st.session_state.get("quote_pin_override", {})
     return current_lon, current_lat
 
-# -----------------------------------------------------------------------------
-# Compatibility shim for metro-distance filtering across branches/modules
-# -----------------------------------------------------------------------------
-# Prefer the newer `filter_jobs_by_distance(df, metro_only=True/False, max_distance_km=...)`.
-# If unavailable, fall back to `filter_metro_jobs(df, max_distance_km=...)`.
-try:
-    from inspect import signature
 
-    from analytics.price_distribution import (  # type: ignore
-        filter_jobs_by_distance as _filter_jobs_by_distance,
+def main() -> None:
+    """Configure the Streamlit page and render the dashboard."""
+    st.set_page_config(
+        page_title="Price distribution by corridor",
+        layout="wide",
     )
+    render_price_distribution_dashboard()
 
+
+if __name__ == "__main__":
+    main()
     try:
         _FILTER_DISTANCE_PARAM = next(
             param
