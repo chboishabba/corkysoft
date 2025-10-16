@@ -407,23 +407,33 @@ def _infer_datetime_parse_kwargs(series: pd.Series) -> dict[str, Any]:
 
 
 def _deduplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Return ``df`` with duplicate column labels removed.
+    """Return ``df`` with duplicate column labels collapsed via coalescing.
 
-    When importing legacy exports the ``historical_jobs`` table may already
-    contain denormalised location columns (``origin``, ``destination`` etc.).
-    The default dashboard query joins the addresses table and aliases the
-    enriched columns using the same names which results in duplicate column
-    labels. Pandas returns a :class:`~pandas.DataFrame` rather than a
-    :class:`~pandas.Series` when selecting a column with duplicate labels which
-    later breaks string/arithmetical operations with ``Columns must be same
-    length as key`` errors.  Keeping the last occurrence (the enriched join
-    columns) matches the behaviour of the old dashboard and avoids the
-    ambiguity.
+    Legacy exports may contain denormalised location columns (``origin`` and
+    ``destination`` coordinates) that are later joined again during dashboard
+    loads. Pandas keeps all duplicate column labels which forces callers to
+    handle :class:`~pandas.DataFrame` objects when selecting a column and loses
+    the original coordinate data if the joined copy is missing.  Instead of
+    dropping the earlier duplicates outright we coalesce the values by
+    preferring the right-most non-null entry and falling back to preceding
+    columns so that sparsely populated joins keep the stored coordinates.
     """
 
-    if df.columns.duplicated().any():
-        return df.loc[:, ~df.columns.duplicated(keep="last")]
-    return df
+    if not df.columns.duplicated().any():
+        return df
+
+    df = df.copy()
+    duplicate_labels = df.columns[df.columns.duplicated(keep=False)]
+    for label in pd.unique(duplicate_labels):
+        duplicate_indices = [idx for idx, col in enumerate(df.columns) if col == label]
+        if len(duplicate_indices) < 2:
+            continue
+
+        duplicates = df.iloc[:, duplicate_indices]
+        combined = duplicates.iloc[:, ::-1].bfill(axis=1).ffill(axis=1).iloc[:, 0]
+        df.iloc[:, duplicate_indices[-1]] = combined
+
+    return df.loc[:, ~df.columns.duplicated(keep="last")]
 
 
 def infer_columns(df: pd.DataFrame) -> ColumnMapping:
