@@ -224,6 +224,11 @@ def test_harness_projects_real_gps_updates():
         conn.close()
 
 
+def test_ingest_clamps_progress_before_time_projections():
+    conn = _build_conn()
+    try:
+        harness = TruckTelemetryHarness(conn)
+        recorded_at = datetime(2024, 1, 1, 10, 0, tzinfo=UTC)
 def test_ingest_preserves_zero_coordinates():
     conn = _build_conn()
     try:
@@ -233,12 +238,15 @@ def test_ingest_preserves_zero_coordinates():
         harness.ingest(
             [
                 TruckGpsSnapshot(
+                    truck_id="CLAMP-1",
                     truck_id="ZERO-1",
                     lat=-27.4705,
                     lon=153.0260,
                     status="en_route",
                     recorded_at=recorded_at,
                     job_id=1,
+                    progress=1.2,
+                    travel_seconds=3600.0,
                     origin_lat=0.0,
                     origin_lon=153.0260,
                     dest_lat=None,
@@ -249,6 +257,23 @@ def test_ingest_preserves_zero_coordinates():
 
         row = conn.execute(
             """
+            SELECT progress, started_at, eta, travel_seconds
+            FROM active_routes
+            WHERE truck_id = ?
+            """,
+            ("CLAMP-1",),
+        ).fetchone()
+
+        assert row is not None
+        assert pytest.approx(row["progress"], rel=1e-6) == 1.0
+
+        travel_seconds = float(row["travel_seconds"])
+        started_at = datetime.fromisoformat(row["started_at"])
+        eta = datetime.fromisoformat(row["eta"])
+
+        expected_started = recorded_at - timedelta(seconds=travel_seconds)
+        assert started_at == expected_started
+        assert eta == expected_started + timedelta(seconds=travel_seconds)
             SELECT origin_lat, origin_lon, dest_lat, dest_lon
             FROM active_routes
             WHERE truck_id=?

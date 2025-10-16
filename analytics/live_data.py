@@ -809,6 +809,13 @@ class TruckTelemetryHarness:
             if progress is None:
                 progress = 0.0
 
+            try:
+                progress = float(progress)
+            except (TypeError, ValueError):
+                progress = 0.0
+
+            progress = max(0.0, min(1.0, progress))
+
             started_at = reading.started_at
             if started_at is None:
                 if travel_seconds:
