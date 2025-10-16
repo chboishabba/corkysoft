@@ -414,6 +414,13 @@ def geocode_with_normalization(
 
     suggestions = _collect_autocorrect_suggestions(features)
     if normalization is not None:
+        preferred: List[str] = []
+        if normalization.canonical:
+            preferred.append(normalization.canonical)
+        primary_label = _collapse_whitespace(label) if label else None
+        if primary_label and primary_label not in preferred:
+            preferred.append(primary_label)
+        normalization.add_autocorrections(preferred)
         normalization.add_autocorrections(suggestions)
 
     return GeocodeResult(
