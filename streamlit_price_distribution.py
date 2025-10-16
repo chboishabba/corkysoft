@@ -13,6 +13,21 @@ import plotly.graph_objects as go
 import pydeck as pdk
 import streamlit as st
 
+try:
+    import folium
+    from streamlit_folium import st_folium
+except ModuleNotFoundError:  # pragma: no cover - optional dependency for pin UI
+    folium = None  # type: ignore[assignment]
+    st_folium = None  # type: ignore[assignment]
+
+from dashboard.state import (
+    _ensure_pin_state,
+    _first_non_empty,
+    _get_query_params,
+    _initial_pin_state,
+    _rerun_app,
+    _set_query_params,
+)
 from analytics.db import connection_scope, ensure_dashboard_tables
 from analytics.price_distribution import (
     DistributionSummary,
@@ -43,6 +58,7 @@ from analytics.price_distribution import (
     summarise_profitability,
     update_break_even,
 )
+from dashboard.components.summary import render_summary
 from analytics.optimizer import (
     OptimizerParameters,
     OptimizerRun,
@@ -53,11 +69,32 @@ from analytics.optimizer import (
 from analytics.live_data import (
     TRUCK_STATUS_COLOURS,
     build_live_heatmap_source,
-    extract_route_path,
     load_active_routes,
     load_truck_positions,
 )
 from corkysoft.repo import ensure_schema as ensure_quote_schema
+from dashboard.components.maps import (
+    _hex_to_rgb,
+    build_route_map,
+    render_network_map,
+)
+from corkysoft.pricing import DEFAULT_MODIFIERS
+from corkysoft.quote_service import (
+    COUNTRY_DEFAULT,
+    QuoteInput,
+    QuoteResult,
+    build_summary,
+    calculate_quote,
+    format_currency,
+)
+from corkysoft.repo import (
+    ClientDetails,
+    ensure_schema as ensure_quote_schema,
+    find_client_matches,
+    format_client_display,
+    persist_quote,
+)
+from corkysoft.routing import snap_coordinates_to_road
 from corkysoft.schema import ensure_schema as ensure_core_schema
 from dashboard.components.quote_builder import render_quote_builder
 
@@ -74,30 +111,42 @@ _ISOCHRONE_PALETTE = [
     "#FF97FF",
     "#FECB52",
 ]
-
-
-def _hex_to_rgb(value: str) -> Tuple[int, int, int]:
-    """Convert ``value`` (hex or rgb string) into an ``(r, g, b)`` tuple."""
-
-    colour = value.strip()
-    if colour.startswith("#"):
-        digits = colour.lstrip("#")
-        if len(digits) == 3:
-            digits = "".join(ch * 2 for ch in digits)
-        if len(digits) != 6:
-            raise ValueError(f"Unsupported hex colour format: {value}")
-        return tuple(int(digits[idx : idx + 2], 16) for idx in (0, 2, 4))  # type: ignore[arg-type]
-
-    if colour.startswith("rgb"):
-        start = colour.find("(")
-        end = colour.find(")")
-        if start == -1 or end == -1 or end <= start:
-            raise ValueError(f"Unsupported rgb colour format: {value}")
-        components = colour[start + 1 : end].split(",")[:3]
-        return tuple(int(float(component.strip())) for component in components)
-
-    raise ValueError(f"Unsupported colour format: {value}")
 _QUOTE_COUNTRY_STATE_KEY = "quote_builder_country"
+def _initial_pin_state(result: QuoteResult) -> Dict[str, Any]:
+    return {
+        "origin": {
+            "lon": float(result.origin_lon),
+            "lat": float(result.origin_lat),
+        },
+        "destination": {
+            "lon": float(result.dest_lon),
+            "lat": float(result.dest_lat),
+        },
+        "enabled": False,
+    }
+
+
+def _ensure_pin_state(result: QuoteResult) -> Dict[str, Any]:
+    state: Dict[str, Any] = st.session_state.get("quote_pin_override", {})
+    if not state or "origin" not in state or "destination" not in state:
+        state = _initial_pin_state(result)
+    else:
+        state.setdefault("enabled", False)
+        # When result coordinates change, refresh defaults so pins move with them
+        origin_state = state.get("origin") or {}
+        dest_state = state.get("destination") or {}
+        if not origin_state:
+            origin_state = {}
+        if not dest_state:
+            dest_state = {}
+        origin_state.setdefault("lon", float(result.origin_lon))
+        origin_state.setdefault("lat", float(result.origin_lat))
+        dest_state.setdefault("lon", float(result.dest_lon))
+        dest_state.setdefault("lat", float(result.dest_lat))
+        state["origin"] = origin_state
+        state["destination"] = dest_state
+    st.session_state["quote_pin_override"] = state
+    return state
 
 
 def _geojson_to_path(value: Any) -> Optional[List[List[float]]]:
@@ -110,6 +159,81 @@ def _geojson_to_path(value: Any) -> Optional[List[List[float]]]:
     return [[float(lon), float(lat)] for lat, lon in coords]
 
 
+def _pin_coordinates(entry: Dict[str, Any]) -> tuple[float, float]:
+    lon = entry.get("lon")
+    lat = entry.get("lat")
+    if lon is None or lat is None:
+        return (_AUS_LAT_LON[1], _AUS_LAT_LON[0])
+    return (float(lon), float(lat))
+
+
+def _pin_lon_key(map_key: str) -> str:
+    return f"{map_key}_lon_input"
+
+
+def _pin_lat_key(map_key: str) -> str:
+    return f"{map_key}_lat_input"
+
+
+def _render_pin_picker(
+    label: str,
+    *,
+    map_key: str,
+    entry: Dict[str, Any],
+) -> tuple[float, float]:
+    lon, lat = _pin_coordinates(entry)
+    lon_key = _pin_lon_key(map_key)
+    lat_key = _pin_lat_key(map_key)
+
+    if lon_key not in st.session_state:
+        st.session_state[lon_key] = float(lon)
+    if lat_key not in st.session_state:
+        st.session_state[lat_key] = float(lat)
+
+    current_lon = float(st.session_state.get(lon_key, lon))
+    current_lat = float(st.session_state.get(lat_key, lat))
+
+    map_available = folium is not None and st_folium is not None
+    if map_available:
+        zoom = 12 if entry.get("lon") is not None and entry.get("lat") is not None else 4
+        map_obj = folium.Map(location=[current_lat, current_lon], zoom_start=zoom)
+        folium.Marker(
+            [current_lat, current_lon],
+            tooltip=f"{label} pin",
+            icon=folium.Icon(color="blue" if label == "Origin" else "red"),
+        ).add_to(map_obj)
+        click_result = st_folium(map_obj, height=320, key=map_key, returned_objects=[])
+
+        if isinstance(click_result, dict):
+            last_clicked = click_result.get("last_clicked") or {}
+            if "lat" in last_clicked and "lng" in last_clicked:
+                current_lat = float(last_clicked["lat"])
+                current_lon = float(last_clicked["lng"])
+                st.session_state[lat_key] = current_lat
+                st.session_state[lon_key] = current_lon
+    else:
+        st.warning(
+            "Install 'folium' and 'streamlit-folium' for interactive pin dropping. The latitude/longitude inputs below remain available for manual edits."
+        )
+
+    lat_input = st.number_input(
+        f"{label} latitude",
+        format="%.6f",
+        key=lat_key,
+    )
+    lon_input = st.number_input(
+        f"{label} longitude",
+        format="%.6f",
+        key=lon_key,
+    )
+
+    current_lat = float(lat_input)
+    current_lon = float(lon_input)
+
+    entry["lon"] = current_lon
+    entry["lat"] = current_lat
+    st.session_state["quote_pin_override"] = st.session_state.get("quote_pin_override", {})
+    return current_lon, current_lat
 
 # -----------------------------------------------------------------------------
 # Compatibility shim for metro-distance filtering across branches/modules
@@ -326,7 +450,6 @@ def render_summary(
                 ),
                 delta=delta,
             )
-
 
 def build_route_map(
     df: pd.DataFrame,
@@ -1334,6 +1457,65 @@ def _get_query_params() -> Dict[str, List[str]]:
     if query_params is not None:
         return {key: query_params.get_all(key) for key in query_params.keys()}
     return st.experimental_get_query_params()
+def _format_route_label(route: pd.Series) -> str:
+    origin = _first_non_empty(
+        route,
+        [
+            "corridor_display",
+            "origin",
+            "origin_city",
+            "origin_normalized",
+            "origin_raw",
+        ],
+    ) or "Origin"
+    destination = _first_non_empty(
+        route,
+        [
+            "destination",
+            "destination_city",
+            "destination_normalized",
+            "destination_raw",
+        ],
+    ) or "Destination"
+    distance_value: Optional[float] = None
+    for column in ("distance_km", "distance", "km", "kms"):
+        if column in route and pd.notna(route[column]):
+            try:
+                distance_value = float(route[column])
+            except (TypeError, ValueError):
+                continue
+            break
+    if distance_value is not None and not math.isnan(distance_value):
+        return f"{origin} → {destination} ({distance_value:.1f} km)"
+    return f"{origin} → {destination}"
+
+
+def _extract_route_date(route: pd.Series) -> Optional[date]:
+    for column in (
+        "job_date",
+        "move_date",
+        "delivery_date",
+        "created_at",
+        "updated_at",
+    ):
+        if column in route and pd.notna(route[column]):
+            try:
+                return pd.to_datetime(route[column]).date()
+            except Exception:
+                continue
+    return None
+
+
+def _extract_route_volume(route: pd.Series, candidates: Sequence[str]) -> Optional[float]:
+    for column in candidates:
+        if not column:
+            continue
+        if column in route and pd.notna(route[column]):
+            try:
+                return float(route[column])
+            except (TypeError, ValueError):
+                continue
+    return None
 
 
 with connection_scope() as conn:

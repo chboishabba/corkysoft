@@ -39,7 +39,7 @@ from analytics.price_distribution import (
     summarise_distribution,
     summarise_profitability,
 )
-from streamlit_price_distribution import build_route_map
+from dashboard.components.maps import build_route_map
 
 
 def build_conn() -> sqlite3.Connection:
