@@ -25,6 +25,7 @@ from analytics.price_distribution import (
     create_m3_margin_figure,
     create_m3_vs_km_figure,
     build_profitability_export,
+    _deduplicate_columns,
     enrich_missing_route_coordinates,
     filter_jobs_by_distance,
     filter_metro_jobs,
@@ -693,6 +694,66 @@ def test_prepare_route_map_data_filters_missing_coordinates():
     assert result.iloc[0]["id"] == 1
     assert result.iloc[0]["map_colour_value"] == "1"
     assert result.iloc[0]["map_colour_display"] == "1"
+
+
+def test_deduplicate_columns_preserves_coordinate_values():
+    df = pd.DataFrame(
+        [
+            [
+                1,
+                -27.4705,
+                np.nan,
+                153.0260,
+                np.nan,
+                -33.8688,
+                np.nan,
+                151.2093,
+                np.nan,
+                "Below break-even",
+            ],
+            [
+                2,
+                -16.9200,
+                np.nan,
+                145.7700,
+                np.nan,
+                -27.4705,
+                np.nan,
+                153.0260,
+                np.nan,
+                "0-50 above break-even",
+            ],
+        ],
+        columns=[
+            "id",
+            "origin_lat",
+            "origin_lat",
+            "origin_lon",
+            "origin_lon",
+            "dest_lat",
+            "dest_lat",
+            "dest_lon",
+            "dest_lon",
+            "profit_band",
+        ],
+    )
+
+    deduplicated = _deduplicate_columns(df)
+
+    assert not deduplicated.columns.duplicated().any()
+    assert deduplicated["origin_lat"].tolist() == pytest.approx([-27.4705, -16.92])
+    assert deduplicated["origin_lon"].tolist() == pytest.approx([153.026, 145.77])
+    assert deduplicated["dest_lat"].tolist() == pytest.approx([-33.8688, -27.4705])
+    assert deduplicated["dest_lon"].tolist() == pytest.approx([151.2093, 153.026])
+
+    prepared = prepare_route_map_data(deduplicated, "profit_band")
+
+    assert len(prepared) == len(df)
+    assert prepared["id"].tolist() == [1, 2]
+    assert set(prepared["map_colour_value"]) == {
+        "Below break-even",
+        "0-50 above break-even",
+    }
 
 
 def test_prepare_metric_route_map_data_filters_and_formats_values():
