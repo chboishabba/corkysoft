@@ -224,6 +224,47 @@ def test_harness_projects_real_gps_updates():
         conn.close()
 
 
+def test_ingest_preserves_zero_coordinates():
+    conn = _build_conn()
+    try:
+        harness = TruckTelemetryHarness(conn)
+        recorded_at = datetime(2024, 1, 3, 9, 0, tzinfo=UTC)
+
+        harness.ingest(
+            [
+                TruckGpsSnapshot(
+                    truck_id="ZERO-1",
+                    lat=-27.4705,
+                    lon=153.0260,
+                    status="en_route",
+                    recorded_at=recorded_at,
+                    job_id=1,
+                    origin_lat=0.0,
+                    origin_lon=153.0260,
+                    dest_lat=None,
+                    dest_lon=0.0,
+                )
+            ]
+        )
+
+        row = conn.execute(
+            """
+            SELECT origin_lat, origin_lon, dest_lat, dest_lon
+            FROM active_routes
+            WHERE truck_id=?
+            """,
+            ("ZERO-1",),
+        ).fetchone()
+
+        assert row is not None
+        assert row["origin_lat"] == 0.0
+        assert row["origin_lon"] == pytest.approx(153.0260)
+        assert row["dest_lon"] == 0.0
+        assert row["dest_lat"] == pytest.approx(-33.8688)
+    finally:
+        conn.close()
+
+
 def test_build_live_heatmap_source_emphasises_live_points():
     historical_routes = pd.DataFrame(
         [
