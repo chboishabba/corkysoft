@@ -106,6 +106,8 @@ _ISOCHRONE_PALETTE = [
     "#FECB52",
 ]
 
+_LIVE_NETWORK_TAB_LABEL = "Live network overview"
+
 
 def _hex_to_rgb(value: str) -> Tuple[int, int, int]:
     """Convert ``value`` (hex or rgb string) into an ``(r, g, b)`` tuple."""
@@ -921,7 +923,7 @@ def render_network_map(
     *,
     toggle_key: str = "network_map_live_overlay_toggle",
 ) -> None:
-    st.markdown("### Live network overview")
+    st.markdown(f"### {_LIVE_NETWORK_TAB_LABEL}")
 
     show_live_overlay: bool = True
     toggle_help = (
@@ -1735,7 +1737,7 @@ with connection_scope() as conn:
     tab_labels = [
         "Histogram",
         "Profitability insights",
-        "Live network overview",
+        _LIVE_NETWORK_TAB_LABEL,
         "Route maps",
         "Quote builder",
         "Optimizer",
@@ -1787,7 +1789,7 @@ with connection_scope() as conn:
     active_routes = load_active_routes(conn)
     map_routes = prepare_profitability_route_data(filtered_df, break_even_value)
 
-    with tab_map["Live network overview"]:
+    with tab_map[_LIVE_NETWORK_TAB_LABEL]:
         render_network_map(
             map_routes,
             truck_positions,
