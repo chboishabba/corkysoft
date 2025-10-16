@@ -474,6 +474,45 @@ def _safe_float(value: Any) -> Optional[float]:
         return None
 
 
+_DEDUP_FLOAT_PRECISION = 6
+
+
+def _normalise_float_for_key(value: Any) -> Optional[float]:
+    numeric = _safe_float(value)
+    if numeric is None or math.isnan(numeric):
+        return None
+    return round(numeric, _DEDUP_FLOAT_PRECISION)
+
+
+def _build_job_identity_key(
+    job_date: Any,
+    origin: Any,
+    destination: Any,
+    client: Any,
+    price_per_m3: Any,
+    volume_m3: Any,
+    revenue_total: Any,
+    distance_km: Any,
+    final_cost: Any,
+) -> tuple[Any, ...]:
+    origin_clean = _clean_string(origin)
+    destination_clean = _clean_string(destination)
+    client_clean = _clean_string(client) or ""
+    job_date_clean = str(job_date).strip() if job_date is not None else ""
+
+    return (
+        job_date_clean,
+        origin_clean,
+        destination_clean,
+        client_clean,
+        _normalise_float_for_key(price_per_m3),
+        _normalise_float_for_key(volume_m3),
+        _normalise_float_for_key(revenue_total),
+        _normalise_float_for_key(distance_km),
+        _normalise_float_for_key(final_cost),
+    )
+
+
 def _infer_postcode_columns(df: pd.DataFrame) -> tuple[Optional[str], Optional[str]]:
     lower_to_column = {column.lower(): column for column in df.columns}
     origin_column = next(
@@ -655,7 +694,11 @@ def import_historical_jobs_from_dataframe(
     The importer uses :func:`infer_columns` to discover relevant fields and performs
     light validation before inserting rows. Rows missing a job date, origin,
     destination or price signal are skipped. Duplicate rows, identified via the
-    combination of ``(job_date, origin, destination, client)``, are ignored.
+    combination of ``(job_date, origin, destination, client, price_per_m3,
+    volume_m3, revenue_total, distance_km, final_cost)``, are ignored. When the
+    distinguishing metrics are missing they fall back to ``NULL`` so exact
+    duplicates remain filtered while legitimate same-corridor jobs with
+    different volumes or pricing are retained.
     """
 
     ensure_global_parameters_table(conn)
@@ -682,14 +725,31 @@ def import_historical_jobs_from_dataframe(
     origin_pc_col, dest_pc_col = _infer_postcode_columns(df)
 
     existing_rows = conn.execute(
-        "SELECT job_date, origin, destination, client FROM historical_jobs"
+        """
+        SELECT
+            job_date,
+            origin,
+            destination,
+            client,
+            price_per_m3,
+            volume_m3,
+            revenue_total,
+            distance_km,
+            final_cost
+        FROM historical_jobs
+        """
     ).fetchall()
     existing_keys = {
-        (
+        _build_job_identity_key(
             row[0],
-            row[1] or None,
-            row[2] or None,
-            (row[3] or "").strip(),
+            row[1],
+            row[2],
+            row[3],
+            row[4],
+            row[5],
+            row[6],
+            row[7],
+            row[8],
         )
         for row in existing_rows
     }
@@ -751,11 +811,16 @@ def import_historical_jobs_from_dataframe(
             _clean_string(df.iloc[idx][dest_pc_col]) if dest_pc_col else None
         )
 
-        key = (
+        key = _build_job_identity_key(
             job_date.date().isoformat(),
             origin_value,
             destination_value,
-            (client_value or ""),
+            client_value,
+            price_value,
+            volume_value,
+            revenue_value,
+            distance_value,
+            final_cost_value,
         )
         if key in existing_keys:
             skipped += 1
