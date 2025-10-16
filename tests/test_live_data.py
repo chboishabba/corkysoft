@@ -229,11 +229,17 @@ def test_ingest_clamps_progress_before_time_projections():
     try:
         harness = TruckTelemetryHarness(conn)
         recorded_at = datetime(2024, 1, 1, 10, 0, tzinfo=UTC)
+def test_ingest_preserves_zero_coordinates():
+    conn = _build_conn()
+    try:
+        harness = TruckTelemetryHarness(conn)
+        recorded_at = datetime(2024, 1, 3, 9, 0, tzinfo=UTC)
 
         harness.ingest(
             [
                 TruckGpsSnapshot(
                     truck_id="CLAMP-1",
+                    truck_id="ZERO-1",
                     lat=-27.4705,
                     lon=153.0260,
                     status="en_route",
@@ -241,6 +247,10 @@ def test_ingest_clamps_progress_before_time_projections():
                     job_id=1,
                     progress=1.2,
                     travel_seconds=3600.0,
+                    origin_lat=0.0,
+                    origin_lon=153.0260,
+                    dest_lat=None,
+                    dest_lon=0.0,
                 )
             ]
         )
@@ -264,6 +274,18 @@ def test_ingest_clamps_progress_before_time_projections():
         expected_started = recorded_at - timedelta(seconds=travel_seconds)
         assert started_at == expected_started
         assert eta == expected_started + timedelta(seconds=travel_seconds)
+            SELECT origin_lat, origin_lon, dest_lat, dest_lon
+            FROM active_routes
+            WHERE truck_id=?
+            """,
+            ("ZERO-1",),
+        ).fetchone()
+
+        assert row is not None
+        assert row["origin_lat"] == 0.0
+        assert row["origin_lon"] == pytest.approx(153.0260)
+        assert row["dest_lon"] == 0.0
+        assert row["dest_lat"] == pytest.approx(-33.8688)
     finally:
         conn.close()
 
