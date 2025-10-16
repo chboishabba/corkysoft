@@ -89,7 +89,16 @@ Key visuals include:
 - A non-technical optimizer tab that recommends corridor price uplifts from the filtered data and offers a CSV export for action lists.
 
 ```bash
-streamlit run streamlit_price_distribution.py
+streamlit run dashboard/app.py
+```
+
+Alternatively, import the module directly if you are embedding the UI in a
+larger application:
+
+```python
+from dashboard.app import render_price_distribution_dashboard
+
+render_price_distribution_dashboard()
 ```
 
 By default it reads from `routes.db`. Set `CORKYSOFT_DB` or `ROUTES_DB` to point at a different SQLite database.
