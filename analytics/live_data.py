@@ -764,10 +764,25 @@ class TruckTelemetryHarness:
             if reading.job_id is not None:
                 job_meta = _fetch_job_metadata(self.conn, int(reading.job_id))
 
-            origin_lat = reading.origin_lat or (job_meta.get("origin_lat") if job_meta else None)
-            origin_lon = reading.origin_lon or (job_meta.get("origin_lon") if job_meta else None)
-            dest_lat = reading.dest_lat or (job_meta.get("dest_lat") if job_meta else None)
-            dest_lon = reading.dest_lon or (job_meta.get("dest_lon") if job_meta else None)
+            if reading.origin_lat is not None:
+                origin_lat = reading.origin_lat
+            else:
+                origin_lat = job_meta.get("origin_lat") if job_meta else None
+
+            if reading.origin_lon is not None:
+                origin_lon = reading.origin_lon
+            else:
+                origin_lon = job_meta.get("origin_lon") if job_meta else None
+
+            if reading.dest_lat is not None:
+                dest_lat = reading.dest_lat
+            else:
+                dest_lat = job_meta.get("dest_lat") if job_meta else None
+
+            if reading.dest_lon is not None:
+                dest_lon = reading.dest_lon
+            else:
+                dest_lon = job_meta.get("dest_lon") if job_meta else None
 
             travel_seconds = reading.travel_seconds
             if travel_seconds is None and job_meta and job_meta.get("duration_hr") is not None:
