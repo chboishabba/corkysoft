@@ -1,6 +1,15 @@
 """Streamlit entrypoint for the price distribution dashboard."""
 from __future__ import annotations
 
+import io
+import json
+import math
+from datetime import date
+
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import pydeck as pdk
 import streamlit as st
 
 from dashboard.app import render_price_distribution_dashboard
@@ -61,6 +70,7 @@ from analytics.optimizer import (
 from analytics.live_data import (
     TRUCK_STATUS_COLOURS,
     build_live_heatmap_source,
+    extract_route_path,
     load_active_routes,
     load_truck_positions,
 )
