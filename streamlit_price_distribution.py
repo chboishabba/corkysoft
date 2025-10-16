@@ -237,13 +237,11 @@ def _render_pin_picker(
 
     lat_input = st.number_input(
         f"{label} latitude",
-        value=float(st.session_state[lat_key]),
         format="%.6f",
         key=lat_key,
     )
     lon_input = st.number_input(
         f"{label} longitude",
-        value=float(st.session_state[lon_key]),
         format="%.6f",
         key=lon_key,
     )
