@@ -703,6 +703,12 @@ def build_route_map(
             colour_scale = colour_scale or px.colors.sequential.Viridis
             min_value = float(numeric_values.min())
             max_value = float(numeric_values.max())
+            cmid_value: Optional[float] = None
+            if min_value < 0.0 < max_value:
+                symmetric_bound = max(abs(min_value), abs(max_value))
+                min_value = -symmetric_bound
+                max_value = symmetric_bound
+                cmid_value = 0.0
             span = max_value - min_value
 
             def _to_colour(value: float) -> str:
@@ -805,20 +811,23 @@ def build_route_map(
                         marker_values.append(value)
 
                 if marker_lat and marker_lon:
+                    marker_config = {
+                        "size": 9,
+                        "color": marker_values,
+                        "colorscale": colour_scale,
+                        "cmin": min_value,
+                        "cmax": max_value,
+                        "opacity": 0.85,
+                        "colorbar": colorbar_dict,
+                    }
+                    if cmid_value is not None:
+                        marker_config["cmid"] = cmid_value
                     figure.add_trace(
                         go.Scattermapbox(
                             lat=marker_lat,
                             lon=marker_lon,
                             mode="markers",
-                            marker={
-                                "size": 9,
-                                "color": marker_values,
-                                "colorscale": colour_scale,
-                                "cmin": min_value,
-                                "cmax": max_value,
-                                "opacity": 0.85,
-                                "colorbar": colorbar_dict,
-                            },
+                            marker=marker_config,
                             text=marker_text,
                             hovertemplate="%{text}<extra></extra>",
                             showlegend=False,
@@ -830,20 +839,23 @@ def build_route_map(
                 )
                 coords_df = coords_df.dropna()
                 if not coords_df.empty:
+                    marker_config = {
+                        "size": 0.0001,
+                        "color": numeric_values.loc[coords_df.index].tolist(),
+                        "colorscale": colour_scale,
+                        "cmin": min_value,
+                        "cmax": max_value,
+                        "colorbar": colorbar_dict,
+                        "opacity": 0.0,
+                    }
+                    if cmid_value is not None:
+                        marker_config["cmid"] = cmid_value
                     figure.add_trace(
                         go.Scattermapbox(
                             lat=coords_df["origin_lat"].tolist(),
                             lon=coords_df["origin_lon"].tolist(),
                             mode="markers",
-                            marker={
-                                "size": 0.0001,
-                                "color": numeric_values.loc[coords_df.index].tolist(),
-                                "colorscale": colour_scale,
-                                "cmin": min_value,
-                                "cmax": max_value,
-                                "colorbar": colorbar_dict,
-                                "opacity": 0.0,
-                            },
+                            marker=marker_config,
                             hoverinfo="skip",
                             showlegend=False,
                         )

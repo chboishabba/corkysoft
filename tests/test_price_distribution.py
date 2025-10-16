@@ -781,6 +781,48 @@ def test_build_route_map_uses_route_path_for_continuous_mode():
     assert lon_values[:3] == pytest.approx([144.9631, 148.0, 151.2093])
 
 
+def test_build_route_map_symmetric_colour_range_for_diverging_values():
+    df = pd.DataFrame(
+        [
+            {
+                "id": 1,
+                "map_colour_value": -200.0,
+                "map_colour_display": "$-200.00",
+                "origin_lat": -37.8136,
+                "origin_lon": 144.9631,
+                "dest_lat": -33.8688,
+                "dest_lon": 151.2093,
+            },
+            {
+                "id": 2,
+                "map_colour_value": 150.0,
+                "map_colour_display": "$150.00",
+                "origin_lat": -33.8688,
+                "origin_lon": 151.2093,
+                "dest_lat": -27.4705,
+                "dest_lon": 153.026,
+            },
+        ]
+    )
+
+    figure = build_route_map(
+        df,
+        "Margin",
+        show_routes=False,
+        show_points=True,
+        colour_mode="continuous",
+        colorbar_tickformat="$,.0f",
+    )
+
+    marker_traces = [trace for trace in figure.data if getattr(trace, "mode", "") == "markers"]
+    assert marker_traces, "Expected a marker trace when points are requested"
+    marker = marker_traces[0].marker
+
+    assert marker.cmin == pytest.approx(-200.0)
+    assert marker.cmax == pytest.approx(200.0)
+    assert marker.cmid == pytest.approx(0.0)
+
+
 def test_build_route_map_prefers_route_geojson_over_route_path():
     geojson = {
         "type": "Feature",
