@@ -242,11 +242,38 @@ python routes_to_sqlite.py list
 Example output:
 
 ```
-ID    Origin             → Origin (resolved)             Destination         → Destination (resolved)          Km      Hours   Total $      Updated (UTC)
----------------------------------------------------------------------------------------------------------------------------------------------------------
-5     Melbourne          Melbourne VIC, Australia        Brisbane            Brisbane QLD, Australia          1768.4   18.80   5,175.07     2025-10-02T14:46:00+00:00
-1     Melbourne          Melbourne VIC, Australia        Sydney              Sydney NSW, Australia             869.4    9.33   2,561.35     2025-10-02T14:41:10+00:00
+ID    Origin             → Origin (resolved)             Destination         → Destination (resolved)          Km      Hours   Total $      Internal $    Updated (UTC)
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+5     Melbourne          Melbourne VIC, Australia        Brisbane            Brisbane QLD, Australia          1768.4   18.80   5,175.07     3,850.00       2025-10-02T14:46:00+00:00
+1     Melbourne          Melbourne VIC, Australia        Sydney              Sydney NSW, Australia             869.4    9.33   2,561.35     1,720.00       2025-10-02T14:41:10+00:00
 ```
+
+#### Track private internal costs
+
+You can now record detailed cost components per job — for example separate crew hours,
+truck operating time, fuel, or one-off surcharges. Everything is stored in the local
+`routes.db` file so your commercial assumptions stay private.
+
+```bash
+# Add crew labour at $45/hr for 12 hours
+python routes_to_sqlite.py cost add 1 crew --quantity 12 --rate 45 --unit hr --description "Crew wages"
+
+# Add a truck running cost using an explicit total
+python routes_to_sqlite.py cost add 1 truck --total 950 --description "Prime mover hire"
+
+# Capture fuel using litres × rate
+python routes_to_sqlite.py cost add 1 fuel --quantity 320 --rate 1.85 --unit L --description "Diesel"
+
+# Review the detailed ledger
+python routes_to_sqlite.py cost list 1
+
+# Summarise the private spend by category
+python routes_to_sqlite.py cost summary 1
+```
+
+The CLI automatically rolls each component into an `Internal $` total visible in the
+`list` report so you can compare publicly quoted prices against the true underlying
+cost base.
 
 #### Import historical jobs
 

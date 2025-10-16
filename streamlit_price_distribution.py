@@ -575,10 +575,83 @@ def build_route_map(
         except (TypeError, ValueError):
             return None
 
+    def _normalise_text(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        try:
+            if pd.isna(value):
+                return None
+        except Exception:
+            pass
+        if isinstance(value, float) and math.isnan(value):
+            return None
+        return str(value)
+
+    def _route_context(row: pd.Series, *, display_value: Any = None) -> Dict[str, str]:
+        origin_label = (
+            row.get("origin_city")
+            or row.get("origin")
+            or row.get("origin_raw")
+            or "Origin"
+        )
+        destination_label = (
+            row.get("destination_city")
+            or row.get("destination")
+            or row.get("destination_raw")
+            or "Destination"
+        )
+
+        display_text = _normalise_text(display_value)
+        if display_text is None:
+            display_text = _normalise_text(row.get("map_colour_display"))
+        if display_text is None:
+            display_text = _normalise_text(row.get("map_colour_value"))
+
+        job_id_text = _normalise_text(row.get("id")) or "n/a"
+
+        origin_label = str(origin_label)
+        destination_label = str(destination_label)
+        route_title = f"Route: {origin_label} → {destination_label}"
+
+        tooltip_parts = [route_title]
+        if display_text:
+            tooltip_parts.append(f"{colour_label}: {display_text}")
+        tooltip_parts.append(f"Job ID: {job_id_text}")
+
+        return {
+            "origin_label": origin_label,
+            "destination_label": destination_label,
+            "route_title": route_title,
+            "base_text": "<br>".join(tooltip_parts),
+        }
+
     figure = go.Figure()
     plot_df = df.copy()
     colour_values = list(dict.fromkeys(plot_df["map_colour_value"].tolist()))
     colour_map = _build_colour_map(colour_values)
+
+    def _route_heading(row: pd.Series) -> tuple[str, str]:
+        origin_label = (
+            row.get("origin_city")
+            or row.get("origin")
+            or row.get("origin_raw")
+            or "Origin"
+        )
+        destination_label = (
+            row.get("destination_city")
+            or row.get("destination")
+            or row.get("destination_raw")
+            or "Destination"
+        )
+        return str(origin_label), str(destination_label)
+
+    def _route_hover_text(row: pd.Series, display_value: object) -> tuple[str, str, str, str]:
+        origin_label, destination_label = _route_heading(row)
+        route_label = f"Route: {origin_label} → {destination_label}"
+        job_id = row.get("id", "n/a")
+        header = f"{colour_label}: {display_value}"
+        base_text = f"{header}<br>{route_label}<br>Job ID: {job_id}"
+        return origin_label, destination_label, route_label, base_text
 
     if colour_mode == "categorical":
         if show_routes:
@@ -589,16 +662,22 @@ def build_route_map(
                 display_value = (
                     category_df.get("map_colour_display", pd.Series([value])).iloc[0]
                 )
-                lat_values: list[float] = []
-                lon_values: list[float] = []
+                lat_values: list[float | None] = []
+                lon_values: list[float | None] = []
+                text_values: list[str | None] = []
                 for _, row in category_df.iterrows():
+                    _, _, _, base_text = _route_hover_text(row, display_value)
                     route_points = _row_route_points(row)
+                    context = _route_context(row, display_value=display_value)
+                    base_text = context["base_text"]
                     if route_points:
                         for lat, lon in route_points:
                             lat_values.append(lat)
                             lon_values.append(lon)
+                            text_values.append(base_text)
                         lat_values.append(None)
                         lon_values.append(None)
+                        text_values.append(None)
                         continue
 
                     origin_lat = _coerce_float(row.get("origin_lat"))
@@ -613,6 +692,7 @@ def build_route_map(
                     ):
                         lat_values.extend([origin_lat, dest_lat, None])
                         lon_values.extend([origin_lon, dest_lon, None])
+                        text_values.extend([base_text, base_text, None])
 
                 if lat_values and lon_values:
                     colour = colour_map.get(value, "#636EFA")
@@ -625,7 +705,8 @@ def build_route_map(
                             name=str(display_value),
                             legendgroup=str(value),
                             showlegend=False,
-                            hoverinfo="skip",
+                            text=text_values,
+                            hovertemplate="%{text}<extra></extra>",
                         )
                     )
 
@@ -641,19 +722,10 @@ def build_route_map(
                 marker_lon: list[float] = []
                 marker_text: list[str] = []
                 for _, row in category_df.iterrows():
-                    job_id = row.get("id", "n/a")
-                    origin_label = (
-                        row.get("origin_city")
-                        or row.get("origin")
-                        or row.get("origin_raw")
-                        or "Origin"
-                    )
-                    destination_label = (
-                        row.get("destination_city")
-                        or row.get("destination")
-                        or row.get("destination_raw")
-                        or "Destination"
-                    )
+                    context = _route_context(row, display_value=display_value)
+                    base_text = context["base_text"]
+                    origin_label = context["origin_label"]
+                    destination_label = context["destination_label"]
 
                     origin_lat = _coerce_float(row.get("origin_lat"))
                     origin_lon = _coerce_float(row.get("origin_lon"))
@@ -661,7 +733,12 @@ def build_route_map(
                         marker_lat.append(origin_lat)
                         marker_lon.append(origin_lon)
                         marker_text.append(
-                            f"{colour_label}: {display_value}<br>Origin: {origin_label}<br>Job ID: {job_id}"
+                            "<br>".join(
+                                [
+                                    base_text,
+                                    f"Stop: Origin — {origin_label}",
+                                ]
+                            )
                         )
 
                     dest_lat = _coerce_float(row.get("dest_lat"))
@@ -670,7 +747,12 @@ def build_route_map(
                         marker_lat.append(dest_lat)
                         marker_lon.append(dest_lon)
                         marker_text.append(
-                            f"{colour_label}: {display_value}<br>Destination: {destination_label}<br>Job ID: {job_id}"
+                            "<br>".join(
+                                [
+                                    base_text,
+                                    f"Stop: Destination — {destination_label}",
+                                ]
+                            )
                         )
 
                 if marker_lat and marker_lon:
@@ -729,14 +811,25 @@ def build_route_map(
                     colour = _to_colour(value)
                     lat_values: list[float | None] = []
                     lon_values: list[float | None] = []
+                    text_values: list[str | None] = []
+                    display_candidate = row.get("map_colour_display")
+                    display_value = (
+                        display_candidate
+                        if _normalise_text(display_candidate)
+                        else f"{value:,.2f}"
+                    )
+                    context = _route_context(row, display_value=display_value)
+                    base_text = context["base_text"]
 
                     route_points = _row_route_points(row)
                     if route_points:
                         for lat, lon in route_points:
                             lat_values.append(lat)
                             lon_values.append(lon)
+                            text_values.append(base_text)
                         lat_values.append(None)
                         lon_values.append(None)
+                        text_values.append(None)
                     else:
                         origin_lat = _coerce_float(row.get("origin_lat"))
                         origin_lon = _coerce_float(row.get("origin_lon"))
@@ -751,6 +844,7 @@ def build_route_map(
                             continue
                         lat_values = [origin_lat, dest_lat, None]
                         lon_values = [origin_lon, dest_lon, None]
+                        text_values = [base_text, base_text, None]
 
                     if not lat_values or not lon_values:
                         continue
@@ -762,7 +856,8 @@ def build_route_map(
                             mode="lines",
                             line={"width": 3, "color": colour},
                             showlegend=False,
-                            hoverinfo="skip",
+                            text=text_values,
+                            hovertemplate="%{text}<extra></extra>",
                         )
                     )
 
@@ -773,30 +868,24 @@ def build_route_map(
                 marker_values: list[float] = []
                 for _, row in plot_df.iterrows():
                     value = float(row["map_colour_value"])
-                    display_value = row.get(
-                        "map_colour_display",
-                        f"{value:,.2f}",
-                    )
-                    job_id = row.get("id", "n/a")
-                    origin_label = (
-                        row.get("origin_city")
-                        or row.get("origin")
-                        or row.get("origin_raw")
-                        or "Origin"
-                    )
-                    destination_label = (
-                        row.get("destination_city")
-                        or row.get("destination")
-                        or row.get("destination_raw")
-                        or "Destination"
-                    )
+                    display_candidate = row.get("map_colour_display")
+                    display_value = _normalise_text(display_candidate) or f"{value:,.2f}"
+                    context = _route_context(row, display_value=display_value)
+                    base_text = context["base_text"]
+                    origin_label = context["origin_label"]
+                    destination_label = context["destination_label"]
                     origin_lat = _coerce_float(row.get("origin_lat"))
                     origin_lon = _coerce_float(row.get("origin_lon"))
                     if origin_lat is not None and origin_lon is not None:
                         marker_lat.append(origin_lat)
                         marker_lon.append(origin_lon)
                         marker_text.append(
-                            f"{colour_label}: {display_value}<br>Origin: {origin_label}<br>Job ID: {job_id}"
+                            "<br>".join(
+                                [
+                                    base_text,
+                                    f"Stop: Origin — {origin_label}",
+                                ]
+                            )
                         )
                         marker_values.append(value)
 
@@ -806,7 +895,12 @@ def build_route_map(
                         marker_lat.append(dest_lat)
                         marker_lon.append(dest_lon)
                         marker_text.append(
-                            f"{colour_label}: {display_value}<br>Destination: {destination_label}<br>Job ID: {job_id}"
+                            "<br>".join(
+                                [
+                                    base_text,
+                                    f"Stop: Destination — {destination_label}",
+                                ]
+                            )
                         )
                         marker_values.append(value)
 
@@ -850,13 +944,28 @@ def build_route_map(
                     }
                     if cmid_value is not None:
                         marker_config["cmid"] = cmid_value
+                    text_values = [
+                        _route_context(plot_df.loc[idx])["base_text"]
+                        for idx in coords_df.index
+                    ]
                     figure.add_trace(
                         go.Scattermapbox(
-                            lat=coords_df["origin_lat"].tolist(),
-                            lon=coords_df["origin_lon"].tolist(),
+                            lat=marker_lat,
+                            lon=marker_lon,
                             mode="markers",
                             marker=marker_config,
                             hoverinfo="skip",
+                            marker={
+                                "size": 0.0001,
+                                "color": marker_values,
+                                "colorscale": colour_scale,
+                                "cmin": min_value,
+                                "cmax": max_value,
+                                "colorbar": colorbar_dict,
+                                "opacity": 0.0,
+                            },
+                            text=text_values,
+                            hovertemplate="%{text}<extra></extra>",
                             showlegend=False,
                         )
                     )
@@ -1711,6 +1820,7 @@ with connection_scope() as conn:
     tab_labels = [
         "Histogram",
         "Profitability insights",
+        "Live network overview",
         "Route maps",
         "Quote builder",
         "Optimizer",
@@ -1762,12 +1872,13 @@ with connection_scope() as conn:
     active_routes = load_active_routes(conn)
     map_routes = prepare_profitability_route_data(filtered_df, break_even_value)
 
-    render_network_map(
-        map_routes,
-        truck_positions,
-        active_routes,
-        toggle_key="network_map_live_overlay_toggle_overview",
-    )
+    with tab_map["Live network overview"]:
+        render_network_map(
+            map_routes,
+            truck_positions,
+            active_routes,
+            toggle_key="network_map_live_overlay_toggle_overview",
+        )
 
     with tab_map["Histogram"]:
         if has_filtered_data:
@@ -2235,13 +2346,6 @@ with connection_scope() as conn:
                 )
                 st.plotly_chart(figure, use_container_width=True)
 
-        network_routes = prepare_profitability_map_data(scoped_df, break_even_value)
-        render_network_map(
-            network_routes,
-            truck_positions,
-            active_routes,
-            toggle_key="network_map_live_overlay_toggle_tab",
-        )
 
     with tab_map["Quote builder"]:
         saved_rowid = st.session_state.pop("quote_saved_rowid", None)

@@ -25,6 +25,7 @@ from analytics.price_distribution import (
     create_m3_margin_figure,
     create_m3_vs_km_figure,
     build_profitability_export,
+    _deduplicate_columns,
     enrich_missing_route_coordinates,
     filter_jobs_by_distance,
     filter_metro_jobs,
@@ -695,6 +696,66 @@ def test_prepare_route_map_data_filters_missing_coordinates():
     assert result.iloc[0]["map_colour_display"] == "1"
 
 
+def test_deduplicate_columns_preserves_coordinate_values():
+    df = pd.DataFrame(
+        [
+            [
+                1,
+                -27.4705,
+                np.nan,
+                153.0260,
+                np.nan,
+                -33.8688,
+                np.nan,
+                151.2093,
+                np.nan,
+                "Below break-even",
+            ],
+            [
+                2,
+                -16.9200,
+                np.nan,
+                145.7700,
+                np.nan,
+                -27.4705,
+                np.nan,
+                153.0260,
+                np.nan,
+                "0-50 above break-even",
+            ],
+        ],
+        columns=[
+            "id",
+            "origin_lat",
+            "origin_lat",
+            "origin_lon",
+            "origin_lon",
+            "dest_lat",
+            "dest_lat",
+            "dest_lon",
+            "dest_lon",
+            "profit_band",
+        ],
+    )
+
+    deduplicated = _deduplicate_columns(df)
+
+    assert not deduplicated.columns.duplicated().any()
+    assert deduplicated["origin_lat"].tolist() == pytest.approx([-27.4705, -16.92])
+    assert deduplicated["origin_lon"].tolist() == pytest.approx([153.026, 145.77])
+    assert deduplicated["dest_lat"].tolist() == pytest.approx([-33.8688, -27.4705])
+    assert deduplicated["dest_lon"].tolist() == pytest.approx([151.2093, 153.026])
+
+    prepared = prepare_route_map_data(deduplicated, "profit_band")
+
+    assert len(prepared) == len(df)
+    assert prepared["id"].tolist() == [1, 2]
+    assert set(prepared["map_colour_value"]) == {
+        "Below break-even",
+        "0-50 above break-even",
+    }
+
+
 def test_prepare_metric_route_map_data_filters_and_formats_values():
     df = pd.DataFrame(
         {
@@ -739,6 +800,53 @@ def test_prepare_metric_route_map_data_requires_numeric_values():
     assert len(result) == 1
     assert result.iloc[0]["map_colour_value"] == 2500.0
     assert result.iloc[0]["map_colour_display"] == "$2,500.00"
+
+
+def test_build_route_map_categorical_hover_text_includes_route_details():
+    df = pd.DataFrame(
+        [
+            {
+                "id": 1001,
+                "map_colour_value": "Client A",
+                "map_colour_display": "Client A",
+                "origin_city": "Brisbane",
+                "destination_city": "Sydney",
+                "origin_lat": -27.4705,
+                "origin_lon": 153.0260,
+                "dest_lat": -33.8688,
+                "dest_lon": 151.2093,
+                "route_path": [
+                    {"lat": -27.4705, "lon": 153.0260},
+                    {"lat": -30.0, "lon": 150.0},
+                    {"lat": -33.8688, "lon": 151.2093},
+                ],
+            }
+        ]
+    )
+
+    figure = build_route_map(
+        df,
+        "Client",
+        show_routes=True,
+        show_points=True,
+        colour_mode="categorical",
+    )
+
+    line_trace = next(
+        trace for trace in figure.data if getattr(trace, "mode", "") == "lines"
+    )
+    line_text = [text for text in line_trace.text if text]
+    assert line_text and all("Route: Brisbane → Sydney" in text for text in line_text)
+
+    marker_trace = next(
+        trace for trace in figure.data if getattr(trace, "mode", "") == "markers"
+    )
+    marker_texts = list(marker_trace.text)
+    assert marker_texts and all(
+        "Route: Brisbane → Sydney" in text for text in marker_texts
+    )
+    assert any("Stop: Origin" in text for text in marker_texts)
+    assert any("Stop: Destination" in text for text in marker_texts)
 
 
 def test_build_route_map_uses_route_path_for_continuous_mode():
@@ -802,6 +910,25 @@ def test_build_route_map_symmetric_colour_range_for_diverging_values():
                 "dest_lat": -27.4705,
                 "dest_lon": 153.026,
             },
+def test_build_route_map_continuous_hover_text_includes_route_details():
+    df = pd.DataFrame(
+        [
+            {
+                "id": 2002,
+                "map_colour_value": 82.5,
+                "map_colour_display": "82.5%",
+                "origin_city": "Melbourne",
+                "destination_city": "Perth",
+                "origin_lat": -37.8136,
+                "origin_lon": 144.9631,
+                "dest_lat": -31.9523,
+                "dest_lon": 115.8613,
+                "route_path": [
+                    {"lat": -37.8136, "lon": 144.9631},
+                    {"lat": -34.0, "lon": 138.6},
+                    {"lat": -31.9523, "lon": 115.8613},
+                ],
+            }
         ]
     )
 
@@ -821,6 +948,27 @@ def test_build_route_map_symmetric_colour_range_for_diverging_values():
     assert marker.cmin == pytest.approx(-200.0)
     assert marker.cmax == pytest.approx(200.0)
     assert marker.cmid == pytest.approx(0.0)
+        "Margin %",
+        show_routes=True,
+        show_points=True,
+        colour_mode="continuous",
+    )
+
+    line_trace = next(
+        trace for trace in figure.data if getattr(trace, "mode", "") == "lines"
+    )
+    line_text = [text for text in line_trace.text if text]
+    assert line_text and all("Route: Melbourne → Perth" in text for text in line_text)
+
+    marker_trace = next(
+        trace for trace in figure.data if getattr(trace, "mode", "") == "markers"
+    )
+    marker_texts = list(marker_trace.text)
+    assert marker_texts and all(
+        "Route: Melbourne → Perth" in text for text in marker_texts
+    )
+    assert any("Stop: Origin" in text for text in marker_texts)
+    assert any("Stop: Destination" in text for text in marker_texts)
 
 
 def test_build_route_map_prefers_route_geojson_over_route_path():
@@ -985,6 +1133,67 @@ def test_import_historical_jobs_from_dataframe_inserts_rows(tmp_path):
         again_inserted, again_skipped = import_historical_jobs_from_dataframe(conn, df.iloc[:1])
         assert again_inserted == 0
         assert again_skipped == 1
+    finally:
+        conn.close()
+
+
+def test_import_historical_jobs_from_dataframe_handles_same_corridor_variants(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE historical_jobs (
+                id INTEGER PRIMARY KEY,
+                job_date TEXT,
+                client TEXT,
+                corridor_display TEXT,
+                price_per_m3 REAL,
+                revenue_total REAL,
+                revenue REAL,
+                volume_m3 REAL,
+                volume REAL,
+                distance_km REAL,
+                final_cost REAL,
+                origin TEXT,
+                destination TEXT,
+                origin_postcode TEXT,
+                destination_postcode TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            """
+        )
+
+        df = pd.DataFrame(
+            {
+                "date": ["2024-03-01", "2024-03-01", "2024-03-01"],
+                "origin": ["Brisbane", "Brisbane", "Brisbane"],
+                "destination": ["Sydney", "Sydney", "Sydney"],
+                "client": ["Client A", "Client A", "Client A"],
+                "volume_m3": [10, 10, 12],
+                "revenue_total": [2500, 3000, 3600],
+            }
+        )
+
+        inserted, skipped = import_historical_jobs_from_dataframe(conn, df)
+        assert inserted == 3
+        assert skipped == 0
+
+        rows = conn.execute(
+            "SELECT price_per_m3, volume_m3, revenue_total FROM historical_jobs ORDER BY id"
+        ).fetchall()
+        assert len(rows) == 3
+        assert rows[0][0] == pytest.approx(250.0)
+        assert rows[0][1:] == (10.0, 2500.0)
+        assert rows[1][0] == pytest.approx(300.0)
+        assert rows[1][1:] == (10.0, 3000.0)
+        assert rows[2][0] == pytest.approx(300.0)
+        assert rows[2][1:] == (12.0, 3600.0)
+
+        repeat_inserted, repeat_skipped = import_historical_jobs_from_dataframe(conn, df.iloc[:1])
+        assert repeat_inserted == 0
+        assert repeat_skipped == 1
     finally:
         conn.close()
 
