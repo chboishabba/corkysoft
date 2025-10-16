@@ -947,6 +947,67 @@ def test_import_historical_jobs_from_dataframe_inserts_rows(tmp_path):
         conn.close()
 
 
+def test_import_historical_jobs_from_dataframe_handles_same_corridor_variants(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE historical_jobs (
+                id INTEGER PRIMARY KEY,
+                job_date TEXT,
+                client TEXT,
+                corridor_display TEXT,
+                price_per_m3 REAL,
+                revenue_total REAL,
+                revenue REAL,
+                volume_m3 REAL,
+                volume REAL,
+                distance_km REAL,
+                final_cost REAL,
+                origin TEXT,
+                destination TEXT,
+                origin_postcode TEXT,
+                destination_postcode TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            """
+        )
+
+        df = pd.DataFrame(
+            {
+                "date": ["2024-03-01", "2024-03-01", "2024-03-01"],
+                "origin": ["Brisbane", "Brisbane", "Brisbane"],
+                "destination": ["Sydney", "Sydney", "Sydney"],
+                "client": ["Client A", "Client A", "Client A"],
+                "volume_m3": [10, 10, 12],
+                "revenue_total": [2500, 3000, 3600],
+            }
+        )
+
+        inserted, skipped = import_historical_jobs_from_dataframe(conn, df)
+        assert inserted == 3
+        assert skipped == 0
+
+        rows = conn.execute(
+            "SELECT price_per_m3, volume_m3, revenue_total FROM historical_jobs ORDER BY id"
+        ).fetchall()
+        assert len(rows) == 3
+        assert rows[0][0] == pytest.approx(250.0)
+        assert rows[0][1:] == (10.0, 2500.0)
+        assert rows[1][0] == pytest.approx(300.0)
+        assert rows[1][1:] == (10.0, 3000.0)
+        assert rows[2][0] == pytest.approx(300.0)
+        assert rows[2][1:] == (12.0, 3600.0)
+
+        repeat_inserted, repeat_skipped = import_historical_jobs_from_dataframe(conn, df.iloc[:1])
+        assert repeat_inserted == 0
+        assert repeat_skipped == 1
+    finally:
+        conn.close()
+
+
 def test_import_historical_jobs_from_dataframe_requires_columns(tmp_path):
     db_path = tmp_path / "test.db"
     conn = sqlite3.connect(db_path)
