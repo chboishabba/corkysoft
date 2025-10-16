@@ -25,6 +25,7 @@ from analytics.price_distribution import (
     create_m3_margin_figure,
     create_m3_vs_km_figure,
     build_profitability_export,
+    _deduplicate_columns,
     enrich_missing_route_coordinates,
     filter_jobs_by_distance,
     filter_metro_jobs,
@@ -695,6 +696,66 @@ def test_prepare_route_map_data_filters_missing_coordinates():
     assert result.iloc[0]["map_colour_display"] == "1"
 
 
+def test_deduplicate_columns_preserves_coordinate_values():
+    df = pd.DataFrame(
+        [
+            [
+                1,
+                -27.4705,
+                np.nan,
+                153.0260,
+                np.nan,
+                -33.8688,
+                np.nan,
+                151.2093,
+                np.nan,
+                "Below break-even",
+            ],
+            [
+                2,
+                -16.9200,
+                np.nan,
+                145.7700,
+                np.nan,
+                -27.4705,
+                np.nan,
+                153.0260,
+                np.nan,
+                "0-50 above break-even",
+            ],
+        ],
+        columns=[
+            "id",
+            "origin_lat",
+            "origin_lat",
+            "origin_lon",
+            "origin_lon",
+            "dest_lat",
+            "dest_lat",
+            "dest_lon",
+            "dest_lon",
+            "profit_band",
+        ],
+    )
+
+    deduplicated = _deduplicate_columns(df)
+
+    assert not deduplicated.columns.duplicated().any()
+    assert deduplicated["origin_lat"].tolist() == pytest.approx([-27.4705, -16.92])
+    assert deduplicated["origin_lon"].tolist() == pytest.approx([153.026, 145.77])
+    assert deduplicated["dest_lat"].tolist() == pytest.approx([-33.8688, -27.4705])
+    assert deduplicated["dest_lon"].tolist() == pytest.approx([151.2093, 153.026])
+
+    prepared = prepare_route_map_data(deduplicated, "profit_band")
+
+    assert len(prepared) == len(df)
+    assert prepared["id"].tolist() == [1, 2]
+    assert set(prepared["map_colour_value"]) == {
+        "Below break-even",
+        "0-50 above break-even",
+    }
+
+
 def test_prepare_metric_route_map_data_filters_and_formats_values():
     df = pd.DataFrame(
         {
@@ -1037,6 +1098,67 @@ def test_import_historical_jobs_from_dataframe_inserts_rows(tmp_path):
         again_inserted, again_skipped = import_historical_jobs_from_dataframe(conn, df.iloc[:1])
         assert again_inserted == 0
         assert again_skipped == 1
+    finally:
+        conn.close()
+
+
+def test_import_historical_jobs_from_dataframe_handles_same_corridor_variants(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE historical_jobs (
+                id INTEGER PRIMARY KEY,
+                job_date TEXT,
+                client TEXT,
+                corridor_display TEXT,
+                price_per_m3 REAL,
+                revenue_total REAL,
+                revenue REAL,
+                volume_m3 REAL,
+                volume REAL,
+                distance_km REAL,
+                final_cost REAL,
+                origin TEXT,
+                destination TEXT,
+                origin_postcode TEXT,
+                destination_postcode TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            """
+        )
+
+        df = pd.DataFrame(
+            {
+                "date": ["2024-03-01", "2024-03-01", "2024-03-01"],
+                "origin": ["Brisbane", "Brisbane", "Brisbane"],
+                "destination": ["Sydney", "Sydney", "Sydney"],
+                "client": ["Client A", "Client A", "Client A"],
+                "volume_m3": [10, 10, 12],
+                "revenue_total": [2500, 3000, 3600],
+            }
+        )
+
+        inserted, skipped = import_historical_jobs_from_dataframe(conn, df)
+        assert inserted == 3
+        assert skipped == 0
+
+        rows = conn.execute(
+            "SELECT price_per_m3, volume_m3, revenue_total FROM historical_jobs ORDER BY id"
+        ).fetchall()
+        assert len(rows) == 3
+        assert rows[0][0] == pytest.approx(250.0)
+        assert rows[0][1:] == (10.0, 2500.0)
+        assert rows[1][0] == pytest.approx(300.0)
+        assert rows[1][1:] == (10.0, 3000.0)
+        assert rows[2][0] == pytest.approx(300.0)
+        assert rows[2][1:] == (12.0, 3600.0)
+
+        repeat_inserted, repeat_skipped = import_historical_jobs_from_dataframe(conn, df.iloc[:1])
+        assert repeat_inserted == 0
+        assert repeat_skipped == 1
     finally:
         conn.close()
 

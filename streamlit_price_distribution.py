@@ -630,6 +630,29 @@ def build_route_map(
     colour_values = list(dict.fromkeys(plot_df["map_colour_value"].tolist()))
     colour_map = _build_colour_map(colour_values)
 
+    def _route_heading(row: pd.Series) -> tuple[str, str]:
+        origin_label = (
+            row.get("origin_city")
+            or row.get("origin")
+            or row.get("origin_raw")
+            or "Origin"
+        )
+        destination_label = (
+            row.get("destination_city")
+            or row.get("destination")
+            or row.get("destination_raw")
+            or "Destination"
+        )
+        return str(origin_label), str(destination_label)
+
+    def _route_hover_text(row: pd.Series, display_value: object) -> tuple[str, str, str, str]:
+        origin_label, destination_label = _route_heading(row)
+        route_label = f"Route: {origin_label} → {destination_label}"
+        job_id = row.get("id", "n/a")
+        header = f"{colour_label}: {display_value}"
+        base_text = f"{header}<br>{route_label}<br>Job ID: {job_id}"
+        return origin_label, destination_label, route_label, base_text
+
     if colour_mode == "categorical":
         if show_routes:
             for value in colour_values:
@@ -643,6 +666,7 @@ def build_route_map(
                 lon_values: list[float | None] = []
                 text_values: list[str | None] = []
                 for _, row in category_df.iterrows():
+                    _, _, _, base_text = _route_hover_text(row, display_value)
                     route_points = _row_route_points(row)
                     context = _route_context(row, display_value=display_value)
                     base_text = context["base_text"]
@@ -906,12 +930,12 @@ def build_route_map(
                     ]
                     figure.add_trace(
                         go.Scattermapbox(
-                            lat=coords_df["origin_lat"].tolist(),
-                            lon=coords_df["origin_lon"].tolist(),
+                            lat=marker_lat,
+                            lon=marker_lon,
                             mode="markers",
                             marker={
                                 "size": 0.0001,
-                                "color": numeric_values.loc[coords_df.index].tolist(),
+                                "color": marker_values,
                                 "colorscale": colour_scale,
                                 "cmin": min_value,
                                 "cmax": max_value,
@@ -1774,6 +1798,7 @@ with connection_scope() as conn:
     tab_labels = [
         "Histogram",
         "Profitability insights",
+        "Live network overview",
         "Route maps",
         "Quote builder",
         "Optimizer",
@@ -1825,12 +1850,13 @@ with connection_scope() as conn:
     active_routes = load_active_routes(conn)
     map_routes = prepare_profitability_route_data(filtered_df, break_even_value)
 
-    render_network_map(
-        map_routes,
-        truck_positions,
-        active_routes,
-        toggle_key="network_map_live_overlay_toggle_overview",
-    )
+    with tab_map["Live network overview"]:
+        render_network_map(
+            map_routes,
+            truck_positions,
+            active_routes,
+            toggle_key="network_map_live_overlay_toggle_overview",
+        )
 
     with tab_map["Histogram"]:
         if has_filtered_data:
@@ -2298,13 +2324,6 @@ with connection_scope() as conn:
                 )
                 st.plotly_chart(figure, use_container_width=True)
 
-        network_routes = prepare_profitability_map_data(scoped_df, break_even_value)
-        render_network_map(
-            network_routes,
-            truck_positions,
-            active_routes,
-            toggle_key="network_map_live_overlay_toggle_tab",
-        )
 
     with tab_map["Quote builder"]:
         saved_rowid = st.session_state.pop("quote_saved_rowid", None)
