@@ -247,8 +247,18 @@ def main() -> None:
     render_price_distribution_dashboard()
 
 
-if __name__ == "__main__":
-    main()
+# -----------------------------------------------------------------------------
+# Compatibility shim for metro-distance filtering across branches/modules
+# -----------------------------------------------------------------------------
+# Prefer the newer `filter_jobs_by_distance(df, metro_only=True/False, max_distance_km=...)`.
+# If unavailable, fall back to `filter_metro_jobs(df, max_distance_km=...)`.
+try:
+    from inspect import signature
+
+    from analytics.price_distribution import (  # type: ignore
+        filter_jobs_by_distance as _filter_jobs_by_distance,
+    )
+
     try:
         _FILTER_DISTANCE_PARAM = next(
             param
@@ -292,6 +302,10 @@ except Exception:
             max_distance_km: float = 100.0,
         ) -> pd.DataFrame:
             return df
+
+
+if __name__ == "__main__":
+    main()
 
 
 st.set_page_config(
