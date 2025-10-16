@@ -946,20 +946,11 @@ def build_route_map(
                     ]
                     figure.add_trace(
                         go.Scattermapbox(
-                            lat=marker_lat,
-                            lon=marker_lon,
+                            lat=coords_df["origin_lat"].tolist(),
+                            lon=coords_df["origin_lon"].tolist(),
                             mode="markers",
                             marker=marker_config,
                             hoverinfo="skip",
-                            marker={
-                                "size": 0.0001,
-                                "color": marker_values,
-                                "colorscale": colour_scale,
-                                "cmin": min_value,
-                                "cmax": max_value,
-                                "colorbar": colorbar_dict,
-                                "opacity": 0.0,
-                            },
                             text=text_values,
                             hovertemplate="%{text}<extra></extra>",
                             showlegend=False,
