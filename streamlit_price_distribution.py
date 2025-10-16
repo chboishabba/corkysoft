@@ -69,9 +69,13 @@ from analytics.optimizer import (
 from analytics.live_data import (
     TRUCK_STATUS_COLOURS,
     build_live_heatmap_source,
-    extract_route_path,
     load_active_routes,
     load_truck_positions,
+)
+from dashboard.components.maps import (
+    _hex_to_rgb,
+    build_route_map,
+    render_network_map,
 )
 from corkysoft.pricing import DEFAULT_MODIFIERS
 from corkysoft.quote_service import (
@@ -114,30 +118,42 @@ _ISOCHRONE_PALETTE = [
     "#FF97FF",
     "#FECB52",
 ]
-
-
-def _hex_to_rgb(value: str) -> Tuple[int, int, int]:
-    """Convert ``value`` (hex or rgb string) into an ``(r, g, b)`` tuple."""
-
-    colour = value.strip()
-    if colour.startswith("#"):
-        digits = colour.lstrip("#")
-        if len(digits) == 3:
-            digits = "".join(ch * 2 for ch in digits)
-        if len(digits) != 6:
-            raise ValueError(f"Unsupported hex colour format: {value}")
-        return tuple(int(digits[idx : idx + 2], 16) for idx in (0, 2, 4))  # type: ignore[arg-type]
-
-    if colour.startswith("rgb"):
-        start = colour.find("(")
-        end = colour.find(")")
-        if start == -1 or end == -1 or end <= start:
-            raise ValueError(f"Unsupported rgb colour format: {value}")
-        components = colour[start + 1 : end].split(",")[:3]
-        return tuple(int(float(component.strip())) for component in components)
-
-    raise ValueError(f"Unsupported colour format: {value}")
 _QUOTE_COUNTRY_STATE_KEY = "quote_builder_country"
+def _initial_pin_state(result: QuoteResult) -> Dict[str, Any]:
+    return {
+        "origin": {
+            "lon": float(result.origin_lon),
+            "lat": float(result.origin_lat),
+        },
+        "destination": {
+            "lon": float(result.dest_lon),
+            "lat": float(result.dest_lat),
+        },
+        "enabled": False,
+    }
+
+
+def _ensure_pin_state(result: QuoteResult) -> Dict[str, Any]:
+    state: Dict[str, Any] = st.session_state.get("quote_pin_override", {})
+    if not state or "origin" not in state or "destination" not in state:
+        state = _initial_pin_state(result)
+    else:
+        state.setdefault("enabled", False)
+        # When result coordinates change, refresh defaults so pins move with them
+        origin_state = state.get("origin") or {}
+        dest_state = state.get("destination") or {}
+        if not origin_state:
+            origin_state = {}
+        if not dest_state:
+            dest_state = {}
+        origin_state.setdefault("lon", float(result.origin_lon))
+        origin_state.setdefault("lat", float(result.origin_lat))
+        dest_state.setdefault("lon", float(result.dest_lon))
+        dest_state.setdefault("lat", float(result.dest_lat))
+        state["origin"] = origin_state
+        state["destination"] = dest_state
+    st.session_state["quote_pin_override"] = state
+    return state
 
 
 def _geojson_to_path(value: Any) -> Optional[List[List[float]]]:
@@ -310,6 +326,137 @@ def _blank_column_mapping() -> ColumnMapping:
         final_cost=None,
     )
 
+
+def render_summary(
+    summary: DistributionSummary,
+    break_even: float,
+    profitability_summary: ProfitabilitySummary,
+    *,
+    metro_summary: Optional[DistributionSummary] = None,
+    metro_profitability: Optional[ProfitabilitySummary] = None,
+    metro_distance_km: float = 100.0,
+) -> None:
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Jobs in filter", summary.job_count)
+    valid_label = f"Valid $/m³ ({summary.priced_job_count})"
+    col2.metric(
+        valid_label,
+        f"{summary.median:,.2f}" if summary.priced_job_count else "n/a",
+    )
+    col3.metric(
+        "25th percentile",
+        f"{summary.percentile_25:,.2f}" if summary.priced_job_count else "n/a",
+    )
+    col4.metric(
+        "75th percentile",
+        f"{summary.percentile_75:,.2f}" if summary.priced_job_count else "n/a",
+    )
+    below_pct = summary.below_break_even_ratio * 100 if summary.priced_job_count else 0.0
+    col5.metric(
+        "% below break-even",
+        f"{below_pct:.1f}%",
+        help=f"Break-even: ${break_even:,.2f} per m³",
+    )
+
+    def _format_value(
+        value: Optional[float], *, currency: bool = False, percentage: bool = False
+    ) -> str:
+        if value is None:
+            return "n/a"
+        if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+            return "n/a"
+        if currency:
+            return f"${value:,.2f}"
+        if percentage:
+            return f"{value * 100:.1f}%"
+        return f"{value:,.2f}"
+
+    stats_cols = st.columns(4)
+    stats = [
+        ("Mean $/m³", summary.mean, True, False),
+        ("Std dev $/m³", summary.std_dev, True, False),
+        ("Kurtosis", summary.kurtosis, False, False),
+        ("Skewness", summary.skewness, False, False),
+    ]
+    for column, (label, value, as_currency, as_percentage) in zip(stats_cols, stats):
+        column.metric(
+            label,
+            _format_value(value, currency=as_currency, percentage=as_percentage),
+        )
+
+    profitability_cols = st.columns(4)
+    profitability_metrics = [
+        ("Median $/km", profitability_summary.revenue_per_km_median, True, False),
+        ("Average $/km", profitability_summary.revenue_per_km_mean, True, False),
+        (
+            "Median margin $/m³",
+            profitability_summary.margin_per_m3_median,
+            True,
+            False,
+        ),
+        (
+            "Median margin %",
+            profitability_summary.margin_per_m3_pct_median,
+            False,
+            True,
+        ),
+    ]
+    for column, (label, value, as_currency, as_percentage) in zip(
+        profitability_cols, profitability_metrics
+    ):
+        column.metric(
+            label,
+            _format_value(value, currency=as_currency, percentage=as_percentage),
+        )
+
+    if metro_summary and metro_profitability:
+        st.markdown(
+            f"**Metro subset (≤{metro_distance_km:,.0f} km)**"
+        )
+        share = 0.0
+        if summary.job_count:
+            share = metro_summary.job_count / summary.job_count
+        st.caption(
+            f"{metro_summary.job_count} jobs in metro scope "
+            f"({share:.1%} of filtered jobs)."
+        )
+
+        metro_metrics = [
+            ("Median $/km", "revenue_per_km_median", True, False),
+            ("Average $/km", "revenue_per_km_mean", True, False),
+            ("Median margin $/m³", "margin_per_m3_median", True, False),
+            ("Median margin %", "margin_per_m3_pct_median", False, True),
+        ]
+        metro_cols = st.columns(len(metro_metrics))
+        for column, (label, attr, as_currency, as_percentage) in zip(
+            metro_cols, metro_metrics
+        ):
+            metro_value = getattr(metro_profitability, attr)
+            overall_value = getattr(profitability_summary, attr)
+            delta = None
+            if (
+                metro_value is not None
+                and overall_value is not None
+                and not any(
+                    isinstance(val, float)
+                    and (math.isnan(val) or math.isinf(val))
+                    for val in (metro_value, overall_value)
+                )
+            ):
+                diff = metro_value - overall_value
+                if as_currency:
+                    delta = f"{diff:+,.2f}"
+                elif as_percentage:
+                    delta = f"{diff * 100:+.1f}%"
+                else:
+                    delta = f"{diff:+.2f}"
+            column.metric(
+                label,
+                _format_value(
+                    metro_value, currency=as_currency, percentage=as_percentage
+                ),
+                delta=delta,
+            )
 
 def build_route_map(
     df: pd.DataFrame,
