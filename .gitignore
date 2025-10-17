@@ -1,4 +1,5 @@
-/analytics/__pycache__/*
+*/__pycache__/*
+
 *.db
 
 # Playwright
