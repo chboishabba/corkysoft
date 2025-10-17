@@ -20,6 +20,8 @@ from analytics.price_distribution import (
     aggregate_corridor_performance,
     build_isochrone_polygons,
     build_heatmap_source,
+    build_price_history_series,
+    compute_cost_vs_price_percentage,
     create_histogram,
     create_metro_profitability_figure,
     create_m3_margin_figure,
@@ -37,9 +39,10 @@ from analytics.price_distribution import (
     prepare_profitability_route_data,
     prepare_route_map_data,
     summarise_distribution,
+    summarise_last_year_distributions,
     summarise_profitability,
 )
-from streamlit_price_distribution import build_route_map
+from dashboard.components.maps import build_route_map
 
 
 def build_conn() -> sqlite3.Connection:
@@ -518,6 +521,88 @@ def test_summarise_distribution_and_histogram():
         conn.close()
 
 
+def test_build_price_history_series_aggregates_by_frequency():
+    df = pd.DataFrame(
+        {
+            "job_date": pd.to_datetime(
+                [
+                    "2024-01-01",
+                    "2024-01-08",
+                    "2024-01-15",
+                    "2023-01-01",
+                    "2023-01-08",
+                    "2023-01-15",
+                ]
+            ),
+            "price_per_m3": [200.0, 210.0, 220.0, 180.0, 185.0, 190.0],
+            "margin_per_m3": [40.0, 42.0, 44.0, 35.0, 36.0, 38.0],
+            "margin_total_pct": [0.2, 0.22, 0.25, 0.18, 0.19, 0.2],
+            "origin_city": ["Brisbane", "Brisbane", "Sydney", "Brisbane", "Brisbane", "Sydney"],
+            "destination_city": ["Melbourne", "Sydney", "Melbourne", "Melbourne", "Sydney", "Melbourne"],
+        }
+    )
+
+    series = build_price_history_series(
+        df,
+        frequency="weekly",
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 31),
+    )
+
+    assert not series.current_overall.empty
+    assert not series.previous_year_overall.empty
+    assert set(series.current_overall.columns) >= {"period", "price_per_m3", "job_count"}
+    assert set(series.previous_year_overall.columns) >= {"period", "price_per_m3", "job_count"}
+    assert series.current_overall["job_count"].sum() == 3
+    assert series.previous_year_overall["job_count"].sum() == 3
+
+    assert not series.current_by_origin.empty
+    assert "origin" in series.current_by_origin.columns
+    assert set(series.current_by_origin["origin"].unique()) == {"Brisbane", "Sydney"}
+
+    assert not series.current_by_destination.empty
+    assert "destination" in series.current_by_destination.columns
+    assert "price_per_m3" in series.current_by_destination.columns
+
+
+def test_summarise_last_year_distributions_returns_previous_frames():
+    df = pd.DataFrame(
+        {
+            "job_date": pd.to_datetime([
+                "2024-02-10",
+                "2024-02-18",
+                "2023-02-10",
+                "2023-02-18",
+                "2023-02-25",
+            ]),
+            "price_per_m3": [205.0, 215.0, 180.0, 182.0, 188.0],
+            "margin_per_m3": [50.0, 55.0, 40.0, 42.0, 45.0],
+            "margin_total_pct": [0.21, 0.23, 0.19, 0.18, 0.2],
+            "origin_city": ["Brisbane", "Sydney", "Brisbane", "Sydney", "Brisbane"],
+            "destination_city": ["Perth", "Perth", "Adelaide", "Perth", "Adelaide"],
+        }
+    )
+
+    summary = summarise_last_year_distributions(
+        df,
+        start_date=date(2024, 2, 1),
+        end_date=date(2024, 2, 29),
+    )
+
+    overall = summary["overall"]
+    assert not overall.empty
+    assert set(overall.columns) >= {"job_date", "price_per_m3", "series"}
+    assert (overall["series"].unique() == ["Previous year"]).all()
+
+    by_origin = summary["by_origin"]
+    assert not by_origin.empty
+    assert set(by_origin["origin"].unique()) == {"Brisbane", "Sydney"}
+
+    by_destination = summary["by_destination"]
+    assert not by_destination.empty
+    assert set(by_destination["destination"].unique()) == {"Adelaide", "Perth"}
+
+
 def test_profitability_summary_and_views():
     conn = build_conn()
     try:
@@ -785,6 +870,22 @@ def test_prepare_metric_route_map_data_filters_and_formats_values():
     assert displays == ["$120.00/m³", "$85.50/m³"]
 
 
+def test_compute_cost_vs_price_percentage_handles_missing_and_zero_values():
+    df = pd.DataFrame(
+        {
+            "price_per_m3": [300.0, 0.0, None],
+            "final_cost_per_m3": [210.0, 120.0, 90.0],
+        }
+    )
+
+    result = compute_cost_vs_price_percentage(df)
+
+    assert pytest.approx(result.iloc[0], rel=1e-6) == 0.7
+    assert pd.isna(result.iloc[1])
+    assert pd.isna(result.iloc[2])
+    assert result.name == "cost_vs_price_pct"
+
+
 def test_prepare_metric_route_map_data_requires_numeric_values():
     df = pd.DataFrame(
         {
@@ -910,6 +1011,27 @@ def test_build_route_map_symmetric_colour_range_for_diverging_values():
                 "dest_lat": -27.4705,
                 "dest_lon": 153.026,
             },
+        ]
+    )
+
+    figure = build_route_map(
+        df,
+        "Margin %",
+        show_routes=False,
+        show_points=True,
+        colour_mode="continuous",
+        colorbar_tickformat="$,.0f",
+    )
+
+    marker_traces = [trace for trace in figure.data if getattr(trace, "mode", "") == "markers"]
+    assert marker_traces, "Expected a marker trace when points are requested"
+    marker = marker_traces[0].marker
+
+    assert marker.cmin == pytest.approx(-200.0)
+    assert marker.cmax == pytest.approx(200.0)
+    assert marker.cmid == pytest.approx(0.0)
+
+
 def test_build_route_map_continuous_hover_text_includes_route_details():
     df = pd.DataFrame(
         [
@@ -934,20 +1056,6 @@ def test_build_route_map_continuous_hover_text_includes_route_details():
 
     figure = build_route_map(
         df,
-        "Margin",
-        show_routes=False,
-        show_points=True,
-        colour_mode="continuous",
-        colorbar_tickformat="$,.0f",
-    )
-
-    marker_traces = [trace for trace in figure.data if getattr(trace, "mode", "") == "markers"]
-    assert marker_traces, "Expected a marker trace when points are requested"
-    marker = marker_traces[0].marker
-
-    assert marker.cmin == pytest.approx(-200.0)
-    assert marker.cmax == pytest.approx(200.0)
-    assert marker.cmid == pytest.approx(0.0)
         "Margin %",
         show_routes=True,
         show_points=True,

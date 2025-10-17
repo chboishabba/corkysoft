@@ -1,22 +1,33 @@
 #!/usr/bin/env python3
-import os, time, sqlite3, datetime, json, re
+import datetime as dt
+import os, time, sqlite3, json, re
 import openrouteservice as ors
-from datetime import datetime, timezone
+from datetime import timezone
 import argparse, csv, sys
 from typing import Optional
 
 from corkysoft.au_address import GeocodeResult, geocode_with_normalization
 
 DB_PATH = os.environ.get("ROUTES_DB", "routes.db")
-ORS_KEY = os.environ.get("ORS_API_KEY")  # export ORS_API_KEY=xxxx
 COUNTRY_DEFAULT = os.environ.get("ORS_COUNTRY", "Australia")
 GEOCODE_BACKOFF = 0.2   # seconds between calls (be polite)
 ROUTE_BACKOFF = 0.2
 
-if not ORS_KEY:
-    raise SystemExit("Set ORS_API_KEY env var (export ORS_API_KEY=YOUR_KEY)")
+_ors_client: Optional[ors.Client] = None
 
-client = ors.Client(key=ORS_KEY)
+
+def get_ors_client() -> ors.Client:
+    """Return a cached OpenRouteService client, initialising it on demand."""
+
+    global _ors_client
+    if _ors_client is None:
+        api_key = os.environ.get("ORS_API_KEY")
+        if not api_key:
+            raise SystemExit(
+                "Set ORS_API_KEY env var (export ORS_API_KEY=YOUR_KEY)"
+            )
+        _ors_client = ors.Client(key=api_key)
+    return _ors_client
 
 SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
@@ -183,7 +194,7 @@ def normalize_postcode(value: Optional[str]) -> Optional[str]:
     return match.group(1)
 
 
-def parse_date(value: str) -> datetime.date:
+def parse_date(value: str) -> dt.date:
     value = value.strip()
     # Try a set of common formats (ISO, AU, US) before falling back to date.fromisoformat
     candidates = (
@@ -194,11 +205,11 @@ def parse_date(value: str) -> datetime.date:
     )
     for fmt in candidates:
         try:
-            return datetime.datetime.strptime(value, fmt).date()
+            return dt.datetime.strptime(value, fmt).date()
         except ValueError:
             continue
     try:
-        return datetime.date.fromisoformat(value)
+        return dt.date.fromisoformat(value)
     except ValueError as exc:
         raise ValueError(f"Unrecognised date format: {value!r}") from exc
 
@@ -213,6 +224,7 @@ def pelias_geocode(place: str, country: str):
     Try a stricter AU-focused search first (address/street/locality layers),
     then fall back to a looser text search. Returns a :class:`GeocodeResult`.
     """
+    client = get_ors_client()
     return geocode_with_normalization(
         client,
         place,
@@ -236,6 +248,7 @@ def geocode_cached(conn: sqlite3.Connection, place: str, country: str) -> Geocod
             search_candidates=[place],
         )
 
+    get_ors_client()
     result = pelias_geocode(place, country)
     conn.execute(
         "INSERT OR REPLACE INTO geocode_cache(place, lon, lat, ts) VALUES (?,?,?,?)",
@@ -243,7 +256,7 @@ def geocode_cached(conn: sqlite3.Connection, place: str, country: str) -> Geocod
             f"{place}, {country}",
             result.lon,
             result.lat,
-            datetime.now(timezone.utc).isoformat(),
+            dt.datetime.now(timezone.utc).isoformat(),
         )
     )
     conn.commit()
@@ -268,6 +281,7 @@ def route_with_geometry(
     d_label = resolved_label(dest_geo, destination)
 
     # Ask ORS for full GeoJSON — includes properties.summary distance/duration + LineString geometry
+    client = get_ors_client()
     route_fc = client.directions(
         coordinates=[[origin_geo.lon, origin_geo.lat], [dest_geo.lon, dest_geo.lat]],
         profile="driving-car",
@@ -321,7 +335,7 @@ def refresh_internal_cost_total(conn: sqlite3.Connection, job_id: int) -> float:
         SET internal_cost_total = ?, internal_cost_updated_at = ?
         WHERE id = ?
         """,
-        (total, datetime.now(timezone.utc).isoformat(), job_id),
+        (total, dt.datetime.now(timezone.utc).isoformat(), job_id),
     )
     conn.commit()
     return total
@@ -347,7 +361,7 @@ def add_cost_component(
     else:
         total = float(total_override)
     _ensure_job_exists(conn, job_id)
-    now = datetime.now(timezone.utc).isoformat()
+    now = dt.datetime.now(timezone.utc).isoformat()
     cur = conn.execute(
         """
         INSERT INTO job_cost_components (
@@ -474,7 +488,7 @@ def import_historical_jobs(
 
     inserted = 0
     updated = 0
-    now = datetime.datetime.now(timezone.utc).isoformat()
+    now = dt.datetime.now(timezone.utc).isoformat()
 
     with open(csv_path, newline="") as f:
         reader = csv.DictReader(f)
@@ -498,7 +512,7 @@ def import_historical_jobs(
                 job_date = parse_date(date_raw).isoformat()
                 origin = origin_raw
                 destination = dest_raw
-                client = client_raw or ""
+                client_name = client_raw or ""
 
                 try:
                     m3 = float(m3_raw) if m3_raw else None
@@ -538,7 +552,8 @@ def import_historical_jobs(
 
                 if route and None not in (origin_lon, origin_lat, dest_lon, dest_lat):
                     try:
-                        route_res = client.directions(
+                        ors_client = get_ors_client()
+                        route_res = ors_client.directions(
                             coordinates=[[origin_lon, origin_lat], [dest_lon, dest_lat]],
                             profile="driving-car",
                             format="json",
@@ -557,7 +572,7 @@ def import_historical_jobs(
                     m3,
                     quoted_price,
                     price_per_m3,
-                    client,
+                    client_name,
                     origin_norm,
                     dest_norm,
                     origin_postcode,
@@ -577,13 +592,13 @@ def import_historical_jobs(
                     SELECT 1 FROM historical_jobs
                     WHERE job_date = ? AND origin = ? AND destination = ? AND quoted_price = ? AND client = ?
                     """,
-                    (job_date, origin, destination, quoted_price, client),
+                    (job_date, origin, destination, quoted_price, client_name),
                 ).fetchone()
 
                 conn.execute(
                     """
                     INSERT INTO historical_jobs (
-                        job_date, origin, destination, m3, quoted_price, price_per_m3, client,
+                        job_date, origin, destination, m3, quoted_price, price_per_m3, client_name,
                         origin_normalized, destination_normalized, origin_postcode, destination_postcode,
                         origin_lon, origin_lat, dest_lon, dest_lat, distance_km, duration_hr,
                         imported_at, updated_at
@@ -631,6 +646,7 @@ def process_pending(conn: sqlite3.Connection, limit: int = 1000):
         print("No pending jobs.")
         return
 
+    get_ors_client()
     for (jid, origin, dest, hourly_rate, per_km_rate, country) in rows:
         try:
             country = country or COUNTRY_DEFAULT
@@ -669,7 +685,7 @@ def process_pending(conn: sqlite3.Connection, limit: int = 1000):
                     dest_geo.lon,
                     dest_geo.lat,
                     route_geojson,
-                 datetime.now(timezone.utc).isoformat(), jid)
+                 dt.datetime.now(timezone.utc).isoformat(), jid)
             )
             conn.commit()
             print(f"[OK] #{jid} {origin} → {dest} | {distance_km:.1f} km | {duration_hr:.2f} h | ${cost_total:,.2f}")

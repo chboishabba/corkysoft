@@ -62,6 +62,11 @@ Optional environment variables:
 * `ROUTES_DB` → SQLite database path (default: `routes.db`)
 * `ORS_COUNTRY` → Default country context (default: `Australia`)
 
+> 💡 Commands that do not invoke geocoding or routing (`add`, `add-csv`,
+> `list`, `cost`, and `map` when route geometry is already stored) run fine
+> without `ORS_API_KEY`. Provide the key only when you need to call
+> OpenRouteService (e.g. `run` or `import-history --geocode/--route`).
+
 ---
 
 ## 🚀 Usage
@@ -87,9 +92,20 @@ Key visuals include:
 - A dynamic break-even engine that recalculates per-job cost floors using network-wide fuel, driver, maintenance and overhead settings stored in `global_parameters`.
 - Corridor insights summarising job counts, weighted $/m³ and below break-even ratios aggregated into bidirectional lanes for systemic diagnostics.
 - A non-technical optimizer tab that recommends corridor price uplifts from the filtered data and offers a CSV export for action lists.
+- Continuous profitability overlays auto-balance the colour scale around break-even and annotate origin/destination markers in hover text for faster route diagnostics.
+- Cost vs Price (%) view surfaces corridors where operating costs consume an outsized share of the quoted price, using the same interactive route map controls.
 
 ```bash
-streamlit run streamlit_price_distribution.py
+streamlit run dashboard/app.py
+```
+
+Alternatively, import the module directly if you are embedding the UI in a
+larger application:
+
+```python
+from dashboard.app import render_price_distribution_dashboard
+
+render_price_distribution_dashboard()
 ```
 
 By default it reads from `routes.db`. Set `CORKYSOFT_DB` or `ROUTES_DB` to point at a different SQLite database.
@@ -98,6 +114,8 @@ Use the **Import historical jobs from CSV** expander in the sidebar to load data
 accepts the same headers as the CLI importer (`date`, `origin`, `destination`, `m3`, `quoted_price`, `client`) and will
 calculate per-m³ rates automatically if only revenue and volume are provided. Switch the dataset selector to **Saved quick
 quotes** to analyse submissions from the in-app quote builder alongside historical jobs.
+
+Starting from an empty database? Click `Initialise database tables` in the sidebar to bootstrap the required schema before importing data or creating new quotes. The legacy and modular Streamlit entry points now share stable widget keys so this button no longer clashes with duplicate IDs during app startup.
 
 Inside the Quote builder tab you can expand the **Client details** panel to link the quote with an existing customer or create
 a new one. The UI highlights potential duplicates whenever the full name, phone number or complete address matches a stored

@@ -1,11 +1,10 @@
-"""Streamlit dashboard for the price distribution analysis."""
+"""Streamlit entrypoint for the price distribution dashboard."""
 from __future__ import annotations
 
 import io
 import json
 import math
 from datetime import date
-from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 import plotly.express as px
@@ -13,6 +12,7 @@ import plotly.graph_objects as go
 import pydeck as pdk
 import streamlit as st
 
+from dashboard.app import render_price_distribution_dashboard
 try:
     import folium
     from streamlit_folium import st_folium
@@ -20,6 +20,15 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency for pin UI
     folium = None  # type: ignore[assignment]
     st_folium = None  # type: ignore[assignment]
 
+from dashboard.state import (
+    _ensure_pin_state,
+    _first_non_empty,
+    _get_query_params,
+    _initial_pin_state,
+    _rerun_app,
+    _set_query_params,
+)
+from analytics.db import connection_scope, ensure_dashboard_tables
 from analytics.price_distribution import (
     DistributionSummary,
     ProfitabilitySummary,
@@ -35,6 +44,11 @@ from analytics.price_distribution import (
     create_m3_margin_figure,
     create_m3_vs_km_figure,
     enrich_missing_route_coordinates,
+    import_historical_jobs_from_dataframe,
+    load_historical_jobs,
+    load_quotes,
+    load_live_jobs,
+    compute_cost_vs_price_percentage,
     prepare_metric_route_map_data,
     prepare_route_map_data,
     prepare_profitability_map_data,
@@ -42,6 +56,8 @@ from analytics.price_distribution import (
     summarise_distribution,
     summarise_profitability,
 )
+from dashboard.components.optimizer import render_optimizer
+from dashboard.components.summary import render_summary
 from analytics.optimizer import (
     OptimizerParameters,
     OptimizerRun,
@@ -55,6 +71,12 @@ from analytics.live_data import (
     extract_route_path,
     load_active_routes,
     load_truck_positions,
+)
+from corkysoft.repo import ensure_schema as ensure_quote_schema
+from dashboard.components.maps import (
+    _hex_to_rgb,
+    build_route_map,
+    render_network_map,
 )
 from corkysoft.pricing import DEFAULT_MODIFIERS
 from corkysoft.quote_service import (
@@ -73,17 +95,10 @@ from corkysoft.repo import (
 )
 from corkysoft.routing import snap_coordinates_to_road
 from dashboard.data import prepare_dashboard_data
+from corkysoft.schema import ensure_schema as ensure_core_schema
+from dashboard.components.quote_builder import render_quote_builder
 
 
-DEFAULT_TARGET_MARGIN_PERCENT = 20.0
-_AUS_LAT_LON = (-25.2744, 133.7751)
-_PIN_NOTE = "Manual pin override used for routing"
-_HAVERSINE_MODAL_STATE_KEY = "quote_haversine_modal_ack"
-_NULL_CLIENT_MODAL_STATE_KEY = "quote_null_client_modal_open"
-_NULL_CLIENT_COMPANY_KEY = "quote_null_client_company"
-_NULL_CLIENT_NOTES_KEY = "quote_null_client_notes"
-_NULL_CLIENT_DEFAULT_COMPANY = "Null (filler) client"
-_NULL_CLIENT_DEFAULT_NOTES = "Placeholder client captured via quote builder."
 _ISOCHRONE_PALETTE = [
     "#636EFA",
     "#EF553B",
@@ -96,42 +111,7 @@ _ISOCHRONE_PALETTE = [
     "#FF97FF",
     "#FECB52",
 ]
-
-
-def _hex_to_rgb(value: str) -> Tuple[int, int, int]:
-    """Convert ``value`` (hex or rgb string) into an ``(r, g, b)`` tuple."""
-
-    colour = value.strip()
-    if colour.startswith("#"):
-        digits = colour.lstrip("#")
-        if len(digits) == 3:
-            digits = "".join(ch * 2 for ch in digits)
-        if len(digits) != 6:
-            raise ValueError(f"Unsupported hex colour format: {value}")
-        return tuple(int(digits[idx : idx + 2], 16) for idx in (0, 2, 4))  # type: ignore[arg-type]
-
-    if colour.startswith("rgb"):
-        start = colour.find("(")
-        end = colour.find(")")
-        if start == -1 or end == -1 or end <= start:
-            raise ValueError(f"Unsupported rgb colour format: {value}")
-        components = colour[start + 1 : end].split(",")[:3]
-        return tuple(int(float(component.strip())) for component in components)
-
-    raise ValueError(f"Unsupported colour format: {value}")
 _QUOTE_COUNTRY_STATE_KEY = "quote_builder_country"
-
-
-def _geojson_to_path(value: Any) -> Optional[List[List[float]]]:
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        coords = extract_route_path(value)
-    except Exception:
-        return None
-    return [[float(lon), float(lat)] for lat, lon in coords]
-
-
 def _initial_pin_state(result: QuoteResult) -> Dict[str, Any]:
     return {
         "origin": {
@@ -167,6 +147,16 @@ def _ensure_pin_state(result: QuoteResult) -> Dict[str, Any]:
         state["destination"] = dest_state
     st.session_state["quote_pin_override"] = state
     return state
+
+
+def _geojson_to_path(value: Any) -> Optional[List[List[float]]]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        coords = extract_route_path(value)
+    except Exception:
+        return None
+    return [[float(lon), float(lat)] for lat, lon in coords]
 
 
 def _pin_coordinates(entry: Dict[str, Any]) -> tuple[float, float]:
@@ -245,6 +235,16 @@ def _render_pin_picker(
     st.session_state["quote_pin_override"] = st.session_state.get("quote_pin_override", {})
     return current_lon, current_lat
 
+
+def main() -> None:
+    """Configure the Streamlit page and render the dashboard."""
+    st.set_page_config(
+        page_title="Price distribution by corridor",
+        layout="wide",
+    )
+    render_price_distribution_dashboard()
+
+
 # -----------------------------------------------------------------------------
 # Compatibility shim for metro-distance filtering across branches/modules
 # -----------------------------------------------------------------------------
@@ -300,6 +300,10 @@ except Exception:
             max_distance_km: float = 100.0,
         ) -> pd.DataFrame:
             return df
+
+
+if __name__ == "__main__":
+    main()
 
 
 st.set_page_config(
@@ -446,7 +450,6 @@ def render_summary(
                 ),
                 delta=delta,
             )
-
 
 def build_route_map(
     df: pd.DataFrame,
@@ -927,20 +930,11 @@ def build_route_map(
                     ]
                     figure.add_trace(
                         go.Scattermapbox(
-                            lat=marker_lat,
-                            lon=marker_lon,
+                            lat=coords_df["origin_lat"].tolist(),
+                            lon=coords_df["origin_lon"].tolist(),
                             mode="markers",
                             marker=marker_config,
                             hoverinfo="skip",
-                            marker={
-                                "size": 0.0001,
-                                "color": marker_values,
-                                "colorscale": colour_scale,
-                                "cmin": min_value,
-                                "cmax": max_value,
-                                "colorbar": colorbar_dict,
-                                "opacity": 0.0,
-                            },
                             text=text_values,
                             hovertemplate="%{text}<extra></extra>",
                             showlegend=False,
@@ -1448,42 +1442,12 @@ def render_network_map(
         )
 
 
-def _set_query_params(**params: str) -> None:
-    """Set Streamlit query parameters using the stable API when available."""
-    query_params = getattr(st, "query_params", None)
-    if query_params is not None:
-        query_params.from_dict(params)
-        return
-    # Fallback for older Streamlit versions.
-    st.experimental_set_query_params(**params)
-
-
 def _get_query_params() -> Dict[str, List[str]]:
     """Return query parameters as a dictionary of lists."""
     query_params = getattr(st, "query_params", None)
     if query_params is not None:
         return {key: query_params.get_all(key) for key in query_params.keys()}
     return st.experimental_get_query_params()
-
-
-def _rerun_app() -> None:
-    """Trigger a Streamlit rerun using the available API."""
-    rerun = getattr(st, "rerun", None)
-    if rerun is not None:
-        rerun()
-        return
-    st.experimental_rerun()
-
-
-def _first_non_empty(route: pd.Series, columns: Sequence[str]) -> Optional[str]:
-    for column in columns:
-        if column in route and isinstance(route[column], str):
-            value = route[column].strip()
-            if value:
-                return value
-    return None
-
-
 def _format_route_label(route: pd.Series) -> str:
     origin = _first_non_empty(
         route,
@@ -1553,6 +1517,256 @@ with prepare_dashboard_data() as dashboard_data:
     filtered_mapping = dashboard_data.filtered_mapping
     filtered_df = dashboard_data.filtered_df
     has_filtered_data = dashboard_data.has_filtered_data
+with connection_scope() as conn:
+    break_even_value = ensure_break_even_parameter(conn)
+    ensure_quote_schema(conn)
+
+    df_all: pd.DataFrame = pd.DataFrame()
+    mapping: ColumnMapping = _blank_column_mapping()
+    dataset_loader = load_historical_jobs
+    dataset_key = "historical"
+    dataset_label = "Historical quotes"
+    dataset_error: Optional[str] = None
+    empty_dataset_message: Optional[str] = None
+
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    selected_corridor: Optional[str] = None
+    selected_clients: List[str] = []
+    postcode_prefix: Optional[str] = None
+
+    with st.sidebar:
+        st.header("Filters")
+        if st.button(
+            "Initialise database tables",
+            help=(
+                "Create empty historical and live job tables so the dashboard can run "
+                "before data imports."
+            ),
+            key="legacy_sidebar_init_db",
+        ):
+            ensure_core_schema(conn)
+            ensure_dashboard_tables(conn)
+            ensure_quote_schema(conn)
+            st.success(
+                "Database tables initialised. Import data or start building quotes below."
+            )
+
+        dataset_options = {
+            "Historical quotes": ("historical", load_historical_jobs),
+            "Saved quick quotes": ("quotes", load_quotes),
+            "Live jobs": ("live", load_live_jobs),
+        }
+        dataset_label = st.radio(
+            "Dataset",
+            options=list(dataset_options.keys()),
+            format_func=lambda label: label,
+            key="legacy_dataset_selector",
+        )
+        dataset_key, dataset_loader = dataset_options[dataset_label]
+
+        import_feedback: Optional[tuple[str, str]] = None
+        if dataset_key == "historical":
+            with st.expander("Import historical jobs from CSV", expanded=False):
+                import_form = st.form(key="legacy_historical_import_form")
+                uploaded_file = import_form.file_uploader(
+                    "Select CSV file", type=["csv"], help="Requires headers such as date, origin, destination and m3."
+                )
+                submit_import = import_form.form_submit_button("Import jobs")
+                if submit_import:
+                    if uploaded_file is None:
+                        import_feedback = (
+                            "warning",
+                            "Choose a CSV file before importing.",
+                        )
+                    else:
+                        try:
+                            imported_df = pd.read_csv(uploaded_file)
+                        except Exception as exc:
+                            import_feedback = (
+                                "error",
+                                f"Failed to read CSV: {exc}",
+                            )
+                        else:
+                            try:
+                                inserted, skipped_rows = import_historical_jobs_from_dataframe(
+                                    conn, imported_df
+                                )
+                            except ValueError as exc:
+                                import_feedback = ("error", str(exc))
+                            except Exception as exc:
+                                import_feedback = (
+                                    "error",
+                                    f"Failed to import historical jobs: {exc}",
+                                )
+                            else:
+                                if inserted:
+                                    message = (
+                                        f"Imported {inserted} historical job"
+                                        f"{'s' if inserted != 1 else ''}."
+                                    )
+                                    if skipped_rows:
+                                        message += (
+                                            f" Skipped {skipped_rows} row"
+                                            f"{'s' if skipped_rows != 1 else ''} with missing or duplicate data."
+                                        )
+                                    import_feedback = ("success", message)
+                                else:
+                                    if skipped_rows:
+                                        message = (
+                                            "No new rows imported. Skipped "
+                                            f"{skipped_rows} row{'s' if skipped_rows != 1 else ''} due to validation or duplicates."
+                                        )
+                                    else:
+                                        message = "No rows imported from the provided file."
+                                    import_feedback = ("warning", message)
+
+        try:
+            df_all, mapping = dataset_loader(conn)
+        except RuntimeError as exc:
+            dataset_error = str(exc)
+        except Exception as exc:
+            dataset_error = f"Failed to load {dataset_label.lower()} data: {exc}"
+
+        if import_feedback:
+            level, message = import_feedback
+            if level == "success":
+                st.success(message)
+            elif level == "warning":
+                st.info(message)
+            else:
+                st.error(message)
+
+        data_available = dataset_error is None and not df_all.empty
+
+        today_value = date.today()
+        date_column = "job_date" if "job_date" in df_all.columns else mapping.date
+        if data_available and date_column and date_column in df_all.columns:
+            df_all[date_column] = pd.to_datetime(df_all[date_column], errors="coerce")
+            min_date = df_all[date_column].min()
+            max_date = df_all[date_column].max()
+            default_start = (
+                min_date.date() if isinstance(min_date, pd.Timestamp) else today_value
+            )
+            default_end = (
+                max_date.date() if isinstance(max_date, pd.Timestamp) else today_value
+            )
+            date_range = st.date_input(
+                "Date range",
+                value=(default_start, default_end),
+                min_value=default_start,
+                max_value=default_end,
+            )
+            if isinstance(date_range, tuple) and len(date_range) == 2:
+                start_date, end_date = date_range
+            else:
+                start_date = default_start
+                end_date = default_end
+        else:
+            st.date_input(
+                "Date range",
+                value=(today_value, today_value),
+                disabled=True,
+            )
+            start_date = None
+            end_date = None
+
+        corridor_options: List[str] = []
+        if data_available:
+            corridor_series = df_all.get("corridor_display")
+            if corridor_series is not None:
+                corridor_options = sorted(
+                    pd.Series(corridor_series).dropna().astype(str).unique().tolist()
+                )
+        corridor_selection = st.selectbox(
+            "Corridor",
+            options=["All corridors"] + corridor_options,
+            index=0,
+            disabled=not data_available,
+        )
+        selected_corridor = None if corridor_selection == "All corridors" else corridor_selection
+
+        client_options: List[str] = []
+        if data_available:
+            client_series = df_all.get("client_display")
+            if client_series is not None:
+                client_options = sorted(
+                    pd.Series(client_series).dropna().astype(str).unique().tolist()
+                )
+        selected_clients = st.multiselect(
+            "Client",
+            options=client_options,
+            default=client_options if client_options else [],
+            disabled=not data_available,
+        )
+
+        postcode_prefix = st.text_input(
+            "Corridor contains postcode prefix",
+            value=postcode_prefix or "",
+            disabled=not data_available,
+            help="Match origin or destination postcode prefixes (e.g. 40 to match 4000-4099).",
+        ) or None
+
+        if dataset_error:
+            st.error(dataset_error)
+        elif not data_available:
+            empty_messages = {
+                "historical": (
+                    "historical_jobs table has no rows yet. Import historical jobs to populate the view."
+                ),
+                "quotes": (
+                    "quotes table has no rows yet. Save a quick quote to populate the view."
+                ),
+                "live": "jobs table has no rows yet. Add live jobs to populate the view.",
+            }
+            empty_dataset_message = empty_messages.get(
+                dataset_key, "No rows available for the selected dataset."
+            )
+            st.info(empty_dataset_message)
+
+        st.subheader("Break-even model")
+        new_break_even = st.number_input(
+            "Break-even $/m³",
+            min_value=0.0,
+            value=float(break_even_value),
+            step=5.0,
+            help="Used to draw break-even bands on the histogram.",
+        )
+        if st.button("Update break-even"):
+            update_break_even(conn, new_break_even)
+            st.success(f"Break-even updated to ${new_break_even:,.2f}")
+            break_even_value = new_break_even
+
+    data_available = dataset_error is None and not df_all.empty
+
+    filtered_df = pd.DataFrame()
+    filtered_mapping = mapping
+    has_filtered_data = False
+    if data_available:
+        try:
+            filtered_df, filtered_mapping = dataset_loader(
+                conn,
+                start_date=start_date,
+                end_date=end_date,
+                clients=selected_clients or None,
+                corridor=selected_corridor,
+                postcode_prefix=postcode_prefix,
+            )
+            has_filtered_data = not filtered_df.empty
+        except RuntimeError as exc:
+            dataset_error = str(exc)
+        except Exception as exc:
+            dataset_error = f"Failed to apply filters: {exc}"
+
+    if dataset_error:
+        st.error(dataset_error)
+    elif not data_available:
+        st.info(
+            empty_dataset_message
+            or "No rows available for the selected dataset. Use the initialise button to create empty tables."
+        )
+    elif not has_filtered_data:
+        st.warning("No jobs match the selected filters. Quote builder remains available below.")
 
     tab_labels = [
         "Histogram",
@@ -1586,6 +1800,9 @@ with prepare_dashboard_data() as dashboard_data:
     metro_profitability: Optional[ProfitabilitySummary] = None
     metro_distance_km = 100.0
     if has_filtered_data:
+        filtered_df = filtered_df.copy()
+        filtered_df["cost_vs_price_pct"] = compute_cost_vs_price_percentage(filtered_df)
+
         summary = summarise_distribution(filtered_df, break_even_value)
         profitability_summary = summarise_profitability(filtered_df)
 
@@ -1825,6 +2042,12 @@ with prepare_dashboard_data() as dashboard_data:
                                 "format": "percentage",
                                 "scale": px.colors.diverging.BrBG,
                                 "tickformat": ".1%",
+                            },
+                            "Cost vs Price (%)": {
+                                "column": "cost_vs_price_pct",
+                                "format": "percentage",
+                                "scale": px.colors.diverging.RdBu,
+                                "tickformat": ".0%",
                             },
                             "Total margin": {
                                 "column": "margin_total",
@@ -2085,1137 +2308,10 @@ with prepare_dashboard_data() as dashboard_data:
 
 
     with tab_map["Quote builder"]:
-        saved_rowid = st.session_state.pop("quote_saved_rowid", None)
-        if saved_rowid is not None:
-            st.success(f"Quote saved as record #{saved_rowid}.")
-
-        st.markdown("### Quote builder")
-        st.caption(
-            "Use a historical route to pre-fill the quick quote form, calculate pricing and optionally persist the result."
-        )
-        session_inputs: Optional[QuoteInput] = st.session_state.get(  # type: ignore[assignment]
-            "quote_inputs"
-        )
-        quote_result: Optional[QuoteResult] = st.session_state.get(  # type: ignore[assignment]
-            "quote_result"
-        )
-        manual_option = "Manual entry"
-        map_columns = {"origin_lon", "origin_lat", "dest_lon", "dest_lat"}
-        selected_route: Optional[pd.Series] = None
-
-        if _QUOTE_COUNTRY_STATE_KEY not in st.session_state:
-            initial_country = (
-                session_inputs.country
-                if session_inputs and session_inputs.country
-                else COUNTRY_DEFAULT
-            )
-            st.session_state[_QUOTE_COUNTRY_STATE_KEY] = initial_country
-
-        active_country = st.session_state.get(_QUOTE_COUNTRY_STATE_KEY)
-        normalized_country: Optional[str]
-        if isinstance(active_country, str):
-            normalized_country = active_country.strip() or None
-        else:
-            normalized_country = None
-
-        quote_prefill_df = enrich_missing_route_coordinates(
-            filtered_df,
-            conn,
-            country=normalized_country,
-        )
-
-        if map_columns.issubset(quote_prefill_df.columns):
-            map_routes = quote_prefill_df.dropna(subset=list(map_columns)).copy()
-            if isinstance(normalized_country, str) and normalized_country:
-                map_routes = filter_routes_by_country(map_routes, normalized_country)
-            if not map_routes.empty:
-                map_routes = map_routes.reset_index(drop=True)
-                map_routes["route_label"] = map_routes.apply(_format_route_label, axis=1)
-                option_list = [manual_option] + map_routes["route_label"].tolist()
-                default_label = st.session_state.get("quote_selected_route", manual_option)
-                if default_label not in option_list:
-                    default_label = manual_option
-                selected_label = st.selectbox(
-                    "Prefill from historical route",
-                    options=option_list,
-                    index=option_list.index(default_label),
-                    key="quote_selected_route",
-                    help="Pick a historical job to pull its origin and destination into the form.",
-                )
-                if selected_label != manual_option:
-                    selected_route = map_routes.loc[
-                        map_routes["route_label"] == selected_label
-                    ].iloc[0]
-                    midpoint_lat = (
-                        float(selected_route["origin_lat"]) + float(selected_route["dest_lat"])
-                    ) / 2
-                    midpoint_lon = (
-                        float(selected_route["origin_lon"]) + float(selected_route["dest_lon"])
-                    ) / 2
-                    line_data = [
-                        {
-                            "from": [
-                                float(selected_route["origin_lon"]),
-                                float(selected_route["origin_lat"]),
-                            ],
-                            "to": [
-                                float(selected_route["dest_lon"]),
-                                float(selected_route["dest_lat"]),
-                            ],
-                        }
-                    ]
-                    scatter_data = [
-                        {
-                            "position": [
-                                float(selected_route["origin_lon"]),
-                                float(selected_route["origin_lat"]),
-                            ],
-                            "label": _first_non_empty(
-                                selected_route,
-                                ["origin", "origin_city", "origin_normalized", "origin_raw"],
-                            )
-                            or "Origin",
-                            "color": [33, 150, 243, 200],
-                        },
-                        {
-                            "position": [
-                                float(selected_route["dest_lon"]),
-                                float(selected_route["dest_lat"]),
-                            ],
-                            "label": _first_non_empty(
-                                selected_route,
-                                [
-                                    "destination",
-                                    "destination_city",
-                                    "destination_normalized",
-                                    "destination_raw",
-                                ],
-                            )
-                            or "Destination",
-                            "color": [244, 67, 54, 200],
-                        },
-                    ]
-                    deck = pdk.Deck(
-                        map_style="mapbox://styles/mapbox/light-v9",
-                        initial_view_state=pdk.ViewState(
-                            latitude=midpoint_lat,
-                            longitude=midpoint_lon,
-                            zoom=5,
-                            pitch=30,
-                        ),
-                        layers=[
-                            pdk.Layer(
-                                "LineLayer",
-                                data=line_data,
-                                get_source_position="from",
-                                get_target_position="to",
-                                get_color=[33, 150, 243, 160],
-                                get_width=5,
-                            ),
-                            pdk.Layer(
-                                "ScatterplotLayer",
-                                data=scatter_data,
-                                get_position="position",
-                                get_fill_color="color",
-                                get_radius=40000,
-                            ),
-                            pdk.Layer(
-                                "TextLayer",
-                                data=scatter_data,
-                                get_position="position",
-                                get_text="label",
-                                get_size=12,
-                                size_units="meters",
-                                size_scale=16,
-                                get_alignment_baseline="top",
-                            ),
-                        ],
-                    )
-                    st.pydeck_chart(deck)
-                    st.caption("Selected route visualised on the map.")
-            else:
-                st.info("No geocoded routes are available for the current filters yet.")
-        else:
-            st.info("Longitude/latitude columns are required to plot routes for quoting.")
-
-        base_candidates: List[str] = [
-            "cubic_m",
-            "volume_m3",
-            "volume_cbm",
-            "volume",
-            "cbm",
-        ]
-        for candidate in (filtered_mapping.volume, mapping.volume):
-            if candidate and candidate not in base_candidates:
-                base_candidates.append(candidate)
-
-        default_origin = session_inputs.origin if session_inputs else ""
-        default_destination = session_inputs.destination if session_inputs else ""
-        default_volume = session_inputs.cubic_m if session_inputs else 30.0
-        default_date = session_inputs.quote_date if session_inputs else date.today()
-        default_modifiers = list(session_inputs.modifiers) if session_inputs else []
-        if session_inputs is None:
-            default_margin_percent: Optional[float] = DEFAULT_TARGET_MARGIN_PERCENT
-        else:
-            default_margin_percent = session_inputs.target_margin_percent
-        default_country = st.session_state.get(_QUOTE_COUNTRY_STATE_KEY, COUNTRY_DEFAULT)
-
-        if selected_route is not None:
-            default_origin = _first_non_empty(
-                selected_route,
-                [
-                    "origin",
-                    "origin_normalized",
-                    "origin_city",
-                    "origin_raw",
-                ],
-            ) or default_origin
-            default_destination = _first_non_empty(
-                selected_route,
-                [
-                    "destination",
-                    "destination_normalized",
-                    "destination_city",
-                    "destination_raw",
-                ],
-            ) or default_destination
-            route_volume = _extract_route_volume(selected_route, base_candidates)
-            if route_volume is not None:
-                default_volume = route_volume
-            route_date = _extract_route_date(selected_route)
-            if route_date is not None:
-                default_date = route_date
-            route_country = _first_non_empty(
-                selected_route, ["origin_country", "destination_country"]
-            )
-            if route_country:
-                st.session_state[_QUOTE_COUNTRY_STATE_KEY] = route_country
-                default_country = route_country
-
-        modifier_options = [mod.id for mod in DEFAULT_MODIFIERS]
-        modifier_labels: Dict[str, str] = {mod.id: mod.label for mod in DEFAULT_MODIFIERS}
-
-        client_rows = conn.execute(
-            """
-            SELECT id, first_name, last_name, company_name, email, phone,
-                   address_line1, address_line2, city, state, postcode, country, notes
-            FROM clients
-            ORDER BY
-                CASE WHEN company_name IS NOT NULL AND TRIM(company_name) <> '' THEN 0 ELSE 1 END,
-                LOWER(COALESCE(company_name, '')),
-                LOWER(COALESCE(first_name, '')),
-                LOWER(COALESCE(last_name, ''))
-            """
-        ).fetchall()
-        client_option_values: List[Optional[int]] = [None] + [int(row[0]) for row in client_rows]
-        client_label_map: Dict[int, str] = {
-            int(row[0]): format_client_display(row[1], row[2], row[3])
-            for row in client_rows
-        }
-        default_client_id = session_inputs.client_id if session_inputs else None
-        default_client_details = session_inputs.client_details if session_inputs else None
-        client_match_choice_state = st.session_state.get("quote_client_match_choice", -1)
-        client_form_should_expand = bool(
-            (default_client_id and default_client_id in client_option_values)
-            or (
-                default_client_details
-                and hasattr(default_client_details, "has_any_data")
-                and default_client_details.has_any_data()
-            )
-        )
-        selected_client_id_form: Optional[int] = (
-            default_client_id if default_client_id in client_option_values else None
-        )
-        entered_client_details_form: Optional[ClientDetails] = default_client_details
-        match_choice_form = client_match_choice_state
-
-        with st.form("quote_builder_form"):
-            origin_value = st.text_input("Origin", value=default_origin)
-            destination_value = st.text_input(
-                "Destination", value=default_destination
-            )
-            if _QUOTE_COUNTRY_STATE_KEY not in st.session_state:
-                st.session_state[_QUOTE_COUNTRY_STATE_KEY] = (
-                    default_country or COUNTRY_DEFAULT
-                )
-            country_value = st.text_input(
-                "Country",
-                key=_QUOTE_COUNTRY_STATE_KEY,
-            )
-            cubic_m_value = st.number_input(
-                "Volume (m³)",
-                min_value=1.0,
-                value=float(default_volume or 1.0),
-                step=1.0,
-            )
-            quote_date_value = st.date_input("Move date", value=default_date)
-            selected_modifier_ids = st.multiselect(
-                "Modifiers",
-                options=modifier_options,
-                default=[mid for mid in default_modifiers if mid in modifier_options],
-                format_func=lambda mod_id: modifier_labels.get(mod_id, mod_id),
-            )
-            margin_cols = st.columns(2)
-            apply_margin = margin_cols[0].checkbox(
-                "Apply margin",
-                value=default_margin_percent is not None,
-                help="Include a target margin percentage on top of calculated costs.",
-            )
-            margin_percent_value = margin_cols[1].number_input(
-                "Target margin %",
-                min_value=0.0,
-                max_value=100.0,
-                value=float(
-                    default_margin_percent
-                    if default_margin_percent is not None
-                    else DEFAULT_TARGET_MARGIN_PERCENT
-                ),
-                step=1.0,
-                help=(
-                    "Enter the desired margin percentage. The value is only used when 'Apply margin'"
-                    " is enabled."
-                ),
-            )
-            with st.expander(
-                "Client details (optional)", expanded=client_form_should_expand
-            ):
-                existing_index = 0
-                if selected_client_id_form in client_option_values:
-                    existing_index = client_option_values.index(selected_client_id_form)
-                selected_client_id_form = st.selectbox(
-                    "Link to existing client",
-                    options=client_option_values,
-                    index=existing_index,
-                    format_func=lambda cid: (
-                        "No client linked"
-                        if cid is None
-                        else client_label_map.get(cid, f"Client #{cid}")
-                    ),
-                )
-                st.caption(
-                    "Enter details below to create a client record if no existing client applies."
-                )
-                company_input = st.text_input(
-                    "Company name",
-                    value=(
-                        default_client_details.company_name
-                        if default_client_details and default_client_details.company_name
-                        else ""
-                    ),
-                )
-                first_name_input = st.text_input(
-                    "First name",
-                    value=(
-                        default_client_details.first_name
-                        if default_client_details and default_client_details.first_name
-                        else ""
-                    ),
-                )
-                last_name_input = st.text_input(
-                    "Last name",
-                    value=(
-                        default_client_details.last_name
-                        if default_client_details and default_client_details.last_name
-                        else ""
-                    ),
-                )
-                email_input = st.text_input(
-                    "Email",
-                    value=(
-                        default_client_details.email
-                        if default_client_details and default_client_details.email
-                        else ""
-                    ),
-                )
-                phone_input = st.text_input(
-                    "Phone",
-                    value=(
-                        default_client_details.phone
-                        if default_client_details and default_client_details.phone
-                        else ""
-                    ),
-                )
-                address_line1_input = st.text_input(
-                    "Address line 1",
-                    value=(
-                        default_client_details.address_line1
-                        if default_client_details and default_client_details.address_line1
-                        else ""
-                    ),
-                )
-                address_line2_input = st.text_input(
-                    "Address line 2",
-                    value=(
-                        default_client_details.address_line2
-                        if default_client_details and default_client_details.address_line2
-                        else ""
-                    ),
-                )
-                city_input = st.text_input(
-                    "City / Suburb",
-                    value=(
-                        default_client_details.city
-                        if default_client_details and default_client_details.city
-                        else ""
-                    ),
-                )
-                state_input = st.text_input(
-                    "State / Territory",
-                    value=(
-                        default_client_details.state
-                        if default_client_details and default_client_details.state
-                        else ""
-                    ),
-                )
-                postcode_input = st.text_input(
-                    "Postcode",
-                    value=(
-                        default_client_details.postcode
-                        if default_client_details and default_client_details.postcode
-                        else ""
-                    ),
-                )
-                client_country_default = (
-                    default_client_details.country
-                    if default_client_details and default_client_details.country
-                    else country_value
-                    if country_value
-                    else COUNTRY_DEFAULT
-                )
-                client_country_input = st.text_input(
-                    "Client country",
-                    value=client_country_default,
-                )
-                notes_input = st.text_area(
-                    "Notes",
-                    value=(
-                        default_client_details.notes
-                        if default_client_details and default_client_details.notes
-                        else ""
-                    ),
-                    height=80,
-                )
-                entered_client_details_form = ClientDetails(
-                    company_name=company_input,
-                    first_name=first_name_input,
-                    last_name=last_name_input,
-                    email=email_input,
-                    phone=phone_input,
-                    address_line1=address_line1_input,
-                    address_line2=address_line2_input,
-                    city=city_input,
-                    state=state_input,
-                    postcode=postcode_input,
-                    country=client_country_input,
-                    notes=notes_input,
-                )
-                match_choice_form = -1
-                if (
-                    selected_client_id_form is None
-                    and entered_client_details_form.has_any_data()
-                ):
-                    matches = find_client_matches(conn, entered_client_details_form)
-                    if matches:
-                        match_labels = {
-                            match.id: f"{match.display_name} ({match.reason})"
-                            for match in matches
-                        }
-                        warning_lines = "\n".join(
-                            f"- {label}" for label in match_labels.values()
-                        )
-                        st.warning(
-                            "Potential existing clients found:\n" + warning_lines
-                        )
-                        match_options = [-1] + list(match_labels.keys())
-                        default_choice = (
-                            client_match_choice_state
-                            if client_match_choice_state in match_options
-                            else -1
-                        )
-                        match_choice_form = st.selectbox(
-                            "Would you like to link one of these clients?",
-                            options=match_options,
-                            index=match_options.index(default_choice),
-                            format_func=lambda value: (
-                                "Create new client"
-                                if value == -1
-                                else match_labels.get(value, f"Client #{value}")
-                            ),
-                            key="quote_client_match_choice",
-                        )
-                    else:
-                        st.session_state.pop("quote_client_match_choice", None)
-                else:
-                    st.session_state.pop("quote_client_match_choice", None)
-            submitted = st.form_submit_button("Calculate quote")
-
-        stored_inputs = session_inputs
-
-        if submitted:
-            if not origin_value or not destination_value:
-                st.error("Origin and destination are required to calculate a quote.")
-            else:
-                margin_to_apply = float(margin_percent_value) if apply_margin else None
-                selected_client_id_final = selected_client_id_form
-                client_details_to_store: Optional[ClientDetails]
-                if (
-                    entered_client_details_form
-                    and entered_client_details_form.has_any_data()
-                ):
-                    client_details_to_store = entered_client_details_form
-                else:
-                    client_details_to_store = None
-
-                submission_valid = True
-                if selected_client_id_final is None and client_details_to_store is not None:
-                    if match_choice_form not in (-1, None):
-                        selected_client_id_final = int(match_choice_form)
-
-                if submission_valid:
-                    quote_inputs = QuoteInput(
-                        origin=origin_value,
-                        destination=destination_value,
-                        cubic_m=float(cubic_m_value),
-                        quote_date=quote_date_value,
-                        modifiers=list(selected_modifier_ids),
-                        target_margin_percent=margin_to_apply,
-                        country=country_value or COUNTRY_DEFAULT,
-                        client_id=selected_client_id_final,
-                        client_details=client_details_to_store,
-                    )
-                    try:
-                        result = calculate_quote(conn, quote_inputs)
-                    except RuntimeError as exc:
-                        st.error(str(exc))
-                    except ValueError as exc:
-                        st.error(str(exc))
-                    else:
-                        st.session_state["quote_inputs"] = quote_inputs
-                        st.session_state["quote_result"] = result
-                        st.session_state["quote_manual_override_enabled"] = False
-                        st.session_state["quote_manual_override_amount"] = float(
-                            result.final_quote
-                        )
-                        st.session_state["quote_pin_override"] = _initial_pin_state(result)
-                        st.session_state.pop(_HAVERSINE_MODAL_STATE_KEY, None)
-                        _set_query_params(view="Quote builder")
-                        st.success("Quote calculated. Review the breakdown below.")
-                        stored_inputs = quote_inputs
-                        quote_result = result
-
-        stored_inputs = st.session_state.get("quote_inputs")
-        quote_result = st.session_state.get("quote_result")
-
-        if quote_result and stored_inputs:
-            st.markdown("#### Quote output")
-            manual_enabled_key = "quote_manual_override_enabled"
-            manual_amount_key = "quote_manual_override_amount"
-            if manual_enabled_key not in st.session_state:
-                st.session_state[manual_enabled_key] = (
-                    quote_result.manual_quote is not None
-                )
-            if manual_amount_key not in st.session_state:
-                st.session_state[manual_amount_key] = float(
-                    quote_result.manual_quote
-                    if quote_result.manual_quote is not None
-                    else quote_result.final_quote
-                )
-            manual_override_enabled = bool(
-                st.session_state.get(manual_enabled_key, False)
-            )
-            manual_override_amount = float(
-                st.session_state.get(
-                    manual_amount_key, quote_result.final_quote
-                )
-            )
-            if manual_override_enabled:
-                quote_result.manual_quote = manual_override_amount
-            else:
-                quote_result.manual_quote = None
-            quote_result.summary_text = build_summary(stored_inputs, quote_result)
-            st.session_state["quote_result"] = quote_result
-            client_label: Optional[str] = None
-            if stored_inputs.client_details and stored_inputs.client_details.display_name():
-                client_label = stored_inputs.client_details.display_name()
-            elif stored_inputs.client_id is not None:
-                client_label = client_label_map.get(stored_inputs.client_id)
-            if client_label:
-                st.write(f"**Client:** {client_label}")
-            st.write(
-                f"**Route:** {quote_result.origin_resolved} → {quote_result.destination_resolved}"
-            )
-            st.write(
-                f"**Distance:** {quote_result.distance_km:.1f} km ({quote_result.duration_hr:.1f} h)"
-            )
-
-            suggestion_cols = st.columns(2)
-
-            def _render_address_feedback(
-                col: "st.delta_generator.DeltaGenerator",
-                label: str,
-                candidates: Optional[List[str]],
-                suggestions: Optional[List[str]],
-                ambiguities: Optional[Dict[str, Sequence[str]]],
-            ) -> None:
-                clean_candidates = [c for c in candidates or [] if c]
-                clean_suggestions = [s for s in suggestions or [] if s]
-                clean_ambiguities = {
-                    abbr: list(options)
-                    for abbr, options in (ambiguities or {}).items()
-                    if options
-                }
-                if not (
-                    clean_candidates
-                    or clean_suggestions
-                    or clean_ambiguities
-                ):
-                    col.caption(f"No {label.lower()} corrections suggested.")
-                    return
-
-                col.markdown(f"**{label} corrections & suggestions**")
-                if clean_candidates:
-                    col.caption("Candidates considered during normalization:")
-                    col.markdown(
-                        "\n".join(f"- {candidate}" for candidate in clean_candidates)
-                    )
-                if clean_suggestions:
-                    col.caption("Autocorrected place names from geocoding:")
-                    col.markdown(
-                        "\n".join(f"- {suggestion}" for suggestion in clean_suggestions)
-                    )
-                if clean_ambiguities:
-                    col.caption("Ambiguous abbreviations detected:")
-                    col.markdown(
-                        "\n".join(
-                            f"- **{abbr}** → {', '.join(options)}"
-                            for abbr, options in clean_ambiguities.items()
-                        )
-                    )
-
-            _render_address_feedback(
-                suggestion_cols[0],
-                "Origin",
-                quote_result.origin_candidates,
-                quote_result.origin_suggestions,
-                quote_result.origin_ambiguities,
-            )
-            _render_address_feedback(
-                suggestion_cols[1],
-                "Destination",
-                quote_result.destination_candidates,
-                quote_result.destination_suggestions,
-                quote_result.destination_ambiguities,
-            )
-
-            pin_state = _ensure_pin_state(quote_result)
-            pin_related_notes: List[str] = []
-            straight_line_detected = False
-            for notes in (
-                quote_result.origin_suggestions,
-                quote_result.destination_suggestions,
-            ):
-                for note in notes or []:
-                    if not note:
-                        continue
-                    lowered = note.lower()
-                    if _PIN_NOTE.lower() in lowered or "straight-line" in lowered:
-                        pin_related_notes.append(note)
-                    if "straight-line" in lowered:
-                        straight_line_detected = True
-
-            if straight_line_detected and not st.session_state.get(
-                _HAVERSINE_MODAL_STATE_KEY, False
-            ):
-                with st.modal(
-                    "Routing fell back to a straight-line estimate",
-                    key="quote_haversine_modal",
-                ):
-                    st.warning(
-                        "OpenRouteService could not find a routable point within 350 m. "
-                        "The quote currently relies on a straight-line distance estimate."
-                    )
-                    st.caption(
-                        "Drop manual pins, click \"Snap pins to nearest road\", or edit the coordinates "
-                        "below before recalculating to improve accuracy."
-                    )
-                    if st.button(
-                        "Dismiss warning", key="quote_haversine_modal_dismiss"
-                    ):
-                        st.session_state[_HAVERSINE_MODAL_STATE_KEY] = True
-                        _rerun_app()
-
-            st.markdown("#### Manual pins for routing")
-            if pin_related_notes and not pin_state.get("enabled", False):
-                st.warning(
-                    "Routing relied on snapping or a straight-line fallback. Drop pins or use "
-                    '"Snap pins to nearest road" to improve accuracy before recalculating.'
-                )
-            else:
-                st.caption(
-                    "Drop a pin for each address when ORS cannot find a routable point within 350 m."
-                )
-            st.caption(
-                "Click the maps or edit the latitude/longitude values to fine-tune the override pins."
-            )
-
-            control_cols = st.columns([3, 2])
-            with control_cols[1]:
-                snap_feedback = st.empty()
-                snap_clicked = st.button(
-                    "Snap pins to nearest road",
-                    type="secondary",
-                    key="quote_snap_to_nearest_road",
-                    help=(
-                        "Use OpenRouteService's nearest endpoint to move each pin onto the closest "
-                        "routable road before recalculating."
-                    ),
-                )
-            if snap_clicked:
-                origin_lon_default, origin_lat_default = _pin_coordinates(
-                    pin_state["origin"]
-                )
-                dest_lon_default, dest_lat_default = _pin_coordinates(
-                    pin_state["destination"]
-                )
-                try:
-                    snap_result = snap_coordinates_to_road(
-                        (origin_lon_default, origin_lat_default),
-                        (dest_lon_default, dest_lat_default),
-                    )
-                except RuntimeError as exc:
-                    snap_feedback.error(f"Unable to snap pins: {exc}")
-                else:
-                    pin_state["origin"] = {
-                        "lon": snap_result.origin[0],
-                        "lat": snap_result.origin[1],
-                    }
-                    pin_state["destination"] = {
-                        "lon": snap_result.destination[0],
-                        "lat": snap_result.destination[1],
-                    }
-                    st.session_state[_pin_lon_key("quote_origin_pin_map")] = float(
-                        snap_result.origin[0]
-                    )
-                    st.session_state[_pin_lat_key("quote_origin_pin_map")] = float(
-                        snap_result.origin[1]
-                    )
-                    st.session_state[_pin_lon_key("quote_destination_pin_map")] = float(
-                        snap_result.destination[0]
-                    )
-                    st.session_state[_pin_lat_key("quote_destination_pin_map")] = float(
-                        snap_result.destination[1]
-                    )
-                    if snap_result.changed:
-                        snap_feedback.success(
-                            "Pins snapped to the nearest routable road."
-                        )
-                    else:
-                        snap_feedback.info(
-                            "Pins already align with the nearest routable road."
-                        )
-
-            pin_cols = st.columns(2)
-            with pin_cols[0]:
-                origin_lon, origin_lat = _render_pin_picker(
-                    "Origin", map_key="quote_origin_pin_map", entry=pin_state["origin"]
-                )
-                st.caption(f"Origin pin: {origin_lat:.5f}, {origin_lon:.5f}")
-            with pin_cols[1]:
-                dest_lon, dest_lat = _render_pin_picker(
-                    "Destination",
-                    map_key="quote_destination_pin_map",
-                    entry=pin_state["destination"],
-                )
-                st.caption(f"Destination pin: {dest_lat:.5f}, {dest_lon:.5f}")
-
-            pin_state["origin"] = {"lon": origin_lon, "lat": origin_lat}
-            pin_state["destination"] = {"lon": dest_lon, "lat": dest_lat}
-            use_manual_pins = st.checkbox(
-                "Use these pins for the next calculation",
-                value=pin_state.get("enabled", False),
-                key="quote_use_pin_overrides",
-                help="Enable to re-run the quote using the pins above.",
-            )
-            pin_state["enabled"] = use_manual_pins
-            st.session_state["quote_pin_override"] = pin_state
-
-            if st.button(
-                "Recalculate with manual pins",
-                type="secondary",
-                disabled=not use_manual_pins,
-            ):
-                manual_inputs = QuoteInput(
-                    origin=stored_inputs.origin,
-                    destination=stored_inputs.destination,
-                    cubic_m=stored_inputs.cubic_m,
-                    quote_date=stored_inputs.quote_date,
-                    modifiers=list(stored_inputs.modifiers),
-                    target_margin_percent=stored_inputs.target_margin_percent,
-                    country=stored_inputs.country,
-                    origin_coordinates=(origin_lon, origin_lat),
-                    destination_coordinates=(dest_lon, dest_lat),
-                )
-                try:
-                    manual_result = calculate_quote(conn, manual_inputs)
-                except RuntimeError as exc:
-                    st.error(str(exc))
-                except ValueError as exc:
-                    st.error(str(exc))
-                else:
-                    st.session_state["quote_inputs"] = manual_inputs
-                    st.session_state["quote_result"] = manual_result
-                    st.session_state["quote_manual_override_enabled"] = False
-                    st.session_state["quote_manual_override_amount"] = float(
-                        manual_result.final_quote
-                    )
-                    pin_override_state = _initial_pin_state(manual_result)
-                    pin_override_state["enabled"] = True
-                    st.session_state["quote_pin_override"] = pin_override_state
-                    st.session_state.pop(_HAVERSINE_MODAL_STATE_KEY, None)
-                    st.success("Quote recalculated using manual pins.")
-                    _set_query_params(view="Quote builder")
-                    _rerun_app()
-
-            metric_cols = st.columns(4)
-            metric_cols[0].metric(
-                "Final quote", format_currency(quote_result.final_quote)
-            )
-            metric_cols[1].metric(
-                "Total before margin",
-                format_currency(quote_result.total_before_margin),
-            )
-            metric_cols[2].metric(
-                "Base subtotal", format_currency(quote_result.base_subtotal)
-            )
-            metric_cols[3].metric(
-                "Distance (km)",
-                f"{quote_result.distance_km:.1f}",
-                f"{quote_result.duration_hr:.1f} h",
-            )
-            st.markdown(
-                f"**Seasonal adjustment:** {quote_result.seasonal_label} ×{quote_result.seasonal_multiplier:.2f}"
-            )
-            if quote_result.margin_percent is not None:
-                st.markdown(
-                    f"**Margin:** {quote_result.margin_percent:.1f}% applied."
-                )
-            else:
-                st.markdown("**Margin:** Not applied.")
-
-            with st.expander("Base calculation details"):
-                base_rows = [
-                    {
-                        "Component": "Base callout",
-                        "Amount": format_currency(
-                            quote_result.base_components.get("base_callout", 0.0)
-                        ),
-                    },
-                    {
-                        "Component": "Handling cost",
-                        "Amount": format_currency(
-                            quote_result.base_components.get("handling_cost", 0.0)
-                        ),
-                    },
-                    {
-                        "Component": "Linehaul cost",
-                        "Amount": format_currency(
-                            quote_result.base_components.get("linehaul_cost", 0.0)
-                        ),
-                    },
-                    {
-                        "Component": "Effective volume (m³)",
-                        "Amount": f"{quote_result.base_components.get('effective_m3', stored_inputs.cubic_m):.1f}",
-                    },
-                    {
-                        "Component": "Load factor",
-                        "Amount": f"{quote_result.base_components.get('load_factor', 1.0):.2f}",
-                    },
-                ]
-                st.table(pd.DataFrame(base_rows))
-
-            with st.expander("Modifiers applied"):
-                if quote_result.modifier_details:
-                    modifier_rows = [
-                        {
-                            "Modifier": item["label"],
-                            "Calculation": (
-                                format_currency(item["value"])
-                                if item["calc_type"] == "flat"
-                                else f"{item['value'] * 100:.0f}% of base"
-                            ),
-                            "Amount": format_currency(item["amount"]),
-                        }
-                        for item in quote_result.modifier_details
-                    ]
-                    st.table(pd.DataFrame(modifier_rows))
-                else:
-                    st.write("No modifiers applied.")
-
-            with st.expander("Copyable summary"):
-                st.code(quote_result.summary_text)
-
-            st.markdown("#### Submit quote")
-            st.caption(
-                "Optionally override the calculated quote amount before saving."
-            )
-            manual_override_enabled = st.checkbox(
-                "Apply manual quote override",
-                help=(
-                    "Enable to store a different quote amount alongside the calculated value."
-                ),
-                key=manual_enabled_key,
-            )
-            manual_override_amount = st.number_input(
-                "Manual quote amount",
-                min_value=0.0,
-                step=50.0,
-                format="%.2f",
-                key=manual_amount_key,
-                disabled=not manual_override_enabled,
-                help=(
-                    "Enter the agreed quote to store in addition to the calculated amount."
-                ),
-            )
-            action_cols = st.columns(2)
-            if action_cols[0].button("Submit quote", type="primary"):
-                manual_to_store: Optional[float]
-                if manual_override_enabled:
-                    manual_to_store = float(manual_override_amount)
-                    if not math.isfinite(manual_to_store) or manual_to_store <= 0:
-                        st.error("Manual quote must be a positive number.")
-                        manual_to_store = None
-                    else:
-                        quote_result.manual_quote = manual_to_store
-                else:
-                    manual_to_store = None
-                    quote_result.manual_quote = None
-                quote_result.summary_text = build_summary(stored_inputs, quote_result)
-                st.session_state["quote_result"] = quote_result
-                should_persist = not (
-                    manual_override_enabled and manual_to_store is None
-                )
-                trigger_null_client_modal = False
-                if should_persist:
-                    if not stored_inputs:
-                        st.error("Calculate the quote before submitting it.")
-                        should_persist = False
-                    else:
-                        client_details = stored_inputs.client_details
-                        if stored_inputs.client_id is None:
-                            if client_details and client_details.has_any_data():
-                                if not client_details.has_identity():
-                                    st.error(
-                                        "Provide a company name or both first and last names when creating a client."
-                                    )
-                                    should_persist = False
-                            else:
-                                trigger_null_client_modal = True
-                                should_persist = False
-                if trigger_null_client_modal:
-                    st.session_state[_NULL_CLIENT_MODAL_STATE_KEY] = True
-                if should_persist:
-                    try:
-                        rowid = persist_quote(
-                            conn,
-                            stored_inputs,
-                            quote_result,
-                            manual_quote=manual_to_store,
-                        )
-                    except Exception as exc:  # pragma: no cover - UI feedback path
-                        st.error(f"Failed to persist quote: {exc}")
-                    else:
-                        st.session_state["quote_saved_rowid"] = rowid
-                        _set_query_params(view="Quote builder")
-                        _rerun_app()
-            if action_cols[1].button("Reset quote builder"):
-                st.session_state.pop("quote_result", None)
-                st.session_state.pop("quote_inputs", None)
-                st.session_state.pop("quote_manual_override_enabled", None)
-                st.session_state.pop("quote_manual_override_amount", None)
-                st.session_state.pop("quote_pin_override", None)
-                st.session_state.pop(_HAVERSINE_MODAL_STATE_KEY, None)
-                _set_query_params(view="Quote builder")
-                _rerun_app()
-
-            if st.session_state.get(_NULL_CLIENT_MODAL_STATE_KEY):
-                if _NULL_CLIENT_COMPANY_KEY not in st.session_state:
-                    st.session_state[_NULL_CLIENT_COMPANY_KEY] = (
-                        _NULL_CLIENT_DEFAULT_COMPANY
-                    )
-                if _NULL_CLIENT_NOTES_KEY not in st.session_state:
-                    st.session_state[_NULL_CLIENT_NOTES_KEY] = (
-                        _NULL_CLIENT_DEFAULT_NOTES
-                    )
-                with st.modal(
-                    "Link this quote to a client",
-                    key="quote_null_client_modal",
-                ):
-                    st.warning(
-                        "A client must be linked before submitting a quote."
-                        " Select an existing client in the form or use the placeholder"
-                        " details below."
-                    )
-                    st.caption(
-                        "Applying the filler details will populate the client fields in the"
-                        " quote builder. You can then review and submit again."
-                    )
-                    st.text_input(
-                        "Filler company name",
-                        key=_NULL_CLIENT_COMPANY_KEY,
-                    )
-                    st.text_area(
-                        "Notes (optional)",
-                        key=_NULL_CLIENT_NOTES_KEY,
-                        height=80,
-                    )
-                    modal_cols = st.columns(2)
-                    if modal_cols[0].button(
-                        "Use filler client", key="quote_null_client_apply"
-                    ):
-                        filler_details = ClientDetails(
-                            company_name=(
-                                st.session_state.get(_NULL_CLIENT_COMPANY_KEY)
-                                or _NULL_CLIENT_DEFAULT_COMPANY
-                            ),
-                            notes=(
-                                st.session_state.get(_NULL_CLIENT_NOTES_KEY)
-                                or _NULL_CLIENT_DEFAULT_NOTES
-                            ),
-                        )
-                        if stored_inputs:
-                            stored_inputs.client_id = None
-                            stored_inputs.client_details = filler_details
-                            st.session_state["quote_inputs"] = stored_inputs
-                        st.session_state[_NULL_CLIENT_MODAL_STATE_KEY] = False
-                        _rerun_app()
-                    if modal_cols[1].button(
-                        "Cancel", key="quote_null_client_cancel"
-                    ):
-                        st.session_state[_NULL_CLIENT_MODAL_STATE_KEY] = False
-                        st.session_state.pop(_NULL_CLIENT_COMPANY_KEY, None)
-                        st.session_state.pop(_NULL_CLIENT_NOTES_KEY, None)
-                        _rerun_app()
+        render_quote_builder(filtered_df, filtered_mapping, conn, st.session_state)
 
     with tab_map["Optimizer"]:
-        st.markdown("### Margin optimizer")
-        st.caption(
-            "Generate corridor-level price uplift suggestions using the filtered job set."
-        )
-
-        optimizer_state: Dict[str, Any] = st.session_state.setdefault(
-            "optimizer_state", {}
-        )
-
-        if not can_run_optimizer(filtered_df):
-            st.info(
-                "Optimizer requires price and cost per m³ columns. Import jobs with "
-                "$ / m³ and cost data to enable recommendations."
-            )
-        else:
-            defaults = optimizer_state.get(
-                "defaults",
-                {
-                    "target_margin": 120.0,
-                    "max_uplift": 25.0,
-                    "min_job_count": 3,
-                },
-            )
-            with st.form("optimizer_form"):
-                target_margin = st.number_input(
-                    "Target margin per m³",
-                    min_value=0.0,
-                    value=float(defaults.get("target_margin", 120.0)),
-                    step=5.0,
-                    help="Desired margin buffer applied to each corridor's historical median.",
-                )
-                max_uplift_pct = st.slider(
-                    "Cap uplift %",
-                    min_value=0.0,
-                    max_value=100.0,
-                    value=float(defaults.get("max_uplift", 25.0)),
-                    help="Limit how far the optimizer can move prices above the historical median.",
-                )
-                min_job_count = st.slider(
-                    "Minimum jobs per corridor",
-                    min_value=1,
-                    max_value=10,
-                    value=int(defaults.get("min_job_count", 3)),
-                    help="Require a minimum number of jobs before trusting a recommendation.",
-                )
-                submitted = st.form_submit_button(
-                    "Run optimizer", help="Recalculate uplifts for the current filters."
-                )
-
-            if submitted:
-                params = OptimizerParameters(
-                    target_margin_per_m3=target_margin,
-                    max_uplift_pct=max_uplift_pct,
-                    min_job_count=min_job_count,
-                )
-                run = run_margin_optimizer(filtered_df, params)
-                optimizer_state["last_run"] = run
-                optimizer_state["defaults"] = {
-                    "target_margin": target_margin,
-                    "max_uplift": max_uplift_pct,
-                    "min_job_count": min_job_count,
-                }
-                st.session_state["optimizer_state"] = optimizer_state
-                if run.recommendations:
-                    st.success("Optimizer complete — review the suggested uplifts below.")
-                else:
-                    st.warning(
-                        "Optimizer finished but no corridors met the criteria. Try lowering the minimum job count."
-                    )
-
-            last_run: Optional[OptimizerRun] = optimizer_state.get("last_run")
-            if last_run:
-                run_time = last_run.executed_at.strftime("%Y-%m-%d %H:%M UTC")
-                st.caption(
-                    f"Last run: {run_time} · Target margin ${last_run.parameters.target_margin_per_m3:,.0f}/m³ · "
-                    f"Max uplift {last_run.parameters.max_uplift_pct:.0f}%"
-                )
-                recommendations_df = recommendations_to_frame(last_run.recommendations)
-                if recommendations_df.empty:
-                    st.info(
-                        "No eligible corridors were found — adjust parameters or widen the dashboard filters."
-                    )
-                else:
-                    metric_cols = st.columns(3)
-                    metric_cols[0].metric(
-                        "Corridors analysed", len(recommendations_df)
-                    )
-                    metric_cols[1].metric(
-                        "Median uplift $/m³",
-                        f"${recommendations_df['Uplift $/m³'].median():,.2f}",
-                    )
-                    metric_cols[2].metric(
-                        "Highest uplift %",
-                        f"{recommendations_df['Uplift %'].max():.1f}%",
-                    )
-
-                    chart = px.bar(
-                        recommendations_df,
-                        x="Corridor",
-                        y="Uplift $/m³",
-                        hover_data=["Recommended $/m³", "Uplift %", "Notes"],
-                        title="Recommended uplift by corridor",
-                    )
-                    chart.update_layout(margin={"l": 0, "r": 0, "t": 40, "b": 0})
-                    st.plotly_chart(chart, use_container_width=True)
-
-                    st.dataframe(recommendations_df, use_container_width=True)
-
-                    csv_data = recommendations_df.to_csv(index=False)
-                    st.download_button(
-                        "Download optimizer report",
-                        csv_data,
-                        file_name="optimizer_recommendations.csv",
-                        mime="text/csv",
-                    )
-
-        st.info(
-            "Optimizer works on the same filters applied across the dashboard, making it safe for non-technical teams to explore 'what if' pricing scenarios."
-        )
+        render_optimizer(filtered_df)
 
     st.subheader("Filtered jobs")
     display_columns = [
