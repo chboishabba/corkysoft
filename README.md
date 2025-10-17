@@ -62,6 +62,11 @@ Optional environment variables:
 * `ROUTES_DB` → SQLite database path (default: `routes.db`)
 * `ORS_COUNTRY` → Default country context (default: `Australia`)
 
+> 💡 Commands that do not invoke geocoding or routing (`add`, `add-csv`,
+> `list`, `cost`, and `map` when route geometry is already stored) run fine
+> without `ORS_API_KEY`. Provide the key only when you need to call
+> OpenRouteService (e.g. `run` or `import-history --geocode/--route`).
+
 ---
 
 ## 🚀 Usage
@@ -87,9 +92,20 @@ Key visuals include:
 - A dynamic break-even engine that recalculates per-job cost floors using network-wide fuel, driver, maintenance and overhead settings stored in `global_parameters`.
 - Corridor insights summarising job counts, weighted $/m³ and below break-even ratios aggregated into bidirectional lanes for systemic diagnostics.
 - A non-technical optimizer tab that recommends corridor price uplifts from the filtered data and offers a CSV export for action lists.
+- Continuous profitability overlays auto-balance the colour scale around break-even and annotate origin/destination markers in hover text for faster route diagnostics.
+- Cost vs Price (%) view surfaces corridors where operating costs consume an outsized share of the quoted price, using the same interactive route map controls.
 
 ```bash
-streamlit run streamlit_price_distribution.py
+streamlit run dashboard/app.py
+```
+
+Alternatively, import the module directly if you are embedding the UI in a
+larger application:
+
+```python
+from dashboard.app import render_price_distribution_dashboard
+
+render_price_distribution_dashboard()
 ```
 
 By default it reads from `routes.db`. Set `CORKYSOFT_DB` or `ROUTES_DB` to point at a different SQLite database.
@@ -98,6 +114,8 @@ Use the **Import historical jobs from CSV** expander in the sidebar to load data
 accepts the same headers as the CLI importer (`date`, `origin`, `destination`, `m3`, `quoted_price`, `client`) and will
 calculate per-m³ rates automatically if only revenue and volume are provided. Switch the dataset selector to **Saved quick
 quotes** to analyse submissions from the in-app quote builder alongside historical jobs.
+
+Starting from an empty database? Click `Initialise database tables` in the sidebar to bootstrap the required schema before importing data or creating new quotes. The legacy and modular Streamlit entry points now share stable widget keys so this button no longer clashes with duplicate IDs during app startup.
 
 Inside the Quote builder tab you can expand the **Client details** panel to link the quote with an existing customer or create
 a new one. The UI highlights potential duplicates whenever the full name, phone number or complete address matches a stored
@@ -242,11 +260,38 @@ python routes_to_sqlite.py list
 Example output:
 
 ```
-ID    Origin             → Origin (resolved)             Destination         → Destination (resolved)          Km      Hours   Total $      Updated (UTC)
----------------------------------------------------------------------------------------------------------------------------------------------------------
-5     Melbourne          Melbourne VIC, Australia        Brisbane            Brisbane QLD, Australia          1768.4   18.80   5,175.07     2025-10-02T14:46:00+00:00
-1     Melbourne          Melbourne VIC, Australia        Sydney              Sydney NSW, Australia             869.4    9.33   2,561.35     2025-10-02T14:41:10+00:00
+ID    Origin             → Origin (resolved)             Destination         → Destination (resolved)          Km      Hours   Total $      Internal $    Updated (UTC)
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+5     Melbourne          Melbourne VIC, Australia        Brisbane            Brisbane QLD, Australia          1768.4   18.80   5,175.07     3,850.00       2025-10-02T14:46:00+00:00
+1     Melbourne          Melbourne VIC, Australia        Sydney              Sydney NSW, Australia             869.4    9.33   2,561.35     1,720.00       2025-10-02T14:41:10+00:00
 ```
+
+#### Track private internal costs
+
+You can now record detailed cost components per job — for example separate crew hours,
+truck operating time, fuel, or one-off surcharges. Everything is stored in the local
+`routes.db` file so your commercial assumptions stay private.
+
+```bash
+# Add crew labour at $45/hr for 12 hours
+python routes_to_sqlite.py cost add 1 crew --quantity 12 --rate 45 --unit hr --description "Crew wages"
+
+# Add a truck running cost using an explicit total
+python routes_to_sqlite.py cost add 1 truck --total 950 --description "Prime mover hire"
+
+# Capture fuel using litres × rate
+python routes_to_sqlite.py cost add 1 fuel --quantity 320 --rate 1.85 --unit L --description "Diesel"
+
+# Review the detailed ledger
+python routes_to_sqlite.py cost list 1
+
+# Summarise the private spend by category
+python routes_to_sqlite.py cost summary 1
+```
+
+The CLI automatically rolls each component into an `Internal $` total visible in the
+`list` report so you can compare publicly quoted prices against the true underlying
+cost base.
 
 #### Import historical jobs
 

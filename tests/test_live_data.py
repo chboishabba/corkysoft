@@ -229,17 +229,11 @@ def test_ingest_clamps_progress_before_time_projections():
     try:
         harness = TruckTelemetryHarness(conn)
         recorded_at = datetime(2024, 1, 1, 10, 0, tzinfo=UTC)
-def test_ingest_preserves_zero_coordinates():
-    conn = _build_conn()
-    try:
-        harness = TruckTelemetryHarness(conn)
-        recorded_at = datetime(2024, 1, 3, 9, 0, tzinfo=UTC)
 
         harness.ingest(
             [
                 TruckGpsSnapshot(
                     truck_id="CLAMP-1",
-                    truck_id="ZERO-1",
                     lat=-27.4705,
                     lon=153.0260,
                     status="en_route",
@@ -247,10 +241,6 @@ def test_ingest_preserves_zero_coordinates():
                     job_id=1,
                     progress=1.2,
                     travel_seconds=3600.0,
-                    origin_lat=0.0,
-                    origin_lon=153.0260,
-                    dest_lat=None,
-                    dest_lon=0.0,
                 )
             ]
         )
@@ -274,6 +264,37 @@ def test_ingest_preserves_zero_coordinates():
         expected_started = recorded_at - timedelta(seconds=travel_seconds)
         assert started_at == expected_started
         assert eta == expected_started + timedelta(seconds=travel_seconds)
+    finally:
+        conn.close()
+
+
+def test_ingest_preserves_zero_coordinates():
+    conn = _build_conn()
+    try:
+        harness = TruckTelemetryHarness(conn)
+        recorded_at = datetime(2024, 1, 3, 9, 0, tzinfo=UTC)
+
+        harness.ingest(
+            [
+                TruckGpsSnapshot(
+                    truck_id="ZERO-1",
+                    lat=-27.4705,
+                    lon=153.0260,
+                    status="en_route",
+                    recorded_at=recorded_at,
+                    job_id=1,
+                    progress=0.5,
+                    travel_seconds=3600.0,
+                    origin_lat=0.0,
+                    origin_lon=153.0260,
+                    dest_lat=None,
+                    dest_lon=0.0,
+                )
+            ]
+        )
+
+        row = conn.execute(
+            """
             SELECT origin_lat, origin_lon, dest_lat, dest_lon
             FROM active_routes
             WHERE truck_id=?

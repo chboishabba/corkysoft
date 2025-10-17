@@ -33,7 +33,7 @@ This merges everything from:
 | **Multi-route Folium map**            |    ✅   | Working map output.                         |
 | **CustomIcon fix**                    |    ✅   | Bug resolved.                               |
 | **Break-even / margin overlays**      |   🔜   | Add markers for ±10–50 % profit.            |
-| **Interactive dashboard (Streamlit)** |   🔜   | To visualise costs and lanes interactively. |
+| **Interactive dashboard (Streamlit)** |   🧩   | Sidebar initialisation workflow stable; continuous map colour scaling, Cost vs Price (%) view and enhanced tooltips verified while wider dashboard build continues. |
 | **Profit & volume heatmaps**          |   🔜   | Highlight high-margin or frequent routes.   |
 
 ---
@@ -62,6 +62,7 @@ This merges everything from:
 | **Seasonal margin uplift (20–80 %)**                     |   🔜   | Add seasonal coefficient.              |
 | **Backhaul / container sharing**                         |   🔜   | Handle under-/over-utilisation.        |
 | **Truck / driver cost baselines**                        |    ✅   | Base fuel/driver/maintenance + overhead parameters drive break-even engine. |
+| **Private cost component ledger**                        |    ✅   | Record crew, truck, fuel and other cost inputs per job inside SQLite.       |
 
 ---
 
