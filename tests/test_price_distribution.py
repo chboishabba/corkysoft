@@ -20,6 +20,7 @@ from analytics.price_distribution import (
     aggregate_corridor_performance,
     build_isochrone_polygons,
     build_heatmap_source,
+    build_price_history_series,
     create_histogram,
     create_metro_profitability_figure,
     create_m3_margin_figure,
@@ -37,6 +38,7 @@ from analytics.price_distribution import (
     prepare_profitability_route_data,
     prepare_route_map_data,
     summarise_distribution,
+    summarise_last_year_distributions,
     summarise_profitability,
 )
 from dashboard.components.maps import build_route_map
@@ -516,6 +518,88 @@ def test_summarise_distribution_and_histogram():
         assert any("kurtosis" in (getattr(ann, "text", "") or "") for ann in fig.layout.annotations)
     finally:
         conn.close()
+
+
+def test_build_price_history_series_aggregates_by_frequency():
+    df = pd.DataFrame(
+        {
+            "job_date": pd.to_datetime(
+                [
+                    "2024-01-01",
+                    "2024-01-08",
+                    "2024-01-15",
+                    "2023-01-01",
+                    "2023-01-08",
+                    "2023-01-15",
+                ]
+            ),
+            "price_per_m3": [200.0, 210.0, 220.0, 180.0, 185.0, 190.0],
+            "margin_per_m3": [40.0, 42.0, 44.0, 35.0, 36.0, 38.0],
+            "margin_total_pct": [0.2, 0.22, 0.25, 0.18, 0.19, 0.2],
+            "origin_city": ["Brisbane", "Brisbane", "Sydney", "Brisbane", "Brisbane", "Sydney"],
+            "destination_city": ["Melbourne", "Sydney", "Melbourne", "Melbourne", "Sydney", "Melbourne"],
+        }
+    )
+
+    series = build_price_history_series(
+        df,
+        frequency="weekly",
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 31),
+    )
+
+    assert not series.current_overall.empty
+    assert not series.previous_year_overall.empty
+    assert set(series.current_overall.columns) >= {"period", "price_per_m3", "job_count"}
+    assert set(series.previous_year_overall.columns) >= {"period", "price_per_m3", "job_count"}
+    assert series.current_overall["job_count"].sum() == 3
+    assert series.previous_year_overall["job_count"].sum() == 3
+
+    assert not series.current_by_origin.empty
+    assert "origin" in series.current_by_origin.columns
+    assert set(series.current_by_origin["origin"].unique()) == {"Brisbane", "Sydney"}
+
+    assert not series.current_by_destination.empty
+    assert "destination" in series.current_by_destination.columns
+    assert "price_per_m3" in series.current_by_destination.columns
+
+
+def test_summarise_last_year_distributions_returns_previous_frames():
+    df = pd.DataFrame(
+        {
+            "job_date": pd.to_datetime([
+                "2024-02-10",
+                "2024-02-18",
+                "2023-02-10",
+                "2023-02-18",
+                "2023-02-25",
+            ]),
+            "price_per_m3": [205.0, 215.0, 180.0, 182.0, 188.0],
+            "margin_per_m3": [50.0, 55.0, 40.0, 42.0, 45.0],
+            "margin_total_pct": [0.21, 0.23, 0.19, 0.18, 0.2],
+            "origin_city": ["Brisbane", "Sydney", "Brisbane", "Sydney", "Brisbane"],
+            "destination_city": ["Perth", "Perth", "Adelaide", "Perth", "Adelaide"],
+        }
+    )
+
+    summary = summarise_last_year_distributions(
+        df,
+        start_date=date(2024, 2, 1),
+        end_date=date(2024, 2, 29),
+    )
+
+    overall = summary["overall"]
+    assert not overall.empty
+    assert set(overall.columns) >= {"job_date", "price_per_m3", "series"}
+    assert (overall["series"].unique() == ["Previous year"]).all()
+
+    by_origin = summary["by_origin"]
+    assert not by_origin.empty
+    assert set(by_origin["origin"].unique()) == {"Brisbane", "Sydney"}
+
+    by_destination = summary["by_destination"]
+    assert not by_destination.empty
+    assert set(by_destination["destination"].unique()) == {"Adelaide", "Perth"}
 
 
 def test_profitability_summary_and_views():
