@@ -111,6 +111,31 @@ _ISOCHRONE_PALETTE = [
     "#FF97FF",
     "#FECB52",
 ]
+
+_LIVE_NETWORK_TAB_LABEL = "Live network overview"
+
+
+def _hex_to_rgb(value: str) -> Tuple[int, int, int]:
+    """Convert ``value`` (hex or rgb string) into an ``(r, g, b)`` tuple."""
+
+    colour = value.strip()
+    if colour.startswith("#"):
+        digits = colour.lstrip("#")
+        if len(digits) == 3:
+            digits = "".join(ch * 2 for ch in digits)
+        if len(digits) != 6:
+            raise ValueError(f"Unsupported hex colour format: {value}")
+        return tuple(int(digits[idx : idx + 2], 16) for idx in (0, 2, 4))  # type: ignore[arg-type]
+
+    if colour.startswith("rgb"):
+        start = colour.find("(")
+        end = colour.find(")")
+        if start == -1 or end == -1 or end <= start:
+            raise ValueError(f"Unsupported rgb colour format: {value}")
+        components = colour[start + 1 : end].split(",")[:3]
+        return tuple(int(float(component.strip())) for component in components)
+
+    raise ValueError(f"Unsupported colour format: {value}")
 _QUOTE_COUNTRY_STATE_KEY = "quote_builder_country"
 def _initial_pin_state(result: QuoteResult) -> Dict[str, Any]:
     return {
@@ -977,7 +1002,7 @@ def render_network_map(
     *,
     toggle_key: str = "network_map_live_overlay_toggle",
 ) -> None:
-    st.markdown("### Live network overview")
+    st.markdown(f"### {_LIVE_NETWORK_TAB_LABEL}")
 
     show_live_overlay: bool = True
     toggle_help = (
@@ -1771,7 +1796,7 @@ with connection_scope() as conn:
     tab_labels = [
         "Histogram",
         "Profitability insights",
-        "Live network overview",
+        _LIVE_NETWORK_TAB_LABEL,
         "Route maps",
         "Quote builder",
         "Optimizer",
@@ -1826,7 +1851,7 @@ with connection_scope() as conn:
     active_routes = load_active_routes(conn)
     map_routes = prepare_profitability_route_data(filtered_df, break_even_value)
 
-    with tab_map["Live network overview"]:
+    with tab_map[_LIVE_NETWORK_TAB_LABEL]:
         render_network_map(
             map_routes,
             truck_positions,
