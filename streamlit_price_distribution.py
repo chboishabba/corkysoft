@@ -33,7 +33,6 @@ from analytics.price_distribution import (
     DistributionSummary,
     ProfitabilitySummary,
     PROFITABILITY_COLOURS,
-    ColumnMapping,
     compute_profitability_line_width,
     compute_tapered_route_polygon,
     available_heatmap_weightings,
@@ -44,7 +43,6 @@ from analytics.price_distribution import (
     create_metro_profitability_figure,
     create_m3_margin_figure,
     create_m3_vs_km_figure,
-    ensure_break_even_parameter,
     enrich_missing_route_coordinates,
     import_historical_jobs_from_dataframe,
     load_historical_jobs,
@@ -57,7 +55,6 @@ from analytics.price_distribution import (
     prepare_profitability_route_data,
     summarise_distribution,
     summarise_profitability,
-    update_break_even,
 )
 from dashboard.components.optimizer import render_optimizer
 from dashboard.components.summary import render_summary
@@ -92,12 +89,12 @@ from corkysoft.quote_service import (
 )
 from corkysoft.repo import (
     ClientDetails,
-    ensure_schema as ensure_quote_schema,
     find_client_matches,
     format_client_display,
     persist_quote,
 )
 from corkysoft.routing import snap_coordinates_to_road
+from dashboard.data import prepare_dashboard_data
 from corkysoft.schema import ensure_schema as ensure_core_schema
 from dashboard.components.quote_builder import render_quote_builder
 
@@ -321,20 +318,6 @@ st.caption(
 
 tabs_placeholder = st.container()
 
-
-def _blank_column_mapping() -> ColumnMapping:
-    return ColumnMapping(
-        date=None,
-        client=None,
-        price=None,
-        revenue=None,
-        volume=None,
-        origin=None,
-        destination=None,
-        corridor=None,
-        distance=None,
-        final_cost=None,
-    )
 
 
 def render_summary(
@@ -1526,6 +1509,14 @@ def _extract_route_volume(route: pd.Series, candidates: Sequence[str]) -> Option
     return None
 
 
+with prepare_dashboard_data() as dashboard_data:
+    conn = dashboard_data.conn
+    break_even_value = dashboard_data.break_even_value
+    dataset_error = dashboard_data.dataset_error
+    mapping = dashboard_data.mapping
+    filtered_mapping = dashboard_data.filtered_mapping
+    filtered_df = dashboard_data.filtered_df
+    has_filtered_data = dashboard_data.has_filtered_data
 with connection_scope() as conn:
     break_even_value = ensure_break_even_parameter(conn)
     ensure_quote_schema(conn)
