@@ -50,6 +50,7 @@ from analytics.price_distribution import (
     load_historical_jobs,
     load_quotes,
     load_live_jobs,
+    compute_cost_vs_price_percentage,
     prepare_metric_route_map_data,
     prepare_route_map_data,
     prepare_profitability_map_data,
@@ -1569,13 +1570,14 @@ with connection_scope() as conn:
             "Dataset",
             options=list(dataset_options.keys()),
             format_func=lambda label: label,
+            key="legacy_dataset_selector",
         )
         dataset_key, dataset_loader = dataset_options[dataset_label]
 
         import_feedback: Optional[tuple[str, str]] = None
         if dataset_key == "historical":
             with st.expander("Import historical jobs from CSV", expanded=False):
-                import_form = st.form(key="historical_import_form")
+                import_form = st.form(key="legacy_historical_import_form")
                 uploaded_file = import_form.file_uploader(
                     "Select CSV file", type=["csv"], help="Requires headers such as date, origin, destination and m3."
                 )
@@ -1807,6 +1809,9 @@ with connection_scope() as conn:
     metro_profitability: Optional[ProfitabilitySummary] = None
     metro_distance_km = 100.0
     if has_filtered_data:
+        filtered_df = filtered_df.copy()
+        filtered_df["cost_vs_price_pct"] = compute_cost_vs_price_percentage(filtered_df)
+
         summary = summarise_distribution(filtered_df, break_even_value)
         profitability_summary = summarise_profitability(filtered_df)
 
@@ -2046,6 +2051,12 @@ with connection_scope() as conn:
                                 "format": "percentage",
                                 "scale": px.colors.diverging.BrBG,
                                 "tickformat": ".1%",
+                            },
+                            "Cost vs Price (%)": {
+                                "column": "cost_vs_price_pct",
+                                "format": "percentage",
+                                "scale": px.colors.diverging.RdBu,
+                                "tickformat": ".0%",
                             },
                             "Total margin": {
                                 "column": "margin_total",

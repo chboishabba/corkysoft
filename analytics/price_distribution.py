@@ -1409,6 +1409,36 @@ def _format_metric_value(value: float, format_spec: str) -> str:
     return f"{value:,.2f}"
 
 
+def compute_cost_vs_price_percentage(df: pd.DataFrame) -> pd.Series:
+    """Return cost as a share of price expressed as a percentage ratio.
+
+    The output is a float series named ``cost_vs_price_pct`` where each value is
+    ``final_cost_per_m3 / price_per_m3`` for the corresponding row. When either
+    input column is missing, non-numeric, or zero the result contains ``NaN`` to
+    avoid introducing infinities into downstream visualisations.
+    """
+
+    series_name = "cost_vs_price_pct"
+    if df.empty:
+        return pd.Series(dtype="float64", name=series_name)
+
+    if "price_per_m3" not in df.columns or "final_cost_per_m3" not in df.columns:
+        return pd.Series(
+            np.nan,
+            index=df.index,
+            dtype="float64",
+            name=series_name,
+        )
+
+    price_series = pd.to_numeric(df["price_per_m3"], errors="coerce")
+    cost_series = pd.to_numeric(df["final_cost_per_m3"], errors="coerce")
+    safe_denominator = price_series.replace({0: np.nan})
+    ratio = cost_series.divide(safe_denominator)
+    ratio = ratio.replace([math.inf, -math.inf], np.nan)
+    ratio.name = series_name
+    return ratio.astype("float64")
+
+
 def prepare_metric_route_map_data(
     df: pd.DataFrame,
     metric_column: str,

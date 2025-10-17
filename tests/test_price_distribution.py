@@ -21,6 +21,7 @@ from analytics.price_distribution import (
     build_isochrone_polygons,
     build_heatmap_source,
     build_price_history_series,
+    compute_cost_vs_price_percentage,
     create_histogram,
     create_metro_profitability_figure,
     create_m3_margin_figure,
@@ -867,6 +868,22 @@ def test_prepare_metric_route_map_data_filters_and_formats_values():
     assert values == [120.0, 85.5]
     displays = result["map_colour_display"].tolist()
     assert displays == ["$120.00/m³", "$85.50/m³"]
+
+
+def test_compute_cost_vs_price_percentage_handles_missing_and_zero_values():
+    df = pd.DataFrame(
+        {
+            "price_per_m3": [300.0, 0.0, None],
+            "final_cost_per_m3": [210.0, 120.0, 90.0],
+        }
+    )
+
+    result = compute_cost_vs_price_percentage(df)
+
+    assert pytest.approx(result.iloc[0], rel=1e-6) == 0.7
+    assert pd.isna(result.iloc[1])
+    assert pd.isna(result.iloc[2])
+    assert result.name == "cost_vs_price_pct"
 
 
 def test_prepare_metric_route_map_data_requires_numeric_values():

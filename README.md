@@ -93,6 +93,7 @@ Key visuals include:
 - Corridor insights summarising job counts, weighted $/m³ and below break-even ratios aggregated into bidirectional lanes for systemic diagnostics.
 - A non-technical optimizer tab that recommends corridor price uplifts from the filtered data and offers a CSV export for action lists.
 - Continuous profitability overlays auto-balance the colour scale around break-even and annotate origin/destination markers in hover text for faster route diagnostics.
+- Cost vs Price (%) view surfaces corridors where operating costs consume an outsized share of the quoted price, using the same interactive route map controls.
 
 ```bash
 streamlit run dashboard/app.py

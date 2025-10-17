@@ -33,7 +33,7 @@ This merges everything from:
 | **Multi-route Folium map**            |    ✅   | Working map output.                         |
 | **CustomIcon fix**                    |    ✅   | Bug resolved.                               |
 | **Break-even / margin overlays**      |   🔜   | Add markers for ±10–50 % profit.            |
-| **Interactive dashboard (Streamlit)** |   🧩   | Sidebar initialisation workflow stable; continuous map colour scaling + tooltips verified while wider dashboard build continues. |
+| **Interactive dashboard (Streamlit)** |   🧩   | Sidebar initialisation workflow stable; continuous map colour scaling, Cost vs Price (%) view and enhanced tooltips verified while wider dashboard build continues. |
 | **Profit & volume heatmaps**          |   🔜   | Highlight high-margin or frequent routes.   |
 
 ---
