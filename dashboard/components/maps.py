@@ -373,16 +373,26 @@ def build_route_map(
         if not numeric_values.empty:
             plot_df["map_colour_value"] = numeric_values
             colour_scale = colour_scale or px.colors.sequential.Viridis
+            min_value = float(numeric_values.min())
+            max_value = float(numeric_values.max())
 
             def _to_colour(value: float) -> str:
                 if not colour_scale:
                     return "#636EFA"
-                min_value = float(numeric_values.min())
-                max_value = float(numeric_values.max())
                 if math.isclose(min_value, max_value):
                     return colour_scale[-1]
                 position = (value - min_value) / (max_value - min_value)
                 return px.colors.sample_colorscale(colour_scale, [position])[0]
+
+            if min_value < 0.0 < max_value:
+                extent = max(abs(min_value), abs(max_value))
+                cmin_value = -extent
+                cmax_value = extent
+                cmid_value: Optional[float] = 0.0
+            else:
+                cmin_value = min_value
+                cmax_value = max_value
+                cmid_value = None
 
             colorbar_dict = {"title": colour_label}
             if colorbar_tickformat:
@@ -432,16 +442,16 @@ def build_route_map(
                         colour_values_for_lines.extend([colour, colour, colour])
 
                 if lat_values and lon_values:
+                    line_colour = colour_values_for_lines[0] if colour_values_for_lines else colour_scale[0]
                     figure.add_trace(
                         go.Scattermapbox(
                             lat=lat_values,
                             lon=lon_values,
                             mode="lines",
-                            line={"width": 3, "color": colour_values_for_lines},
+                            line={"width": 3, "color": line_colour},
                             name=colour_label,
                             text=text_values,
                             hovertemplate="%{text}<extra></extra>",
-                            marker={"color": colour_values_for_lines},
                             showlegend=False,
                         )
                     )
@@ -456,9 +466,10 @@ def build_route_map(
                         value = float(row["map_colour_value"])
                     except (TypeError, ValueError):
                         continue
-                    marker_colour.append(value)
                     context = _route_context(row, display_value=value)
-                    marker_text.append(context["base_text"])
+                    base_text = context["base_text"]
+                    origin_label = context["origin_label"]
+                    destination_label = context["destination_label"]
                     origin_lat = _coerce_float(row.get("origin_lat"))
                     origin_lon = _coerce_float(row.get("origin_lon"))
                     dest_lat = _coerce_float(row.get("dest_lat"))
@@ -466,22 +477,35 @@ def build_route_map(
                     if origin_lat is not None and origin_lon is not None:
                         marker_lat.append(origin_lat)
                         marker_lon.append(origin_lon)
+                        marker_colour.append(value)
+                        marker_text.append(
+                            "<br>".join([base_text, f"Stop: Origin — {origin_label}"])
+                        )
                     if dest_lat is not None and dest_lon is not None:
                         marker_lat.append(dest_lat)
                         marker_lon.append(dest_lon)
+                        marker_colour.append(value)
+                        marker_text.append(
+                            "<br>".join([base_text, f"Stop: Destination — {destination_label}"])
+                        )
 
-                if marker_lat and marker_lon:
+                if marker_lat and marker_lon and marker_colour:
+                    marker_dict: dict[str, Any] = {
+                        "size": 12,
+                        "color": marker_colour,
+                        "colorscale": colour_scale,
+                        "colorbar": colorbar_dict,
+                        "cmin": cmin_value,
+                        "cmax": cmax_value,
+                    }
+                    if cmid_value is not None:
+                        marker_dict["cmid"] = cmid_value
                     figure.add_trace(
                         go.Scattermapbox(
                             lat=marker_lat,
                             lon=marker_lon,
                             mode="markers",
-                            marker={
-                                "size": 12,
-                                "color": marker_colour,
-                                "colorscale": colour_scale,
-                                "colorbar": colorbar_dict,
-                            },
+                            marker=marker_dict,
                             text=marker_text,
                             hovertemplate="%{text}<extra></extra>",
                             name=colour_label,

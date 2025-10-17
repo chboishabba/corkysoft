@@ -1551,6 +1551,7 @@ with connection_scope() as conn:
                 "Create empty historical and live job tables so the dashboard can run "
                 "before data imports."
             ),
+            key="legacy_sidebar_init_db",
         ):
             ensure_core_schema(conn)
             ensure_dashboard_tables(conn)

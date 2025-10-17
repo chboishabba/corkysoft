@@ -1579,6 +1579,7 @@ def render_price_distribution_dashboard():
                     "Create empty historical and live job tables so the dashboard can run "
                     "before data imports."
                 ),
+                key="dashboard_sidebar_init_db",
             ):
                 ensure_core_schema(conn)
                 ensure_dashboard_tables(conn)
