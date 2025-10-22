@@ -1,57 +1,110 @@
-# corkysoft - bill gates' FOMO
+# corkysoft
 
-A tool for estimating and optimising costs.
-<img width="1580" height="1054" alt="image" src="https://github.com/user-attachments/assets/2e39742e-6cc2-472a-9304-11b98e2eb158" />
-<img width="1711" height="104" alt="image" src="https://github.com/user-attachments/assets/21426440-2cf8-454d-9aee-a0842c7d80dc" />
-<img width="596" height="67" alt="image" src="https://github.com/user-attachments/assets/03b0a748-fa3c-410b-a78c-1274f04efe97" />
-<img width="2560" height="1337" alt="Screenshot_20251010_131404" src="https://github.com/user-attachments/assets/fe8af81e-d7e0-436c-8c62-9eb6ccef12c1" />
-<img width="2114" height="982" alt="image" src="https://github.com/user-attachments/assets/c686b7a6-baec-4ee9-853f-e1ac11cd76ae" />
-<img width="2153" height="637" alt="image" src="https://github.com/user-attachments/assets/0ccfb072-20a5-484e-971a-232b45aad957" />
-<img width="955" height="1138" alt="image" src="https://github.com/user-attachments/assets/bb1c7b1d-31c4-460c-a294-5ea43bb0eca8" />
-<img width="911" height="1033" alt="image" src="https://github.com/user-attachments/assets/bb7e6f1d-3776-477e-aa11-2bc84c635e71" />
+Route profitability tooling for removals operators. The project couples a command-line workflow for distance lookups and cost capture with a Streamlit dashboard that surfaces price distribution, lane performance, and live telemetry overlays.
 
+## Dashboard Preview
 
-# Route Distance & Cost Calculator (OpenRouteService + SQLite)
+Explore the main dashboard workflows currently deployed at `http://192.168.4.53:8501/`:
 
-A Python utility that calculates driving distances, durations, and cost estimates between origins and destinations.  
-It uses the [OpenRouteService API](https://openrouteservice.org) (ORS, open-source, OSM-backed) for geocoding and routing, and stores results in a local SQLite database for reuse.
+<div align="center">
+  <img src="docs/img/dashboard-histogram.png" alt="Histogram view with price distribution overlays" width="48%" />
+  <img src="docs/img/dashboard-price-history.png" alt="Price history view with resampling controls" width="48%" />
+</div>
+<div align="center">
+  <img src="docs/img/dashboard-profitability.png" alt="Profitability insights view with corridor benchmarking" width="48%" />
+  <img src="docs/img/dashboard-live-network.png" alt="Live network overview highlighting active trucks and lanes" width="48%" />
+</div>
+<div align="center">
+  <img src="docs/img/dashboard-route-maps.png" alt="Route maps tab showcasing deck.gl corridor overlays" width="48%" />
+  <img src="docs/img/dashboard-quote-builder.png" alt="Quote builder tab with client enrichment helpers" width="48%" />
+</div>
+<div align="center">
+  <img src="docs/img/dashboard-optimizer.png" alt="Optimizer tab recommending corridor uplifts" width="60%" />
+</div>
 
----
+## Table of Contents
+- [Overview](#overview)
+- [Key Components](#key-components)
+- [Features](#features)
+  - [CLI Toolkit](#cli-toolkit)
+  - [Streamlit Dashboard](#streamlit-dashboard)
+  - [Analytics Helpers](#analytics-helpers)
+- [Getting Started](#getting-started)
+- [Configuration](#configuration)
+- [Usage](#usage)
+  - [Command-Line Commands](#command-line-commands)
+  - [Dashboard Workflows](#dashboard-workflows)
+  - [Telemetry & Live Data](#telemetry--live-data)
+- [Data Model & Storage](#data-model--storage)
+- [Testing](#testing)
+- [Documentation](#documentation)
+- [Roadmap](#roadmap)
 
-## ✨ Features
+## Overview
 
-- Calculate **driving distance** (km) and **duration** (hours) between city names or full street addresses.
-- Estimate **billable costs** using an **hourly rate** and/or **per-km rate**.
-- Store results in **SQLite** (`routes.db` by default).
-- **Geocode caching** (avoids repeated lookups for the same city/address).
-- **Address normalization** for Australian street abbreviations (e.g. `cr` → `Circuit`).
-- Save **resolved addresses** and coordinates for clarity.
-- Pretty, aligned `list` output.
+`corkysoft` streamlines pricing analysis for moving and logistics teams by combining:
+- Routing via [OpenRouteService](https://openrouteservice.org) with caching, address normalisation, and SQLite persistence.
+- A Streamlit dashboard for exploring $/m³ distribution, lane margins, profitability overlays, and historical trends.
+- Batch import/export helpers, mock telemetry ingestion, and a simplex-based profit optimiser to support planning exercises.
 
----
+## Key Components
 
-## 📦 Installation
+- `dashboard/app.py`: Streamlit entry point and UI layout.
+- `dashboard/components/`: Reusable Streamlit widgets.
+- `analytics/`: Data access, pricing insights, export helpers, and live data processing.
+- `analytics/db.py`: Connection helpers and schema bootstrap.
+- `docs/`: Feature specs such as `live_network_overview.md` and `price_history.md`.
+- `routes_to_sqlite.py`: CLI for geocoding, routing, and cost capture.
+- `tests/`: Pytest suites mirroring the main feature areas.
 
-1. Clone this repo or copy `routes_to_sqlite.py`.
-2. Install dependencies:
+## Features
+
+### CLI Toolkit
+
+- Lookup driving distance (km) and duration (hours) between city names or addresses.
+- Estimate billable costs using hourly and per-km rates with private cost ledgers per job.
+- Cache geocodes and resolved addresses to minimise API calls.
+- Normalise Australian street abbreviations and persist results in SQLite (`routes.db` by default).
+- Import/export CSV datasets, including MoveWare-style history.
+
+### Streamlit Dashboard
+
+Launch with:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+streamlit run dashboard/app.py
+```
+
+The dashboard surfaces:
+- Histogram of $/m³ with configurable break-even bands, fitted curve diagnostics, and CSV export.
+- Dataset selector that blends imported history, saved quick quotes, and live telemetry snapshots.
+- Profitability tabs comparing $/m³, $/km, quoted versus cost-derived margins, and outlier tables.
+- Interactive Mapbox map with corridor colouring, isochrone shading, lane filters, and density heatmaps.
+- Live network view that highlights active trucks, lane profitability, and telemetry clusters.
+- Quote builder with client dedupe, optional attachments, and quick-quote support without forcing customer records.
+- Optimiser tab recommending corridor price uplifts and exportable action lists.
+- Price history traces with daily/weekly/monthly resampling, prior-year comparisons, and lane box plots (see `docs/price_history.md`).
+
+### Analytics Helpers
+
+- Profitability exports: `analytics.price_distribution.build_profitability_export`.
+- Corridor analytics: `analytics.price_distribution.aggregate_corridor_performance`.
+- Simplex optimiser: `profit_optimizer.ProfitOptimizer` for evaluating constrained job mixes.
+- HTML map generator: `map_jobs.py --show-actual` to compare straight-line vs routed geometry.
+
+## Getting Started
+
+Clone the repository and install dependencies inside a virtual environment:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-3. Get a free API key from [openrouteservice.org](https://openrouteservice.org/sign-up/).
-   The Streamlit dashboard will automatically request network-based isochrone
-   geometries whenever the `openrouteservice` client is available and
-   `ORS_API_KEY` is configured; otherwise it falls back to simple circular
-   buffers.
+## Configuration
 
----
-
-## 🔑 Setup
-
-Export your ORS API key:
+Set your OpenRouteService API key so geocoding and routing calls can succeed:
 
 ```bash
 export ORS_API_KEY="your_key_here"
@@ -59,301 +112,102 @@ export ORS_API_KEY="your_key_here"
 
 Optional environment variables:
 
-* `ROUTES_DB` → SQLite database path (default: `routes.db`)
-* `ORS_COUNTRY` → Default country context (default: `Australia`)
+- `ROUTES_DB`: Path to the SQLite database (default `routes.db`).
+- `ORS_COUNTRY`: Default country context for geocoding (default `Australia`).
+- `CORKYSOFT_DB`: Alternate variable for pointing the dashboard at another SQLite database.
 
-> 💡 Commands that do not invoke geocoding or routing (`add`, `add-csv`,
-> `list`, `cost`, and `map` when route geometry is already stored) run fine
-> without `ORS_API_KEY`. Provide the key only when you need to call
-> OpenRouteService (e.g. `run` or `import-history --geocode/--route`).
+Commands that do not hit the OpenRouteService API (`add`, `add-csv`, `list`, `cost`, and `map` when geometry exists) work without the key.
 
----
+## Usage
 
-## 🚀 Usage
+### Command-Line Commands
 
-Run the script directly:
+Invoke the CLI via:
 
 ```bash
 python routes_to_sqlite.py <command> [options]
 ```
 
-### Streamlit price distribution dashboard
+Common commands:
 
-The Streamlit app visualises historical jobs by $ per m³ with configurable break-even bands and CSV export.
+- Add a job:
+  ```bash
+  python routes_to_sqlite.py add "Melbourne" "Sydney" --hourly 200 --perkm 0.8
+  ```
+- Add jobs from CSV:
+  ```bash
+  python routes_to_sqlite.py add-csv jobs.csv
+  ```
+  `jobs.csv` must include headers such as `origin,destination,hourly_rate,per_km_rate,country`.
+- Process pending jobs (fetch distance/duration via ORS):
+  ```bash
+  python routes_to_sqlite.py run
+  ```
+- Review stored jobs:
+  ```bash
+  python routes_to_sqlite.py list
+  ```
+- Track internal costs privately:
+  ```bash
+  python routes_to_sqlite.py cost add 1 crew --quantity 12 --rate 45 --unit hr --description "Crew wages"
+  python routes_to_sqlite.py cost summary 1
+  ```
+- Import historical jobs with automatic geocoding and routing:
+  ```bash
+  python routes_to_sqlite.py import-history historical_jobs.csv --geocode --route
+  ```
+- Render an interactive map (add `--show-actual` to overlay routed geometry):
+  ```bash
+  python map_jobs.py --out routes_map.html
+  ```
 
-Key visuals include:
+### Dashboard Workflows
 
-- A histogram with break-even bands, a fitted bell curve, and kurtosis/skewness call-outs for quick shape diagnostics.
-- A dataset selector for comparing imported history, saved quick quotes and live telemetry in a single workflow.
-- Optional profitability tabs that compare $/m³ against $/km and contrast quoted vs cost-derived $/m³, including margin outlier tables.
-- An interactive Mapbox view showing each route with selectable colouring (job, client, origin city, or destination city) and toggles to focus on lines or points when clusters get dense.
-- A travel-time isochrone mode that shades the catchment around each corridor using inferred average speeds for rapid reach comparisons.
-- A live network map that blends historical job filters with real-time truck telemetry, colouring corridors by profitability band and highlighting active trucks/routes, with an optional density heatmap to spotlight live clusters.
-- A dynamic break-even engine that recalculates per-job cost floors using network-wide fuel, driver, maintenance and overhead settings stored in `global_parameters`.
-- Corridor insights summarising job counts, weighted $/m³ and below break-even ratios aggregated into bidirectional lanes for systemic diagnostics.
-- A non-technical optimizer tab that recommends corridor price uplifts from the filtered data and offers a CSV export for action lists.
-- Continuous profitability overlays auto-balance the colour scale around break-even and annotate origin/destination markers in hover text for faster route diagnostics.
-- Cost vs Price (%) view surfaces corridors where operating costs consume an outsized share of the quoted price, using the same interactive route map controls.
+- Initialise tables from the sidebar if starting with an empty database.
+- Use the historical CSV uploader to ingest data mirroring the CLI headers (`date`, `origin`, `destination`, `m3`, `quoted_price`, `client`).
+- Switch datasets between historical jobs, saved quick quotes, and live telemetry samples.
+- Expand **Client details** in the quote builder for dedupe suggestions across name, phone, and address.
+- Enable the live profitability view to expose corridor colour balancing, margin overlays, and hover diagnostics.
 
-```bash
-streamlit run dashboard/app.py
-```
+### Telemetry & Live Data
 
-Alternatively, import the module directly if you are embedding the UI in a
-larger application:
-
-```python
-from dashboard.app import render_price_distribution_dashboard
-
-render_price_distribution_dashboard()
-```
-
-By default it reads from `routes.db`. Set `CORKYSOFT_DB` or `ROUTES_DB` to point at a different SQLite database.
-
-Use the **Import historical jobs from CSV** expander in the sidebar to load data straight into the dashboard. The uploader
-accepts the same headers as the CLI importer (`date`, `origin`, `destination`, `m3`, `quoted_price`, `client`) and will
-calculate per-m³ rates automatically if only revenue and volume are provided. Switch the dataset selector to **Saved quick
-quotes** to analyse submissions from the in-app quote builder alongside historical jobs.
-
-Starting from an empty database? Click `Initialise database tables` in the sidebar to bootstrap the required schema before importing data or creating new quotes. The legacy and modular Streamlit entry points now share stable widget keys so this button no longer clashes with duplicate IDs during app startup.
-
-Inside the Quote builder tab you can expand the **Client details** panel to link the quote with an existing customer or create
-a new one. The UI highlights potential duplicates whenever the full name, phone number or complete address matches a stored
-client so you can reuse or update the right record without losing context. If you just need a quick estimate, leave the client
-section blank (or enter partial contact info) and the quote will still be saved without forcing a client record to be created.
-client so you can reuse or update the right record without losing context.
-
-### Live Network Overview map
-
-The functional specification for the profitability-focused network map lives in [`docs/live_network_overview.md`](docs/live_network_overview.md). It covers the required SQLite tables, the profitability colour scale, interaction patterns, and the processing pipeline that powers the lane bands and live overlays inside Streamlit.
-
-### Export profitability summaries
-
-Generate a CSV-ready snapshot of the current profitability filters using the
-analytics helper:
-
-```python
-from analytics.db import get_connection
-from analytics.price_distribution import build_profitability_export, load_historical_jobs
-
-with get_connection() as conn:
-    df, _ = load_historical_jobs(conn)
-    export_df = build_profitability_export(df, break_even=250.0)
-    export_df.to_csv("profitability_summary.csv", index=False)
-```
-
-The export includes the key distribution statistics, profitability bands, and
-top/bottom corridor opportunities used throughout the dashboard for easy
-reporting or spreadsheet analysis.
-### Corridor analytics
-
-Use `aggregate_corridor_performance` to collapse the filtered dataset into bidirectional lanes and surface systemic KPIs:
-
-```python
-from analytics.price_distribution import aggregate_corridor_performance, load_historical_jobs
-from analytics.db import connection_scope
-
-with connection_scope() as conn:
-    df, _ = load_historical_jobs(conn)
-
-corridor_summary = aggregate_corridor_performance(df, break_even=250.0)
-print(
-    corridor_summary[
-        [
-            "corridor_pair",
-            "job_count",
-            "weighted_price_per_m3",
-            "below_break_even_ratio",
-        ]
-    ].head()
-)
-```
-
-#### Mock telemetry ingestion
-
-The Streamlit map expects live data in the `truck_positions` and `active_routes` tables. A mock ingestor keeps these tables fresh:
+The Streamlit map expects live data in `truck_positions` and `active_routes`. A mock ingestor keeps these tables warm:
 
 ```bash
 python -m analytics.ingest_live_data --interval 5 --iterations 0
 ```
 
-- `--interval` controls the seconds between updates.
-- `--iterations` can limit the run for testing (omit for a continuous loop).
-- `--trucks` lets you specify custom truck IDs.
+Flags:
+- `--interval`: Seconds between updates.
+- `--iterations`: Number of cycles (omit for continuous streaming).
+- `--trucks`: Override the seeded truck identifiers.
 
-The script reuses historical jobs with geocoded origins/destinations and gracefully falls back to seeded depots so the map always has routes to display.
+Historical jobs with geocoded origins/destinations backfill the mock data so the map always has active corridors.
 
-### Simplex profit optimiser
+## Data Model & Storage
 
-Use the :mod:`profit_optimizer` module to evaluate the most profitable mix of jobs or lanes when capacity is limited. Decision
-variables represent candidate jobs and the coefficients in each constraint model business limits such as available truck hours,
-packing teams, or market demand caps.
+- SQLite database defaults to `routes.db` in the project root.
+- Schema helpers (table creation, migrations, connection scopes) live in `analytics/db.py`.
+- `global_parameters` stores network-wide cost settings that feed the dashboard break-even engine.
+- Corridor aggregation utilities produce bidirectional lanes and profitability KPIs for systemic diagnostics.
 
-```python
-from profit_optimizer import ProfitOptimizer
+## Testing
 
-optimizer = ProfitOptimizer()
-optimizer.add_variable("local_move", profit_per_unit=300.0, upper_bound=40)
-optimizer.add_variable("interstate_move", profit_per_unit=500.0)
-optimizer.add_constraint(
-    "crew_hours",
-    coefficients={"local_move": 2.0, "interstate_move": 3.0},
-    rhs=120.0,
-)
-optimizer.add_constraint(
-    "truck_days",
-    coefficients={"local_move": 1.0, "interstate_move": 2.0},
-    rhs=80.0,
-)
-
-result = optimizer.solve()
-print(result.variable_values)  # -> {'local_move': 0.0, 'interstate_move': 40.0}
-print(result.binding_constraints)  # -> ['crew_hours', 'truck_days']
-```
-
-Slack values and reduced costs in :class:`profit_optimizer.OptimizationResult` can be used for quick scenario planning, e.g. to
-see how much spare capacity remains or whether adding new jobs would increase or decrease total profit.
-
-### Commands
-
-#### Add a job
+Run the full test suite with:
 
 ```bash
-python routes_to_sqlite.py add "Melbourne" "Sydney" --hourly 200 --perkm 0.8
+pytest
 ```
 
-#### Add jobs from a CSV
+Target a specific area via `pytest tests/test_price_distribution.py` or similar when iterating quickly.
 
-```bash
-python routes_to_sqlite.py add-csv jobs.csv
-```
+## Documentation
 
-`jobs.csv` must include headers:
+- `docs/live_network_overview.md`: Functional spec for the profitability-focused network map.
+- `docs/price_history.md`: Reference for the price history analytics and lane comparisons.
+- `docs/mock_telemetry_workflow.md`: Details of the telemetry ingestion harness.
+- `ROADMAP.md`: Active deliverables, progress snapshot, and upcoming work.
 
-```csv
-origin,destination,hourly_rate,per_km_rate,country
-Melbourne,Sydney,200,0.8,Australia
-Adelaide,Melbourne,180,0.7,Australia
-```
+## Roadmap
 
-#### Process pending jobs
-
-Fetch distances/durations from ORS and update the DB:
-
-```bash
-python routes_to_sqlite.py run
-```
-
-Example output:
-
-```
-[OK] #1 Melbourne → Sydney | 869.4 km | 9.33 h | $2,561.35
-[OK] #2 Brisbane → Toowoomba | 125.6 km | 1.81 h | $463.04
-```
-
-#### List jobs
-
-```bash
-python routes_to_sqlite.py list
-```
-
-Example output:
-
-```
-ID    Origin             → Origin (resolved)             Destination         → Destination (resolved)          Km      Hours   Total $      Internal $    Updated (UTC)
---------------------------------------------------------------------------------------------------------------------------------------------------------------
-5     Melbourne          Melbourne VIC, Australia        Brisbane            Brisbane QLD, Australia          1768.4   18.80   5,175.07     3,850.00       2025-10-02T14:46:00+00:00
-1     Melbourne          Melbourne VIC, Australia        Sydney              Sydney NSW, Australia             869.4    9.33   2,561.35     1,720.00       2025-10-02T14:41:10+00:00
-```
-
-#### Track private internal costs
-
-You can now record detailed cost components per job — for example separate crew hours,
-truck operating time, fuel, or one-off surcharges. Everything is stored in the local
-`routes.db` file so your commercial assumptions stay private.
-
-```bash
-# Add crew labour at $45/hr for 12 hours
-python routes_to_sqlite.py cost add 1 crew --quantity 12 --rate 45 --unit hr --description "Crew wages"
-
-# Add a truck running cost using an explicit total
-python routes_to_sqlite.py cost add 1 truck --total 950 --description "Prime mover hire"
-
-# Capture fuel using litres × rate
-python routes_to_sqlite.py cost add 1 fuel --quantity 320 --rate 1.85 --unit L --description "Diesel"
-
-# Review the detailed ledger
-python routes_to_sqlite.py cost list 1
-
-# Summarise the private spend by category
-python routes_to_sqlite.py cost summary 1
-```
-
-The CLI automatically rolls each component into an `Internal $` total visible in the
-`list` report so you can compare publicly quoted prices against the true underlying
-cost base.
-
-#### Import historical jobs
-
-```bash
-python routes_to_sqlite.py import-history historical_jobs.csv --geocode --route
-```
-
-`historical_jobs.csv` requires headers `date,origin,destination,m3,quoted_price,client`. The importer normalises whitespace and Australian postcodes, optionally geocodes/resolves addresses, and (with `--route`) enriches rows with travel distance/duration using OpenRouteService.
-
-#### Render a network map
-
-Generate an interactive HTML map of the saved jobs:
-
-```bash
-python map_jobs.py --out routes_map.html
-```
-
-Add `--show-actual` to overlay the actual OpenRouteService routed geometry as a separate layer (you can toggle between the straight-line and routed views via the map controls):
-
-```bash
-python map_jobs.py --show-actual
-```
-
----
-
-## 🗂 Database Schema
-
-* **addresses**: normalised + geocoded address cache used by jobs and historical imports.
-* **jobs**: origin/destination foreign keys into `addresses`, hourly/per-km rates, computed distance, duration, costs, resolved coordinates, timestamps.
-* **geocode_cache**: cached lat/lon results keyed by `place,country`.
-* **historical_jobs**: imported quotes with optional normalised addresses, postcodes, distance/duration enrichments and audit timestamps.
-* **truck_positions**: latest lat/lon, status, heading and speed for each active truck.
-* **active_routes**: in-flight jobs mapped to trucks with origin/destination coordinates, progress, ETA, profit-band overlays and profitability status tags.
-* **lane_base_rates**: per-m³ and metro-hourly lane pricing keyed by corridor code.
-* **modifier_fees**: flat / per-m³ / percentage surcharges such as difficult access or piano handling.
-* **packing_rate_tiers**: tiered packing & unpacking rates by cubic metres.
-* **seasonal_uplifts**: date-range percentage uplifts (e.g. Oct–Dec peak season).
-* **depot_metro_zones**: depot centroids + radius used for the metro vs regional rule.
-* **global_parameters**: key/value store for network break-even baselines (per-m³ bands) and underlying operating costs (fuel, driver, maintenance, overhead).
-
----
-
-## ⚠️ Notes
-
-* ORS free tier: **2,500 requests/day**.
-* No live traffic data — estimates are based on OSM road networks.
-* Be polite: the script has built-in backoff between requests.
-* When ORS cannot snap a coordinate to the road network the quote builder now
-  retries with the nearest road geometry. If that still fails you can drop
-  manual pins inside the UI, edit the latitude/longitude fields directly, or
-  use the **Snap pins to nearest road** action before it finally falls back to
-  a straight-line distance estimate (all attempts are flagged in the UI
-  suggestions and raise a modal warning).
-* If a route fails (e.g. invalid address), the row remains pending.
-
----
-
-## ✅ Roadmap / Ideas
-
-* Add `--show-coords` to display lat/lon in `list`.
-* Add cost breakdown columns (time vs distance).
-* Optional export to CSV/Google Sheets.
-* Streamlit price distribution dashboard with break-even bands.
-
----
+See `ROADMAP.md` for the full delivery plan, status flags, and next steps across routing, analytics, telemetry, and governance.
