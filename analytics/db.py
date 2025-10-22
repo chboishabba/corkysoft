@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     client_id INTEGER,
     origin TEXT,
     destination TEXT,
+    origin_resolved TEXT,
+    destination_resolved TEXT,
     price_per_m3 REAL,
     revenue_total REAL,
     revenue REAL,
@@ -73,6 +75,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     origin_lon REAL,
     dest_lat REAL,
     dest_lon REAL,
+    route_geojson TEXT,
+    internal_cost_total REAL DEFAULT 0,
+    internal_cost_updated_at TEXT,
     updated_at TEXT
 );
 """
@@ -170,8 +175,17 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE historical_jobs ADD COLUMN client_id INTEGER")
 
     job_columns = _table_columns(conn, "jobs")
-    if "client_id" not in job_columns:
-        conn.execute("ALTER TABLE jobs ADD COLUMN client_id INTEGER")
+    column_declarations = {
+        "client_id": "INTEGER",
+        "origin_resolved": "TEXT",
+        "destination_resolved": "TEXT",
+        "route_geojson": "TEXT",
+        "internal_cost_total": "REAL DEFAULT 0",
+        "internal_cost_updated_at": "TEXT",
+    }
+    for column, declaration in column_declarations.items():
+        if column not in job_columns:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} {declaration}")
 
     ensure_historical_job_routes_table(conn)
     conn.commit()

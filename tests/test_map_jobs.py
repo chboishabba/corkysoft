@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+import sys
+from pathlib import Path
 
 import pytest
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from analytics.routes_map import fetch_job_route_rows
 from map_jobs import combine_route_geojson, compute_map_center
 
 
@@ -67,3 +75,35 @@ def test_combine_route_geojson_skips_invalid_entries():
 )
 def test_compute_map_center(rows, expected):
     assert compute_map_center(rows) == expected
+
+
+def test_fetch_job_route_rows_handles_missing_columns():
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """
+        CREATE TABLE jobs (
+            id INTEGER PRIMARY KEY,
+            origin TEXT,
+            destination TEXT,
+            origin_lat REAL,
+            origin_lon REAL,
+            dest_lat REAL,
+            dest_lon REAL
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO jobs (id, origin, destination, origin_lat, origin_lon, dest_lat, dest_lon)
+        VALUES (1, 'Melbourne VIC', 'Sydney NSW', -37.8136, 144.9631, -33.8688, 151.2093)
+        """
+    )
+
+    rows = fetch_job_route_rows(conn, include_actual=True)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["origin_resolved"] == "Melbourne VIC"
+    assert row["destination_resolved"] == "Sydney NSW"
+    assert "route_geojson" not in row.keys()
+
+    conn.close()

@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import math
+import sqlite3
 from datetime import date
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -67,6 +68,7 @@ from analytics.live_data import (
     load_active_routes,
     load_truck_positions,
 )
+from analytics.routes_map import build_job_route_map, fetch_job_route_rows
 from corkysoft.pricing import DEFAULT_MODIFIERS
 from corkysoft.quote_service import (
     COUNTRY_DEFAULT,
@@ -2681,6 +2683,69 @@ def render_price_distribution_dashboard():
                         legend={"orientation": "h", "yanchor": "bottom", "y": 0.01},
                     )
                     st.plotly_chart(figure, use_container_width=True)
+
+            st.divider()
+            st.markdown("#### Saved job routes (Folium)")
+            if folium is None or st_folium is None:
+                st.info(
+                    "Install 'folium' and 'streamlit-folium' to view the interactive route overlay."
+                )
+            else:
+                try:
+                    job_rows = fetch_job_route_rows(conn, include_actual=True)
+                except sqlite3.OperationalError as exc:
+                    st.warning(f"Unable to load saved routes from the jobs table: {exc}")
+                else:
+                    if not job_rows:
+                        st.caption("No saved jobs with coordinates are available yet.")
+                    else:
+                        actual_available = any(
+                            "route_geojson" in row.keys() and row["route_geojson"] for row in job_rows
+                        )
+                        toggle_help = (
+                            "Overlay the stored OpenRouteService geometry instead of straight-line chords."
+                        )
+                        include_actual_key = "folium_job_routes_overlay"
+                        default_toggle = (
+                            bool(st.session_state.get(include_actual_key, actual_available))
+                            if actual_available
+                            else False
+                        )
+
+                        if hasattr(st, "toggle"):
+                            include_actual = st.toggle(
+                                "Overlay actual routed paths",
+                                value=default_toggle,
+                                key=include_actual_key,
+                                help=toggle_help,
+                                disabled=not actual_available,
+                            )
+                        else:
+                            include_actual = st.checkbox(
+                                "Overlay actual routed paths",
+                                value=default_toggle,
+                                key=include_actual_key,
+                                help=toggle_help,
+                                disabled=not actual_available,
+                            )
+
+                        if not actual_available and include_actual:
+                            include_actual = False
+                        if not actual_available:
+                            st.caption(
+                                "Stored route geometry has not been captured yet; showing straight-line connections instead."
+                            )
+
+                        folium_map = build_job_route_map(job_rows, include_actual=include_actual)
+                        st_folium(
+                            folium_map,
+                            height=520,
+                            key="folium_saved_job_routes",
+                            returned_objects=[],
+                        )
+                        st.caption(
+                            "Use the layer control to toggle marker, straight-line, and actual route overlays."
+                        )
 
 
         with tab_map["Quote builder"]:
