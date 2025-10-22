@@ -1681,6 +1681,7 @@ with connection_scope() as conn:
                 value=(default_start, default_end),
                 min_value=default_start,
                 max_value=default_end,
+                key="date_range_active",
             )
             if isinstance(date_range, tuple) and len(date_range) == 2:
                 start_date, end_date = date_range
@@ -1692,6 +1693,7 @@ with connection_scope() as conn:
                 "Date range",
                 value=(today_value, today_value),
                 disabled=True,
+                key="date_range_disabled",
             )
             start_date = None
             end_date = None
