@@ -4,9 +4,17 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
+from datetime import datetime, timezone
 from collections.abc import Iterable, Sequence
-from typing import Any, Dict, List, Mapping, MutableMapping
+from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence as SeqType, Tuple
 
+import logging
+
+
+from corkysoft.routing import ROUTE_BACKOFF, get_ors_client
+
+logger = logging.getLogger(__name__)
 
 def _iter_valid_coords(rows: Sequence[Mapping[str, Any]]) -> Iterable[tuple[float, float]]:
     """Yield ``(lat, lon)`` tuples for rows with coordinates."""
@@ -208,3 +216,266 @@ def fetch_job_route_rows(conn: sqlite3.Connection, *, include_actual: bool) -> l
 
     cursor = conn.execute(query)
     return cursor.fetchall()
+
+
+def _extract_coordinates(row: Mapping[str, Any]) -> Optional[Tuple[float, float, float, float]]:
+    """Return ``(origin_lon, origin_lat, dest_lon, dest_lat)`` when available."""
+
+    try:
+        origin_lon = float(row["origin_lon"])
+        origin_lat = float(row["origin_lat"])
+        dest_lon = float(row["dest_lon"])
+        dest_lat = float(row["dest_lat"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    if any(value is None or (isinstance(value, float) and (value != value)) for value in (origin_lon, origin_lat, dest_lon, dest_lat)):
+        return None
+
+    return origin_lon, origin_lat, dest_lon, dest_lat
+
+
+def _request_route_geojson(
+    client: Any,
+    origin_lon: float,
+    origin_lat: float,
+    dest_lon: float,
+    dest_lat: float,
+) -> Tuple[float, float, str]:
+    """Return ``(distance_km, duration_hr, geojson)`` for the provided coordinates."""
+
+    response = client.directions(
+        coordinates=[[origin_lon, origin_lat], [dest_lon, dest_lat]],
+        profile="driving-car",
+        format="geojson",
+    )
+    features = response.get("features") if isinstance(response, Mapping) else None
+    if not features:
+        raise ValueError("ORS response missing features for route geometry request")
+    first_feature = features[0]
+    properties = first_feature.get("properties") if isinstance(first_feature, Mapping) else {}
+    summary = properties.get("summary") if isinstance(properties, Mapping) else {}
+    if not summary:
+        raise ValueError("ORS response missing summary for route geometry request")
+
+    distance_m = float(summary["distance"])
+    duration_s = float(summary["duration"])
+    geojson = json.dumps(response, separators=(",", ":"))
+    time.sleep(ROUTE_BACKOFF)
+    return distance_m / 1000.0, duration_s / 3600.0, geojson
+
+
+def _store_historical_geometry(
+    conn: sqlite3.Connection,
+    job_id: int,
+    *,
+    distance_km: float,
+    duration_hr: float,
+    geojson: str,
+    origin_lon: float,
+    origin_lat: float,
+    dest_lon: float,
+    dest_lat: float,
+) -> None:
+    timestamp = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        INSERT INTO historical_job_routes (historical_job_id, geojson, created_at, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(historical_job_id) DO UPDATE SET
+            geojson = excluded.geojson,
+            updated_at = excluded.updated_at
+        """,
+        (job_id, geojson, timestamp, timestamp),
+    )
+    conn.execute(
+        """
+        UPDATE historical_jobs
+        SET
+            origin_lon = COALESCE(origin_lon, ?),
+            origin_lat = COALESCE(origin_lat, ?),
+            dest_lon = COALESCE(dest_lon, ?),
+            dest_lat = COALESCE(dest_lat, ?),
+            distance_km = ?,
+            duration_hr = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            origin_lon,
+            origin_lat,
+            dest_lon,
+            dest_lat,
+            distance_km,
+            duration_hr,
+            timestamp,
+            job_id,
+        ),
+    )
+
+
+def _store_live_geometry(
+    conn: sqlite3.Connection,
+    job_id: int,
+    *,
+    distance_km: float,
+    duration_hr: float,
+    geojson: str,
+    origin_lon: float,
+    origin_lat: float,
+    dest_lon: float,
+    dest_lat: float,
+) -> None:
+    timestamp = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        UPDATE jobs
+        SET
+            route_geojson = ?,
+            distance_km = ?,
+            duration_hr = ?,
+            origin_lon = COALESCE(origin_lon, ?),
+            origin_lat = COALESCE(origin_lat, ?),
+            dest_lon = COALESCE(dest_lon, ?),
+            dest_lat = COALESCE(dest_lat, ?),
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            geojson,
+            distance_km,
+            duration_hr,
+            origin_lon,
+            origin_lat,
+            dest_lon,
+            dest_lat,
+            timestamp,
+            job_id,
+        ),
+    )
+
+
+def populate_route_geometry(
+    conn: sqlite3.Connection,
+    job_ids: SeqType[int],
+    *,
+    dataset: str,
+    client: Optional[Any] = None,
+) -> int:
+    """Populate ``route_geojson`` for the requested ``job_ids``.
+
+    Parameters
+    ----------
+    conn:
+        Active SQLite connection.
+    job_ids:
+        Iterable of job identifiers to update.
+    dataset:
+        Either ``"historical"`` or ``"live"`` designating the source table.
+    client:
+        Optional OpenRouteService client. When omitted ``get_ors_client`` is used.
+
+    Returns
+    -------
+    int
+        Count of routes whose geometry was updated.
+    """
+
+    identifiers = [int(jid) for jid in job_ids if jid is not None]
+    if not identifiers:
+        return 0
+
+    placeholders = ",".join(["?"] * len(identifiers))
+    logger.debug("Populating route geometry for %d %s job(s)", len(identifiers), dataset)
+
+    if dataset not in {"historical", "live"}:
+        raise ValueError("dataset must be either 'historical' or 'live'")
+
+    if dataset == "historical":
+        query = f"""
+            SELECT
+                hj.id,
+                COALESCE(hj.origin_lon, o.lon) AS origin_lon,
+                COALESCE(hj.origin_lat, o.lat) AS origin_lat,
+                COALESCE(hj.dest_lon, d.lon) AS dest_lon,
+                COALESCE(hj.dest_lat, d.lat) AS dest_lat,
+                hr.geojson AS existing_geojson
+            FROM historical_jobs AS hj
+            LEFT JOIN addresses AS o ON hj.origin_address_id = o.id
+            LEFT JOIN addresses AS d ON hj.destination_address_id = d.id
+            LEFT JOIN historical_job_routes AS hr ON hr.historical_job_id = hj.id
+            WHERE hj.id IN ({placeholders})
+        """
+    else:
+        query = f"""
+            SELECT
+                id,
+                origin_lon,
+                origin_lat,
+                dest_lon,
+                dest_lat,
+                route_geojson AS existing_geojson
+            FROM jobs
+            WHERE id IN ({placeholders})
+        """
+
+    rows = conn.execute(query, identifiers).fetchall()
+    if not rows:
+        return 0
+
+    updated = 0
+    ors_client = get_ors_client(client)
+
+    for row in rows:
+        job_id = int(row["id"])
+        existing = row["existing_geojson"]
+        if isinstance(existing, str) and existing.strip():
+            continue
+
+        coords = _extract_coordinates(row)
+        if coords is None:
+            logger.debug("Skipping job %s: missing coordinates", job_id)
+            continue
+
+        origin_lon, origin_lat, dest_lon, dest_lat = coords
+        try:
+            distance_km, duration_hr, geojson = _request_route_geojson(
+                ors_client,
+                origin_lon,
+                origin_lat,
+                dest_lon,
+                dest_lat,
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging only
+            logger.warning("Failed to fetch route geometry for job %s: %s", job_id, exc)
+            continue
+
+        if dataset == "historical":
+            _store_historical_geometry(
+                conn,
+                job_id,
+                distance_km=distance_km,
+                duration_hr=duration_hr,
+                geojson=geojson,
+                origin_lon=origin_lon,
+                origin_lat=origin_lat,
+                dest_lon=dest_lon,
+                dest_lat=dest_lat,
+            )
+        else:
+            _store_live_geometry(
+                conn,
+                job_id,
+                distance_km=distance_km,
+                duration_hr=duration_hr,
+                geojson=geojson,
+                origin_lon=origin_lon,
+                origin_lat=origin_lat,
+                dest_lon=dest_lon,
+                dest_lat=dest_lat,
+            )
+
+        updated += 1
+
+    conn.commit()
+    return updated

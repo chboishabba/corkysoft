@@ -206,6 +206,7 @@ Target a specific area via `pytest tests/test_price_distribution.py` or similar 
 - `docs/live_network_overview.md`: Functional spec for the profitability-focused network map.
 - `docs/price_history.md`: Reference for the price history analytics and lane comparisons.
 - `docs/mock_telemetry_workflow.md`: Details of the telemetry ingestion harness.
+- `docs/architecture.md`: High-level architecture outline covering how the Streamlit shell composes analytics modules and supporting services.
 - `ROADMAP.md`: Active deliverables, progress snapshot, and upcoming work.
 
 ## Roadmap

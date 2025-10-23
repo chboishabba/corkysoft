@@ -68,7 +68,11 @@ from analytics.live_data import (
     load_active_routes,
     load_truck_positions,
 )
-from analytics.routes_map import build_job_route_map, fetch_job_route_rows
+from analytics.routes_map import (
+    build_job_route_map,
+    fetch_job_route_rows,
+    populate_route_geometry,
+)
 from corkysoft.pricing import DEFAULT_MODIFIERS
 from corkysoft.quote_service import (
     COUNTRY_DEFAULT,
@@ -2303,19 +2307,82 @@ def render_price_distribution_dashboard():
             scoped_df = _filter_by_distance(
                 filtered_df, metro_only=metro_only, max_distance_km=metro_distance_km
             )
+            map_df = scoped_df.copy()
+
+            date_column: Optional[str] = None
+            date_series: Optional[pd.Series] = None
+            if not map_df.empty:
+                candidate_columns = []
+                if "job_date" in map_df.columns:
+                    candidate_columns.append("job_date")
+                if filtered_mapping.date and filtered_mapping.date in map_df.columns:
+                    candidate_columns.append(filtered_mapping.date)
+
+                for candidate in candidate_columns:
+                    parsed = pd.to_datetime(map_df[candidate], errors="coerce")
+                    if parsed.notna().any():
+                        date_column = candidate
+                        date_series = parsed
+                        break
+
+            if date_column and date_series is not None:
+                map_df[date_column] = date_series
+                valid_dates = date_series.dropna()
+                if not valid_dates.empty:
+                    earliest = valid_dates.min().date()
+                    latest = valid_dates.max().date()
+                    date_mode = st.radio(
+                        "Route date selection",
+                        ("All dates", "Single day", "Date range"),
+                        horizontal=True,
+                        key="route_map_date_mode",
+                    )
+                    if date_mode == "Single day":
+                        selected_day = st.date_input(
+                            "Select day",
+                            value=latest,
+                            min_value=earliest,
+                            max_value=latest,
+                            key="route_map_date_single",
+                        )
+                        mask = date_series.dt.date == selected_day
+                        map_df = map_df.loc[mask].copy()
+                        date_series = date_series.loc[mask]
+                    elif date_mode == "Date range":
+                        start_default = earliest
+                        end_default = latest
+                        selected_range = st.date_input(
+                            "Select date range",
+                            value=(start_default, end_default),
+                            min_value=earliest,
+                            max_value=latest,
+                            key="route_map_date_range",
+                        )
+                        if isinstance(selected_range, tuple) and len(selected_range) == 2:
+                            start_date = selected_range[0] or start_default
+                            end_date = selected_range[1] or end_default
+                        else:
+                            start_date, end_date = start_default, end_default
+                        mask = (date_series.dt.date >= start_date) & (date_series.dt.date <= end_date)
+                        map_df = map_df.loc[mask].copy()
+                        date_series = date_series.loc[mask]
+                    else:
+                        st.caption(
+                            f"Displaying routes from {earliest.isoformat()} to {latest.isoformat()}."
+                        )
 
             if map_mode == "Routes/points":
                 required_columns = {"origin_lat", "origin_lon", "dest_lat", "dest_lon"}
-                missing_coordinates = required_columns - set(scoped_df.columns)
+                missing_coordinates = required_columns - set(map_df.columns)
 
-                if scoped_df.empty:
+                if map_df.empty:
                     st.info("No jobs match the metro filter for the current selection.")
                 elif missing_coordinates:
                     st.info(
                         "Add geocoded origin and destination coordinates to visualise routes."
                     )
                 else:
-                    geocoded = scoped_df.dropna(subset=list(required_columns))
+                    geocoded = map_df.dropna(subset=list(required_columns))
                     if geocoded.empty:
                         st.info(
                             "No routes with coordinates are available for the current filters."
@@ -2358,6 +2425,75 @@ def render_price_distribution_dashboard():
                                 disabled=not show_routes,
                             )
 
+                        missing_route_ids: List[int] = []
+                        if use_route_geometry and show_routes:
+                            geometry_series = geocoded.get("route_geojson")
+                            if geometry_series is None:
+                                st.caption(
+                                    "Stored route geometry is not available for this dataset yet."
+                                )
+                            else:
+                                def _has_geometry(value: Any) -> bool:
+                                    if value is None:
+                                        return False
+                                    if isinstance(value, (bytes, bytearray, memoryview)):
+                                        return bool(value)
+                                    if isinstance(value, str):
+                                        return bool(value.strip())
+                                    return True
+
+                                missing_mask = ~geometry_series.apply(_has_geometry)
+                                missing_count = int(missing_mask.sum())
+                                if missing_count > 0:
+                                    st.info(
+                                        f"{missing_count} route{'s' if missing_count != 1 else ''} "
+                                        "are missing stored geometry."
+                                    )
+                                    if "id" in geocoded.columns:
+                                        route_ids = geocoded.loc[missing_mask, "id"].dropna()
+                                        missing_route_ids = [int(value) for value in route_ids.tolist()]
+                                    else:
+                                        st.caption(
+                                            "Add an 'id' column to populate geometry for the selected routes."
+                                        )
+
+                                    if missing_route_ids and dataset_key in {"historical", "live"}:
+                                        if st.button(
+                                            "Populate route geometry",
+                                            key="populate_route_geometry_button",
+                                            help=(
+                                                "Fetch OpenRouteService geometry for the filtered routes and store it "
+                                                "for future map sessions."
+                                            ),
+                                        ):
+                                            try:
+                                                populated = populate_route_geometry(
+                                                    conn,
+                                                    missing_route_ids,
+                                                    dataset=dataset_key,
+                                                )
+                                            except Exception as exc:  # pragma: no cover - streamlit feedback only
+                                                st.error(f"Failed to populate geometry: {exc}")
+                                            else:
+                                                if populated:
+                                                    st.success(
+                                                        f"Stored geometry for {populated} route"
+                                                        f"{'s' if populated != 1 else ''}."
+                                                    )
+                                                else:
+                                                    st.warning(
+                                                        "No route geometry could be retrieved for the current selection."
+                                                    )
+                                                st.experimental_rerun()
+                                    elif missing_route_ids:
+                                        st.caption(
+                                            "Populate the historical or live job tables to store route geometry."
+                                        )
+                                else:
+                                    st.caption(
+                                        "All displayed routes already have stored geometry."
+                                    )
+
                         if not show_routes and not show_points:
                             st.info("Enable at least one layer to view the route map.")
                         elif colour_mode_label == "Categorical attribute":
@@ -2388,7 +2524,7 @@ def render_price_distribution_dashboard():
                                 selected_column = available_colour_dimensions[colour_label]
                                 try:
                                     plotly_map_df = prepare_route_map_data(
-                                        scoped_df, selected_column
+                                        map_df, selected_column
                                     )
                                 except KeyError as exc:
                                     st.warning(str(exc))
@@ -2496,7 +2632,7 @@ def render_price_distribution_dashboard():
                                 format_spec = metric_spec.get("format", "number")
                                 try:
                                     metric_map_df = prepare_metric_route_map_data(
-                                        scoped_df,
+                                        map_df,
                                         metric_column,
                                         format_spec=str(format_spec),
                                     )
@@ -2529,12 +2665,12 @@ def render_price_distribution_dashboard():
                 )
                 weight_column = weight_options[weight_label]
 
-                if scoped_df.empty:
+                if map_df.empty:
                     st.info("No jobs match the metro filter for the current selection.")
                 else:
                     try:
                         heatmap_source = build_heatmap_source(
-                            scoped_df,
+                            map_df,
                             weight_column=weight_column,
                         )
                     except KeyError as exc:
@@ -2626,7 +2762,7 @@ def render_price_distribution_dashboard():
                 )
 
                 iso_source = build_isochrone_polygons(
-                    scoped_df,
+                    map_df,
                     centre="origin" if centre_label == "Origin" else "destination",
                     horizon_hours=float(iso_hours),
                     max_routes=int(max_iso_routes),
