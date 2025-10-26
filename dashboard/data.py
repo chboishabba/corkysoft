@@ -255,6 +255,7 @@ def _sidebar_filters(
             options=["All corridors"] + corridor_options,
             index=0,
             disabled=not data_available,
+            key="sidebar_corridor_select",
         )
         selected_corridor = (
             None if corridor_selection == "All corridors" else corridor_selection
