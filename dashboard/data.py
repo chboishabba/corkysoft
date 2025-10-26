@@ -72,7 +72,7 @@ def _handle_historical_import(
     conn: sqlite3.Connection,
 ) -> Optional[Tuple[str, str]]:
     with st.expander("Import historical jobs from CSV", expanded=False):
-        import_form = st.form(key="historical_import_form")
+        import_form = st.form(key="dashboard_historical_import_form")
         uploaded_file = import_form.file_uploader(
             "Select CSV file",
             type=["csv"],

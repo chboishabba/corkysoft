@@ -1623,7 +1623,7 @@ def render_price_distribution_dashboard():
             import_feedback: Optional[tuple[str, str]] = None
             if dataset_key == "historical":
                 with st.expander("Import historical jobs from CSV", expanded=False):
-                    import_form = st.form(key="historical_import_form")
+                    import_form = st.form(key="dashboard_sidebar_historical_import_form")
                     uploaded_file = import_form.file_uploader(
                         "Select CSV file", type=["csv"], help="Requires headers such as date, origin, destination and m3."
                     )
