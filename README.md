@@ -67,6 +67,10 @@ Explore the main dashboard workflows currently deployed at `http://192.168.4.53:
 - Normalise Australian street abbreviations and persist results in SQLite (`routes.db` by default).
 - Import/export CSV datasets, including MoveWare-style history.
 
+## Mindmap
+
+<img width="5225" height="14736" alt="NotebookLM Mind Map(1)" src="https://github.com/user-attachments/assets/4a56f989-f1f6-446b-9a8b-ae6524441d8f" />
+
 ### Streamlit Dashboard
 
 Launch with:
@@ -200,6 +204,7 @@ pytest
 ```
 
 Target a specific area via `pytest tests/test_price_distribution.py` or similar when iterating quickly.
+
 
 ## Documentation
 
