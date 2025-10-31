@@ -52,6 +52,7 @@ def test_per_m3_quote_with_modifiers_and_uplift(calculator):
     assert pytest.approx(breakdown.margin["amount"], rel=1e-6) == pytest.approx(1225.8, rel=1e-6)
 
     assert pytest.approx(breakdown.total, rel=1e-6) == pytest.approx(9397.8, rel=1e-6)
+    assert breakdown.comparison_total is None
 
 
 def test_hourly_model_for_metro_move(calculator):
@@ -84,3 +85,9 @@ def test_hourly_model_for_metro_move(calculator):
 
     assert breakdown.metro_rule["origin"].is_metro is True
     assert breakdown.metro_rule["destination"].is_metro is True
+    assert pytest.approx(breakdown.comparison_base_amount or 0.0, rel=1e-6) == 1980.0
+    assert breakdown.comparison_base_description is not None
+    assert pytest.approx(breakdown.comparison_total or 0.0, rel=1e-6) == pytest.approx(2398.0, rel=1e-6)
+    assert pytest.approx(breakdown.comparison_rate_per_m3 or 0.0, rel=1e-6) == pytest.approx(
+        2398.0 / 18.0, rel=1e-6
+    )
