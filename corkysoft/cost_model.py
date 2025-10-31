@@ -34,6 +34,10 @@ class QuoteBreakdown:
     margin: Optional[Dict[str, object]] = None
     total: float = 0.0
     metro_rule: Dict[str, MetroCheck] = field(default_factory=dict)
+    comparison_base_description: Optional[str] = None
+    comparison_base_amount: Optional[float] = None
+    comparison_total: Optional[float] = None
+    comparison_rate_per_m3: Optional[float] = None
 
 
 class LaneCostCalculator:
@@ -200,11 +204,20 @@ class LaneCostCalculator:
             metro_rule=metro_checks,
         )
 
+        comparison_base_amount: Optional[float] = None
+        comparison_base_description: Optional[str] = None
+        comparison_subtotal: Optional[float] = None
+
         if pricing_model == "hourly":
             base_amount = lane["metro_hourly_rate"] * duration_hours
             base_description = (
                 f"Metro hourly @ ${lane['metro_hourly_rate']:.2f}/hr × {duration_hours:.2f} h"
             )
+            comparison_base_amount = lane["per_m3_rate"] * volume_m3
+            comparison_base_description = (
+                f"Lane {corridor_code} @ ${lane['per_m3_rate']:.2f}/m³ × {volume_m3:.2f} m³"
+            )
+            comparison_subtotal = comparison_base_amount
         else:
             base_amount = lane["per_m3_rate"] * volume_m3
             base_description = (
@@ -234,6 +247,19 @@ class LaneCostCalculator:
             })
             subtotal += amount
 
+            if comparison_subtotal is not None and comparison_base_amount is not None:
+                if modifier["charge_type"] == "flat":
+                    comparison_amount = modifier["value"]
+                elif modifier["charge_type"] == "per_m3":
+                    comparison_amount = modifier["value"] * volume_m3
+                elif modifier["charge_type"] == "percentage":
+                    comparison_amount = comparison_base_amount * modifier["value"]
+                else:  # pragma: no cover - guard for schema corruption
+                    raise ValueError(
+                        f"Unsupported charge type: {modifier['charge_type']}"
+                    )
+                comparison_subtotal += comparison_amount
+
         for service_code in packing_services:
             tier = self._get_packing_rate(service_code, packing_volume)
             if tier is None:
@@ -250,6 +276,9 @@ class LaneCostCalculator:
             )
             subtotal += amount
 
+            if comparison_subtotal is not None:
+                comparison_subtotal += amount
+
         uplift_row = self._get_seasonal_uplift(move_date)
         uplift_amount = 0.0
         if uplift_row is not None:
@@ -262,6 +291,9 @@ class LaneCostCalculator:
             }
             subtotal += uplift_amount
 
+            if comparison_subtotal is not None:
+                comparison_subtotal += comparison_subtotal * uplift_row["uplift_pct"]
+
         margin_amount = 0.0
         if margin_pct:
             margin_amount = subtotal * margin_pct
@@ -271,7 +303,20 @@ class LaneCostCalculator:
             }
             subtotal += margin_amount
 
+            if comparison_subtotal is not None:
+                comparison_subtotal += comparison_subtotal * margin_pct
+
         breakdown.total = subtotal
+        if (
+            comparison_subtotal is not None
+            and comparison_base_amount is not None
+            and comparison_base_description is not None
+        ):
+            breakdown.comparison_base_amount = comparison_base_amount
+            breakdown.comparison_base_description = comparison_base_description
+            breakdown.comparison_total = comparison_subtotal
+            if volume_m3 > 0:
+                breakdown.comparison_rate_per_m3 = comparison_subtotal / volume_m3
         return breakdown
 
 
