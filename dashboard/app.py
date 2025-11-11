@@ -1887,7 +1887,7 @@ def render_price_distribution_dashboard():
         with tab_map["Histogram"]:
             if has_filtered_data:
                 histogram = create_histogram(filtered_df, break_even_value)
-                st.plotly_chart(histogram, use_container_width=True)
+                st.plotly_chart(histogram, width="stretch")
                 st.caption(
                     "Histogram overlays include the normal distribution fit plus kurtosis and dispersion markers for context."
                 )
@@ -2027,7 +2027,7 @@ def render_price_distribution_dashboard():
                                     },
                                 )
                                 overall_fig.update_layout(legend_title_text="Metric comparison")
-                                st.plotly_chart(overall_fig, use_container_width=True)
+                                st.plotly_chart(overall_fig, width="stretch")
 
                     available_metric_labels = [
                         label
@@ -2113,7 +2113,7 @@ def render_price_distribution_dashboard():
                                 },
                             )
                             origin_fig.update_layout(legend_title_text="Origin")
-                            origin_col.plotly_chart(origin_fig, use_container_width=True)
+                            origin_col.plotly_chart(origin_fig, width="stretch")
 
                         if (
                             destination_combined.empty
@@ -2141,7 +2141,7 @@ def render_price_distribution_dashboard():
                                 },
                             )
                             destination_fig.update_layout(legend_title_text="Destination")
-                            destination_col.plotly_chart(destination_fig, use_container_width=True)
+                            destination_col.plotly_chart(destination_fig, width="stretch")
 
                     st.markdown("#### Previous year distribution snapshots")
                     histogram_metric = None
@@ -2172,7 +2172,7 @@ def render_price_distribution_dashboard():
                                 },
                                 title="Previous year distribution",
                             )
-                            st.plotly_chart(hist_fig, use_container_width=True)
+                            st.plotly_chart(hist_fig, width="stretch")
                     else:
                         st.info(
                             "Historical dataset from the previous year is unavailable for distribution comparisons."
@@ -2201,7 +2201,7 @@ def render_price_distribution_dashboard():
                                 },
                                 title="Origin spread (previous year)",
                             )
-                            comparison_columns[0].plotly_chart(origin_box, use_container_width=True)
+                            comparison_columns[0].plotly_chart(origin_box, width="stretch")
 
                         previous_destination = previous_year_frames.get("by_destination", pd.DataFrame())
                         if (
@@ -2225,7 +2225,7 @@ def render_price_distribution_dashboard():
                                 title="Destination spread (previous year)",
                             )
                             comparison_columns[1].plotly_chart(
-                                destination_box, use_container_width=True
+                                destination_box, width="stretch"
                             )
 
         with tab_map["Profitability insights"]:
@@ -2246,7 +2246,7 @@ def render_price_distribution_dashboard():
                     key="profitability_view",
                 )
                 fig = view_options[selected_view](filtered_df)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
                 if selected_view == "Metro profitability spotlight":
                     st.caption(
@@ -2542,7 +2542,7 @@ def render_price_distribution_dashboard():
                                         show_points=show_points,
                                         use_route_geometry=use_route_geometry,
                                     )
-                                    st.plotly_chart(route_map, use_container_width=True)
+                                    st.plotly_chart(route_map, width="stretch")
                         else:
                             metric_colour_options = {
                                 "Margin $/m³": {
@@ -2655,7 +2655,7 @@ def render_price_distribution_dashboard():
                                         colorbar_tickformat=metric_spec.get("tickformat"),
                                         use_route_geometry=use_route_geometry,
                                     )
-                                    st.plotly_chart(route_map, use_container_width=True)
+                                    st.plotly_chart(route_map, width="stretch")
             elif map_mode == "Heatmap":
                 weight_options = available_heatmap_weightings(filtered_df)
                 weight_label = st.selectbox(
@@ -2734,7 +2734,7 @@ def render_price_distribution_dashboard():
                             margin={"l": 0, "r": 0, "t": 0, "b": 0},
                             coloraxis_colorbar={"title": weight_label},
                         )
-                        st.plotly_chart(heatmap_fig, use_container_width=True)
+                        st.plotly_chart(heatmap_fig, width="stretch")
             else:
                 centre_label = st.radio(
                     "Isochrone centre",
@@ -2818,7 +2818,7 @@ def render_price_distribution_dashboard():
                         margin={"l": 0, "r": 0, "t": 0, "b": 0},
                         legend={"orientation": "h", "yanchor": "bottom", "y": 0.01},
                     )
-                    st.plotly_chart(figure, use_container_width=True)
+                    st.plotly_chart(figure, width="stretch")
 
             st.divider()
             st.markdown("#### Saved job routes (Folium)")
@@ -4001,9 +4001,9 @@ def render_price_distribution_dashboard():
                             title="Recommended uplift by corridor",
                         )
                         chart.update_layout(margin={"l": 0, "r": 0, "t": 40, "b": 0})
-                        st.plotly_chart(chart, use_container_width=True)
+                        st.plotly_chart(chart, width="stretch")
 
-                        st.dataframe(recommendations_df, use_container_width=True)
+                        st.dataframe(recommendations_df, width="stretch")
 
                         csv_data = recommendations_df.to_csv(index=False)
                         st.download_button(
