@@ -6,7 +6,7 @@ import json
 import sqlite3
 import time
 from datetime import datetime, timezone
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence as SeqType, Tuple
 
 import logging
@@ -276,6 +276,7 @@ def _store_historical_geometry(
     origin_lat: float,
     dest_lon: float,
     dest_lat: float,
+    available_columns: Collection[str],
 ) -> None:
     timestamp = datetime.now(timezone.utc).isoformat()
     conn.execute(
@@ -288,29 +289,43 @@ def _store_historical_geometry(
         """,
         (job_id, geojson, timestamp, timestamp),
     )
+    assignments: list[str] = []
+    parameters: list[object] = []
+    if "origin_lon" in available_columns:
+        assignments.append("origin_lon = COALESCE(origin_lon, ?)")
+        parameters.append(origin_lon)
+    if "origin_lat" in available_columns:
+        assignments.append("origin_lat = COALESCE(origin_lat, ?)")
+        parameters.append(origin_lat)
+    if "dest_lon" in available_columns:
+        assignments.append("dest_lon = COALESCE(dest_lon, ?)")
+        parameters.append(dest_lon)
+    if "dest_lat" in available_columns:
+        assignments.append("dest_lat = COALESCE(dest_lat, ?)")
+        parameters.append(dest_lat)
+
+    if "distance_km" in available_columns:
+        assignments.append("distance_km = ?")
+        parameters.append(distance_km)
+    if "duration_hr" in available_columns:
+        assignments.append("duration_hr = ?")
+        parameters.append(duration_hr)
+    if "updated_at" in available_columns:
+        assignments.append("updated_at = ?")
+        parameters.append(timestamp)
+
+    if not assignments:
+        return
+
+    parameters.append(job_id)
+
     conn.execute(
-        """
+        f"""
         UPDATE historical_jobs
-        SET
-            origin_lon = COALESCE(origin_lon, ?),
-            origin_lat = COALESCE(origin_lat, ?),
-            dest_lon = COALESCE(dest_lon, ?),
-            dest_lat = COALESCE(dest_lat, ?),
-            distance_km = ?,
-            duration_hr = ?,
-            updated_at = ?
+        SET {', '.join(assignments)}
         WHERE id = ?
         """,
-        (
-            origin_lon,
-            origin_lat,
-            dest_lon,
-            dest_lat,
-            distance_km,
-            duration_hr,
-            timestamp,
-            job_id,
-        ),
+        parameters,
     )
 
 
@@ -325,33 +340,49 @@ def _store_live_geometry(
     origin_lat: float,
     dest_lon: float,
     dest_lat: float,
+    available_columns: Collection[str],
 ) -> None:
     timestamp = datetime.now(timezone.utc).isoformat()
+    assignments: list[str] = []
+    parameters: list[object] = []
+
+    if "route_geojson" in available_columns:
+        assignments.append("route_geojson = ?")
+        parameters.append(geojson)
+    if "distance_km" in available_columns:
+        assignments.append("distance_km = ?")
+        parameters.append(distance_km)
+    if "duration_hr" in available_columns:
+        assignments.append("duration_hr = ?")
+        parameters.append(duration_hr)
+    if "origin_lon" in available_columns:
+        assignments.append("origin_lon = COALESCE(origin_lon, ?)")
+        parameters.append(origin_lon)
+    if "origin_lat" in available_columns:
+        assignments.append("origin_lat = COALESCE(origin_lat, ?)")
+        parameters.append(origin_lat)
+    if "dest_lon" in available_columns:
+        assignments.append("dest_lon = COALESCE(dest_lon, ?)")
+        parameters.append(dest_lon)
+    if "dest_lat" in available_columns:
+        assignments.append("dest_lat = COALESCE(dest_lat, ?)")
+        parameters.append(dest_lat)
+    if "updated_at" in available_columns:
+        assignments.append("updated_at = ?")
+        parameters.append(timestamp)
+
+    if not assignments:
+        return
+
+    parameters.append(job_id)
+
     conn.execute(
-        """
+        f"""
         UPDATE jobs
-        SET
-            route_geojson = ?,
-            distance_km = ?,
-            duration_hr = ?,
-            origin_lon = COALESCE(origin_lon, ?),
-            origin_lat = COALESCE(origin_lat, ?),
-            dest_lon = COALESCE(dest_lon, ?),
-            dest_lat = COALESCE(dest_lat, ?),
-            updated_at = ?
+        SET {', '.join(assignments)}
         WHERE id = ?
         """,
-        (
-            geojson,
-            distance_km,
-            duration_hr,
-            origin_lon,
-            origin_lat,
-            dest_lon,
-            dest_lat,
-            timestamp,
-            job_id,
-        ),
+        parameters,
     )
 
 
@@ -391,14 +422,42 @@ def populate_route_geometry(
     if dataset not in {"historical", "live"}:
         raise ValueError("dataset must be either 'historical' or 'live'")
 
+    if conn.row_factory is None:
+        conn.row_factory = sqlite3.Row
+
+    historical_columns: set[str] = set()
+
     if dataset == "historical":
+        historical_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(historical_jobs)").fetchall()
+        }
+        origin_lon_expr = (
+            "COALESCE(hj.origin_lon, o.lon)"
+            if "origin_lon" in historical_columns
+            else "o.lon"
+        )
+        origin_lat_expr = (
+            "COALESCE(hj.origin_lat, o.lat)"
+            if "origin_lat" in historical_columns
+            else "o.lat"
+        )
+        dest_lon_expr = (
+            "COALESCE(hj.dest_lon, d.lon)"
+            if "dest_lon" in historical_columns
+            else "d.lon"
+        )
+        dest_lat_expr = (
+            "COALESCE(hj.dest_lat, d.lat)"
+            if "dest_lat" in historical_columns
+            else "d.lat"
+        )
         query = f"""
             SELECT
                 hj.id,
-                COALESCE(hj.origin_lon, o.lon) AS origin_lon,
-                COALESCE(hj.origin_lat, o.lat) AS origin_lat,
-                COALESCE(hj.dest_lon, d.lon) AS dest_lon,
-                COALESCE(hj.dest_lat, d.lat) AS dest_lat,
+                {origin_lon_expr} AS origin_lon,
+                {origin_lat_expr} AS origin_lat,
+                {dest_lon_expr} AS dest_lon,
+                {dest_lat_expr} AS dest_lat,
                 hr.geojson AS existing_geojson
             FROM historical_jobs AS hj
             LEFT JOIN addresses AS o ON hj.origin_address_id = o.id
@@ -407,6 +466,9 @@ def populate_route_geometry(
             WHERE hj.id IN ({placeholders})
         """
     else:
+        live_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+        }
         query = f"""
             SELECT
                 id,
@@ -461,6 +523,7 @@ def populate_route_geometry(
                 origin_lat=origin_lat,
                 dest_lon=dest_lon,
                 dest_lat=dest_lat,
+                available_columns=historical_columns,
             )
         else:
             _store_live_geometry(
@@ -473,6 +536,7 @@ def populate_route_geometry(
                 origin_lat=origin_lat,
                 dest_lon=dest_lon,
                 dest_lat=dest_lat,
+                available_columns=live_columns,
             )
 
         updated += 1
