@@ -1755,6 +1755,7 @@ def render_price_distribution_dashboard():
                 options=client_options,
                 default=client_options if client_options else [],
                 disabled=not data_available,
+                key="client_filter_multiselect",
             )
 
             postcode_prefix = st.text_input(
@@ -3154,6 +3155,7 @@ def render_price_distribution_dashboard():
                     options=modifier_options,
                     default=[mid for mid in default_modifiers if mid in modifier_options],
                     format_func=lambda mod_id: modifier_labels.get(mod_id, mod_id),
+                    key="quote_builder_modifiers_multiselect_inline",
                 )
                 margin_cols = st.columns(2)
                 apply_margin = margin_cols[0].checkbox(

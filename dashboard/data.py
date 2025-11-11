@@ -273,6 +273,7 @@ def _sidebar_filters(
             options=client_options,
             default=client_options if client_options else [],
             disabled=not data_available,
+            key="sidebar_client_multiselect",
         )
 
         postcode_prefix = st.text_input(

@@ -536,6 +536,7 @@ def render_quote_builder(
             options=modifier_options,
             default=[mid for mid in default_modifiers if mid in modifier_options],
             format_func=lambda mod_id: modifier_labels.get(mod_id, mod_id),
+            key="quote_builder_modifiers_multiselect",
         )
         margin_cols = st.columns(2)
         apply_margin = margin_cols[0].checkbox(
