@@ -93,9 +93,9 @@ def _render_optimizer_results(run: OptimizerRun) -> None:
         title="Recommended uplift by corridor",
     )
     chart.update_layout(margin={"l": 0, "r": 0, "t": 40, "b": 0})
-    st.plotly_chart(chart, use_container_width=True)
+    st.plotly_chart(chart, width="stretch")
 
-    st.dataframe(recommendations_df, use_container_width=True)
+    st.dataframe(recommendations_df, width="stretch")
 
     csv_data = recommendations_df.to_csv(index=False)
     st.download_button(
