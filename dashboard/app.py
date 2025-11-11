@@ -1763,6 +1763,7 @@ def render_price_distribution_dashboard():
                 value=postcode_prefix or "",
                 disabled=not data_available,
                 help="Match origin or destination postcode prefixes (e.g. 40 to match 4000-4099).",
+                key="postcode_prefix_filter",
             ) or None
 
             if dataset_error:
@@ -1789,8 +1790,9 @@ def render_price_distribution_dashboard():
                 value=float(break_even_value),
                 step=5.0,
                 help="Used to draw break-even bands on the histogram.",
+                key="break_even_input",
             )
-            if st.button("Update break-even"):
+            if st.button("Update break-even", key="break_even_update_button"):
                 update_break_even(conn, new_break_even)
                 st.success(f"Break-even updated to ${new_break_even:,.2f}")
                 break_even_value = new_break_even
@@ -1882,7 +1884,7 @@ def render_price_distribution_dashboard():
                 map_routes,
                 truck_positions,
                 active_routes,
-                toggle_key="network_map_live_overlay_toggle_overview",
+                toggle_key="dashboard_network_map_toggle_overview",
             )
 
         with tab_map["Histogram"]:
@@ -2244,7 +2246,7 @@ def render_price_distribution_dashboard():
                     list(view_options.keys()),
                     horizontal=True,
                     help="Switch between per-kilometre earnings and quoted-versus-cost comparisons.",
-                    key="profitability_view",
+                    key="dashboard_profitability_view",
                 )
                 fig = view_options[selected_view](filtered_df)
                 st.plotly_chart(fig, width="stretch")
@@ -2298,11 +2300,13 @@ def render_price_distribution_dashboard():
                     "Switch between individual routes/points, an aggregate density heatmap, "
                     "or travel-time isochrones around each corridor."
                 ),
+                key="dashboard_route_map_mode",
             )
             metro_only = st.checkbox(
                 "Limit to metro jobs (≤100 km)",
                 value=False,
                 help="Apply a distance filter using distance_km ≤ 100 to focus on metro corridors.",
+                key="dashboard_route_map_metro_only",
             )
 
             scoped_df = _filter_by_distance(
@@ -2397,15 +2401,24 @@ def render_price_distribution_dashboard():
                                 "Switch between discrete attributes and continuous metrics "
                                 "to colour the route and point layers."
                             ),
+                            key="dashboard_route_colour_mode",
                         )
-                        show_routes = st.checkbox("Show route lines", value=True)
-                        show_points = st.checkbox("Show origin/destination points", value=True)
+                        show_routes = st.checkbox(
+                            "Show route lines",
+                            value=True,
+                            key="dashboard_show_route_lines",
+                        )
+                        show_points = st.checkbox(
+                            "Show origin/destination points",
+                            value=True,
+                            key="dashboard_show_route_points",
+                        )
 
                         geometry_toggle_help = (
                             "Switch between straight-line haversine chords and the stored route geometry "
                             "when plotting route lines."
                         )
-                        geometry_toggle_key = "route_map_use_route_geometry"
+                        geometry_toggle_key = "dashboard_route_use_route_geometry"
                         default_geometry_value = st.session_state.get(
                             geometry_toggle_key, True
                         )
@@ -2521,6 +2534,7 @@ def render_price_distribution_dashboard():
                                     help=(
                                         "Choose which attribute drives the route and point colouring."
                                     ),
+                                    key="dashboard_route_colour_dimension",
                                 )
                                 selected_column = available_colour_dimensions[colour_label]
                                 try:
@@ -2627,6 +2641,7 @@ def render_price_distribution_dashboard():
                                     help=(
                                         "Select a metric to drive the continuous colour scale."
                                     ),
+                                    key="dashboard_route_metric_dimension",
                                 )
                                 metric_spec = available_metric_options[metric_label]
                                 metric_column = metric_spec["column"]
@@ -2663,6 +2678,7 @@ def render_price_distribution_dashboard():
                     "Heatmap weighting",
                     options=list(weight_options.keys()),
                     help="Choose which metric influences the heatmap intensity.",
+                    key="dashboard_heatmap_weighting",
                 )
                 weight_column = weight_options[weight_label]
 
