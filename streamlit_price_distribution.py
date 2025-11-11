@@ -1864,7 +1864,7 @@ with connection_scope() as conn:
     with tab_map["Histogram"]:
         if has_filtered_data:
             histogram = create_histogram(filtered_df, break_even_value)
-            st.plotly_chart(histogram, use_container_width=True)
+            st.plotly_chart(histogram, width="stretch")
             st.caption(
                 "Histogram overlays include the normal distribution fit plus kurtosis and dispersion markers for context."
             )
@@ -1891,7 +1891,7 @@ with connection_scope() as conn:
                 key="profitability_view",
             )
             fig = view_options[selected_view](filtered_df)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
             if selected_view == "Metro profitability spotlight":
                 st.caption(
@@ -2055,7 +2055,7 @@ with connection_scope() as conn:
                                     show_points=show_points,
                                     use_route_geometry=use_route_geometry,
                                 )
-                                st.plotly_chart(route_map, use_container_width=True)
+                                st.plotly_chart(route_map, width="stretch")
                     else:
                         metric_colour_options = {
                             "Margin $/m³": {
@@ -2168,7 +2168,7 @@ with connection_scope() as conn:
                                     colorbar_tickformat=metric_spec.get("tickformat"),
                                     use_route_geometry=use_route_geometry,
                                 )
-                                st.plotly_chart(route_map, use_container_width=True)
+                                st.plotly_chart(route_map, width="stretch")
         elif map_mode == "Heatmap":
             weight_options = available_heatmap_weightings(filtered_df)
             weight_label = st.selectbox(
@@ -2247,7 +2247,7 @@ with connection_scope() as conn:
                         margin={"l": 0, "r": 0, "t": 0, "b": 0},
                         coloraxis_colorbar={"title": weight_label},
                     )
-                    st.plotly_chart(heatmap_fig, use_container_width=True)
+                    st.plotly_chart(heatmap_fig, width="stretch")
         else:
             centre_label = st.radio(
                 "Isochrone centre",
@@ -2331,7 +2331,7 @@ with connection_scope() as conn:
                     margin={"l": 0, "r": 0, "t": 0, "b": 0},
                     legend={"orientation": "h", "yanchor": "bottom", "y": 0.01},
                 )
-                st.plotly_chart(figure, use_container_width=True)
+                st.plotly_chart(figure, width="stretch")
 
 
     with tab_map["Quote builder"]:
