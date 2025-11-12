@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from datetime import date
-from typing import Any, Dict, List, MutableMapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, MutableMapping, Optional, Sequence, Tuple, Literal
 
 import pandas as pd
 import pydeck as pdk
@@ -49,6 +50,7 @@ _NULL_CLIENT_NOTES_KEY = "quote_null_client_notes"
 _NULL_CLIENT_DEFAULT_COMPANY = "Null (filler) client"
 _NULL_CLIENT_DEFAULT_NOTES = "Placeholder client captured via quote builder."
 _QUOTE_COUNTRY_STATE_KEY = "quote_builder_country"
+_SUGGESTION_PLACEHOLDER_OPTION = "Keep current input"
 
 
 def _initial_pin_state(result: QuoteResult) -> Dict[str, Any]:
@@ -62,29 +64,151 @@ def _initial_pin_state(result: QuoteResult) -> Dict[str, Any]:
             "lat": float(result.dest_lat),
         },
         "enabled": False,
+        "defaults": {
+            "origin": {
+                "lon": float(result.origin_lon),
+                "lat": float(result.origin_lat),
+            },
+            "destination": {
+                "lon": float(result.dest_lon),
+                "lat": float(result.dest_lat),
+            },
+        },
     }
+
+
+def _sync_pin_inputs(state: Dict[str, Any]) -> None:
+    """Ensure the numeric inputs reflect the stored pin coordinates."""
+
+    origin = state.get("origin") or {}
+    destination = state.get("destination") or {}
+
+    st.session_state[_pin_lon_key("quote_origin_pin_map")] = float(
+        origin.get("lon", _AUS_LAT_LON[1])
+    )
+    st.session_state[_pin_lat_key("quote_origin_pin_map")] = float(
+        origin.get("lat", _AUS_LAT_LON[0])
+    )
+    st.session_state[_pin_lon_key("quote_destination_pin_map")] = float(
+        destination.get("lon", _AUS_LAT_LON[1])
+    )
+    st.session_state[_pin_lat_key("quote_destination_pin_map")] = float(
+        destination.get("lat", _AUS_LAT_LON[0])
+    )
+
+
+def _update_pin_defaults(
+    entry: Dict[str, Any],
+    defaults: Dict[str, Any],
+    *,
+    lon: float,
+    lat: float,
+    override_existing: bool,
+) -> bool:
+    """Update pin defaults, returning True when coordinates changed."""
+
+    changed = False
+    lon_value = float(lon)
+    lat_value = float(lat)
+
+    prev_lon = defaults.get("lon")
+    prev_lat = defaults.get("lat")
+
+    if prev_lon is None or not math.isclose(float(prev_lon), lon_value):
+        defaults["lon"] = lon_value
+    if prev_lat is None or not math.isclose(float(prev_lat), lat_value):
+        defaults["lat"] = lat_value
+
+    existing_lon = entry.get("lon")
+    existing_lat = entry.get("lat")
+
+    if existing_lon is None or (
+        override_existing
+        and (prev_lon is None or math.isclose(float(existing_lon), float(prev_lon)))
+    ):
+        if existing_lon is None or not math.isclose(float(existing_lon), lon_value):
+            entry["lon"] = lon_value
+            changed = True
+    if existing_lat is None or (
+        override_existing
+        and (prev_lat is None or math.isclose(float(existing_lat), float(prev_lat)))
+    ):
+        if existing_lat is None or not math.isclose(float(existing_lat), lat_value):
+            entry["lat"] = lat_value
+            changed = True
+
+    return changed
 
 
 def _ensure_pin_state(result: QuoteResult) -> Dict[str, Any]:
     state: Dict[str, Any] = st.session_state.get("quote_pin_override", {})
+    coordinates_changed = False
+    defaults = state.get("defaults")
+    manual_enabled = bool(state.get("enabled"))
     if not state or "origin" not in state or "destination" not in state:
         state = _initial_pin_state(result)
+        coordinates_changed = True
+        defaults = state.get("defaults")
     else:
         state.setdefault("enabled", False)
+        if not isinstance(defaults, dict):
+            defaults = {
+                "origin": {
+                    "lon": float(result.origin_lon),
+                    "lat": float(result.origin_lat),
+                },
+                "destination": {
+                    "lon": float(result.dest_lon),
+                    "lat": float(result.dest_lat),
+                },
+            }
+            state["defaults"] = defaults
         # When result coordinates change, refresh defaults so pins move with them
-        origin_state = state.get("origin") or {}
-        dest_state = state.get("destination") or {}
-        if not origin_state:
-            origin_state = {}
-        if not dest_state:
-            dest_state = {}
-        origin_state.setdefault("lon", float(result.origin_lon))
-        origin_state.setdefault("lat", float(result.origin_lat))
-        dest_state.setdefault("lon", float(result.dest_lon))
-        dest_state.setdefault("lat", float(result.dest_lat))
+        origin_state = dict(state.get("origin") or {})
+        dest_state = dict(state.get("destination") or {})
+        origin_defaults = dict(defaults.get("origin") or {})
+        destination_defaults = dict(defaults.get("destination") or {})
+        coordinates_changed |= _update_pin_defaults(
+            origin_state,
+            origin_defaults,
+            lon=float(result.origin_lon),
+            lat=float(result.origin_lat),
+            override_existing=not manual_enabled,
+        )
+        coordinates_changed |= _update_pin_defaults(
+            dest_state,
+            destination_defaults,
+            lon=float(result.dest_lon),
+            lat=float(result.dest_lat),
+            override_existing=not manual_enabled,
+        )
         state["origin"] = origin_state
         state["destination"] = dest_state
+        defaults["origin"] = origin_defaults
+        defaults["destination"] = destination_defaults
     st.session_state["quote_pin_override"] = state
+    if not manual_enabled:
+        origin_entry = state.get("origin") or {}
+        dest_entry = state.get("destination") or {}
+        checks = [
+            (_pin_lon_key("quote_origin_pin_map"), origin_entry.get("lon")),
+            (_pin_lat_key("quote_origin_pin_map"), origin_entry.get("lat")),
+            (_pin_lon_key("quote_destination_pin_map"), dest_entry.get("lon")),
+            (_pin_lat_key("quote_destination_pin_map"), dest_entry.get("lat")),
+        ]
+        for key, value in checks:
+            stored_value = st.session_state.get(key)
+            if value is None or stored_value is None:
+                continue
+            try:
+                if not math.isclose(float(stored_value), float(value)):
+                    coordinates_changed = True
+                    break
+            except (TypeError, ValueError):
+                coordinates_changed = True
+                break
+    if coordinates_changed:
+        _sync_pin_inputs(state)
     return state
 
 
@@ -184,6 +308,51 @@ def _rerun_app() -> None:
     st.experimental_rerun()
 
 
+def apply_quote_suggestion(
+    conn: Any,
+    field: Literal["origin", "destination"],
+    suggestion: str,
+) -> None:
+    """Update stored quote inputs with a selected suggestion and recalculate."""
+
+    if not suggestion:
+        return
+
+    text_key = "Origin" if field == "origin" else "Destination"
+    st.session_state[text_key] = suggestion
+
+    existing_inputs = st.session_state.get("quote_inputs")
+    if not isinstance(existing_inputs, QuoteInput):
+        st.session_state["quote_suggestion_error"] = (
+            "Unable to apply suggestion without an existing quote input."
+        )
+        return
+
+    updated_inputs = (
+        replace(existing_inputs, origin=suggestion)
+        if field == "origin"
+        else replace(existing_inputs, destination=suggestion)
+    )
+    st.session_state["quote_inputs"] = updated_inputs
+
+    try:
+        updated_result = calculate_quote(conn, updated_inputs)
+    except (RuntimeError, ValueError) as exc:
+        st.session_state["quote_suggestion_error"] = str(exc)
+        st.session_state.pop("quote_result", None)
+        return
+
+    st.session_state.pop("quote_suggestion_error", None)
+    st.session_state["quote_result"] = updated_result
+    st.session_state["quote_manual_override_enabled"] = False
+    st.session_state["quote_manual_override_amount"] = float(
+        updated_result.final_quote
+    )
+    st.session_state["quote_pin_override"] = _initial_pin_state(updated_result)
+    st.session_state.pop(_HAVERSINE_MODAL_STATE_KEY, None)
+    _set_query_params(view="Quote builder")
+
+
 def _first_non_empty(route: pd.Series, columns: Sequence[str]) -> Optional[str]:
     for column in columns:
         if column in route and isinstance(route[column], str):
@@ -275,6 +444,9 @@ def render_quote_builder(
     st.caption(
         "Use a historical route to pre-fill the quick quote form, calculate pricing and optionally persist the result."
     )
+    suggestion_error = st.session_state.pop("quote_suggestion_error", None)
+    if suggestion_error:
+        st.error(suggestion_error)
     session_inputs: Optional[QuoteInput] = st.session_state.get(  # type: ignore[assignment]
         "quote_inputs"
     )
@@ -836,17 +1008,28 @@ def render_quote_builder(
         def _render_address_feedback(
             col: "st.delta_generator.DeltaGenerator",
             label: str,
+            field_key: Literal["origin", "destination"],
             candidates: Optional[List[str]],
             suggestions: Optional[List[str]],
             ambiguities: Optional[Dict[str, Sequence[str]]],
         ) -> None:
             clean_candidates = [c for c in candidates or [] if c]
-            clean_suggestions = [s for s in suggestions or [] if s]
+            clean_suggestions: List[str] = []
+            seen_suggestions: set[str] = set()
+            for suggestion in suggestions or []:
+                if not suggestion:
+                    continue
+                if suggestion in seen_suggestions:
+                    continue
+                clean_suggestions.append(suggestion)
+                seen_suggestions.add(suggestion)
             clean_ambiguities = {
                 abbr: list(options)
                 for abbr, options in (ambiguities or {}).items()
                 if options
             }
+            suggestions_state_key = f"quote_{field_key}_suggestions"
+            st.session_state[suggestions_state_key] = list(clean_suggestions)
             if not (
                 clean_candidates
                 or clean_suggestions
@@ -863,9 +1046,23 @@ def render_quote_builder(
                 )
             if clean_suggestions:
                 col.caption("Autocorrected place names from geocoding:")
-                col.markdown(
-                    "\n".join(f"- {suggestion}" for suggestion in clean_suggestions)
+                select_key = f"quote_{field_key}_suggestion_select"
+                if select_key not in st.session_state:
+                    st.session_state[select_key] = _SUGGESTION_PLACEHOLDER_OPTION
+                options = [_SUGGESTION_PLACEHOLDER_OPTION] + clean_suggestions
+                selected_option = col.selectbox(
+                    f"Apply {label.lower()} suggestion",
+                    options=options,
+                    key=select_key,
+                    help=(
+                        "Replace the current input with a suggested location and "
+                        "recalculate the quote."
+                    ),
                 )
+                if selected_option != _SUGGESTION_PLACEHOLDER_OPTION:
+                    apply_quote_suggestion(conn, field_key, selected_option)
+                    st.session_state[select_key] = _SUGGESTION_PLACEHOLDER_OPTION
+                    _rerun_app()
             if clean_ambiguities:
                 col.caption("Ambiguous abbreviations detected:")
                 col.markdown(
@@ -878,6 +1075,7 @@ def render_quote_builder(
         _render_address_feedback(
             suggestion_cols[0],
             "Origin",
+            "origin",
             quote_result.origin_candidates,
             quote_result.origin_suggestions,
             quote_result.origin_ambiguities,
@@ -885,6 +1083,7 @@ def render_quote_builder(
         _render_address_feedback(
             suggestion_cols[1],
             "Destination",
+            "destination",
             quote_result.destination_candidates,
             quote_result.destination_suggestions,
             quote_result.destination_ambiguities,

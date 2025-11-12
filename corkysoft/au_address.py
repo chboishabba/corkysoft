@@ -133,6 +133,20 @@ def _score_feature_against_targets(
         return 0.0
 
     props = feature.get("properties") or {}
+    layer = str(props.get("layer") or "").lower()
+    has_address_layer = layer in {"address", "street"}
+    housenumber = props.get("housenumber")
+    has_housenumber = bool(str(housenumber).strip())
+
+    confidence_raw = props.get("confidence")
+    if confidence_raw is None:
+        confidence_raw = props.get("confidence_score")
+    try:
+        confidence = float(confidence_raw) if confidence_raw is not None else 0.0
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(confidence, 1.0))
+
     texts = [
         props.get("label"),
         props.get("name"),
@@ -142,7 +156,7 @@ def _score_feature_against_targets(
         props.get("region"),
     ]
 
-    best_score = 0.0
+    best_overlap_score = 0.0
     for text in texts:
         tokens = _tokenize_for_matching(text)
         if not tokens:
@@ -156,9 +170,22 @@ def _score_feature_against_targets(
             score = overlap / len(target_tokens)
             if overlap == len(target_tokens):
                 score += 1.0
-            if score > best_score:
-                best_score = score
-    return best_score
+            if score > best_overlap_score:
+                best_overlap_score = score
+
+    score = best_overlap_score
+    if has_address_layer:
+        score += 0.35
+    if has_housenumber:
+        score += 0.2
+
+    if confidence:
+        if best_overlap_score < 0.5:
+            score += confidence * 0.4
+        else:
+            score += confidence * 0.1
+
+    return score
 
 
 def _choose_best_feature(

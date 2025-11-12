@@ -144,3 +144,44 @@ def test_geocode_prioritises_specific_address_in_autocorrect() -> None:
     assert result.normalization.autocorrections
     first_suggestion = result.normalization.autocorrections[0]
     assert first_suggestion.startswith("12 Carlton Street Toowoomba")
+
+
+def test_geocode_prefers_address_with_misspelt_query() -> None:
+    fake_client = FakePeliasClient(
+        {
+            "26/100 Champtions Crescent, Brookwater, Australia": {
+                "features": [
+                    {
+                        "geometry": {"coordinates": [152.91, -27.66]},
+                        "properties": {
+                            "label": "Brookwater QLD 4300, Australia",
+                            "name": "Brookwater",
+                            "locality": "Brookwater",
+                            "layer": "locality",
+                            "confidence": 0.6,
+                        },
+                    },
+                    {
+                        "geometry": {"coordinates": [152.92, -27.65]},
+                        "properties": {
+                            "label": "Champions Cresent, Brookwater QLD 4300, Australia",
+                            "name": "Champions Cresent",
+                            "street": "Champions Cresent",
+                            "locality": "Brookwater",
+                            "layer": "address",
+                            "housenumber": "26",
+                            "confidence": 0.9,
+                        },
+                    },
+                ]
+            }
+        }
+    )
+
+    result = geocode_with_normalization(
+        fake_client,
+        "26/100 CHamptions Crescent, Brookwater",
+        "Australia",
+    )
+
+    assert result.label == "Champions Cresent, Brookwater QLD 4300, Australia"
