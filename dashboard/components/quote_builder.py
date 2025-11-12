@@ -62,29 +62,151 @@ def _initial_pin_state(result: QuoteResult) -> Dict[str, Any]:
             "lat": float(result.dest_lat),
         },
         "enabled": False,
+        "defaults": {
+            "origin": {
+                "lon": float(result.origin_lon),
+                "lat": float(result.origin_lat),
+            },
+            "destination": {
+                "lon": float(result.dest_lon),
+                "lat": float(result.dest_lat),
+            },
+        },
     }
+
+
+def _sync_pin_inputs(state: Dict[str, Any]) -> None:
+    """Ensure the numeric inputs reflect the stored pin coordinates."""
+
+    origin = state.get("origin") or {}
+    destination = state.get("destination") or {}
+
+    st.session_state[_pin_lon_key("quote_origin_pin_map")] = float(
+        origin.get("lon", _AUS_LAT_LON[1])
+    )
+    st.session_state[_pin_lat_key("quote_origin_pin_map")] = float(
+        origin.get("lat", _AUS_LAT_LON[0])
+    )
+    st.session_state[_pin_lon_key("quote_destination_pin_map")] = float(
+        destination.get("lon", _AUS_LAT_LON[1])
+    )
+    st.session_state[_pin_lat_key("quote_destination_pin_map")] = float(
+        destination.get("lat", _AUS_LAT_LON[0])
+    )
+
+
+def _update_pin_defaults(
+    entry: Dict[str, Any],
+    defaults: Dict[str, Any],
+    *,
+    lon: float,
+    lat: float,
+    override_existing: bool,
+) -> bool:
+    """Update pin defaults, returning True when coordinates changed."""
+
+    changed = False
+    lon_value = float(lon)
+    lat_value = float(lat)
+
+    prev_lon = defaults.get("lon")
+    prev_lat = defaults.get("lat")
+
+    if prev_lon is None or not math.isclose(float(prev_lon), lon_value):
+        defaults["lon"] = lon_value
+    if prev_lat is None or not math.isclose(float(prev_lat), lat_value):
+        defaults["lat"] = lat_value
+
+    existing_lon = entry.get("lon")
+    existing_lat = entry.get("lat")
+
+    if existing_lon is None or (
+        override_existing
+        and (prev_lon is None or math.isclose(float(existing_lon), float(prev_lon)))
+    ):
+        if existing_lon is None or not math.isclose(float(existing_lon), lon_value):
+            entry["lon"] = lon_value
+            changed = True
+    if existing_lat is None or (
+        override_existing
+        and (prev_lat is None or math.isclose(float(existing_lat), float(prev_lat)))
+    ):
+        if existing_lat is None or not math.isclose(float(existing_lat), lat_value):
+            entry["lat"] = lat_value
+            changed = True
+
+    return changed
 
 
 def _ensure_pin_state(result: QuoteResult) -> Dict[str, Any]:
     state: Dict[str, Any] = st.session_state.get("quote_pin_override", {})
+    coordinates_changed = False
+    defaults = state.get("defaults")
+    manual_enabled = bool(state.get("enabled"))
     if not state or "origin" not in state or "destination" not in state:
         state = _initial_pin_state(result)
+        coordinates_changed = True
+        defaults = state.get("defaults")
     else:
         state.setdefault("enabled", False)
+        if not isinstance(defaults, dict):
+            defaults = {
+                "origin": {
+                    "lon": float(result.origin_lon),
+                    "lat": float(result.origin_lat),
+                },
+                "destination": {
+                    "lon": float(result.dest_lon),
+                    "lat": float(result.dest_lat),
+                },
+            }
+            state["defaults"] = defaults
         # When result coordinates change, refresh defaults so pins move with them
-        origin_state = state.get("origin") or {}
-        dest_state = state.get("destination") or {}
-        if not origin_state:
-            origin_state = {}
-        if not dest_state:
-            dest_state = {}
-        origin_state.setdefault("lon", float(result.origin_lon))
-        origin_state.setdefault("lat", float(result.origin_lat))
-        dest_state.setdefault("lon", float(result.dest_lon))
-        dest_state.setdefault("lat", float(result.dest_lat))
+        origin_state = dict(state.get("origin") or {})
+        dest_state = dict(state.get("destination") or {})
+        origin_defaults = dict(defaults.get("origin") or {})
+        destination_defaults = dict(defaults.get("destination") or {})
+        coordinates_changed |= _update_pin_defaults(
+            origin_state,
+            origin_defaults,
+            lon=float(result.origin_lon),
+            lat=float(result.origin_lat),
+            override_existing=not manual_enabled,
+        )
+        coordinates_changed |= _update_pin_defaults(
+            dest_state,
+            destination_defaults,
+            lon=float(result.dest_lon),
+            lat=float(result.dest_lat),
+            override_existing=not manual_enabled,
+        )
         state["origin"] = origin_state
         state["destination"] = dest_state
+        defaults["origin"] = origin_defaults
+        defaults["destination"] = destination_defaults
     st.session_state["quote_pin_override"] = state
+    if not manual_enabled:
+        origin_entry = state.get("origin") or {}
+        dest_entry = state.get("destination") or {}
+        checks = [
+            (_pin_lon_key("quote_origin_pin_map"), origin_entry.get("lon")),
+            (_pin_lat_key("quote_origin_pin_map"), origin_entry.get("lat")),
+            (_pin_lon_key("quote_destination_pin_map"), dest_entry.get("lon")),
+            (_pin_lat_key("quote_destination_pin_map"), dest_entry.get("lat")),
+        ]
+        for key, value in checks:
+            stored_value = st.session_state.get(key)
+            if value is None or stored_value is None:
+                continue
+            try:
+                if not math.isclose(float(stored_value), float(value)):
+                    coordinates_changed = True
+                    break
+            except (TypeError, ValueError):
+                coordinates_changed = True
+                break
+    if coordinates_changed:
+        _sync_pin_inputs(state)
     return state
 
 
