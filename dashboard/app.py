@@ -4045,10 +4045,19 @@ def render_price_distribution_dashboard():
         remaining_columns = [
             col for col in filtered_df.columns if col not in display_columns
         ]
-        st.dataframe(filtered_df[display_columns + remaining_columns])
+        filtered_display_df = filtered_df
+        if "job_date" in filtered_df.columns:
+            parsed_dates = pd.to_datetime(filtered_df["job_date"], errors="coerce")
+            filtered_display_df = (
+                filtered_df.assign(_job_sort_key=parsed_dates)
+                .sort_values("_job_sort_key", ascending=False, na_position="last")
+                .drop(columns="_job_sort_key")
+            )
+
+        st.dataframe(filtered_display_df[display_columns + remaining_columns])
 
         csv_buffer = io.StringIO()
-        filtered_df.to_csv(csv_buffer, index=False)
+        filtered_display_df.to_csv(csv_buffer, index=False)
         st.download_button(
             "Export filtered rows",
             csv_buffer.getvalue(),
