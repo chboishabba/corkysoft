@@ -1,11 +1,13 @@
 import sqlite3
 import sys
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 import types
 from typing import List, Optional
 
 import pytest
+import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -974,3 +976,73 @@ def test_load_quotes_returns_saved_quote() -> None:
     )
 
     conn.close()
+
+
+def test_apply_quote_suggestion_updates_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dashboard.components import quote_builder
+
+    st.session_state.clear()
+
+    conn = object()
+    inputs = _quote_input()
+    result = _quote_result()
+    result.origin_candidates = ["Origin"]
+    result.destination_candidates = ["Destination"]
+    st.session_state["quote_inputs"] = inputs
+    st.session_state["quote_result"] = result
+    st.session_state["Origin"] = inputs.origin
+    st.session_state["Destination"] = inputs.destination
+
+    def _fake_set_query_params(**kwargs: str) -> None:
+        st.session_state["query_params_called"] = kwargs
+
+    monkeypatch.setattr(quote_builder, "_set_query_params", _fake_set_query_params)
+
+    def _fake_calculate(_: object, new_inputs: QuoteInput) -> QuoteResult:
+        st.session_state.setdefault("calculate_calls", []).append(
+            (new_inputs.origin, new_inputs.destination)
+        )
+        current = st.session_state.get("quote_result", result)
+        if new_inputs.origin != current.origin_resolved:
+            return replace(
+                current,
+                origin_resolved=new_inputs.origin,
+                origin_lon=current.origin_lon + 1.0,
+                origin_lat=current.origin_lat + 1.0,
+            )
+        if new_inputs.destination != current.destination_resolved:
+            return replace(
+                current,
+                destination_resolved=new_inputs.destination,
+                dest_lon=current.dest_lon + 1.0,
+                dest_lat=current.dest_lat + 1.0,
+            )
+        return current
+
+    monkeypatch.setattr(quote_builder, "calculate_quote", _fake_calculate)
+
+    quote_builder.apply_quote_suggestion(conn, "origin", "Suggested Origin")
+
+    assert st.session_state["Origin"] == "Suggested Origin"
+    assert st.session_state["quote_inputs"].origin == "Suggested Origin"
+    assert st.session_state["quote_result"].origin_resolved == "Suggested Origin"
+    assert st.session_state["quote_manual_override_enabled"] is False
+    assert st.session_state["quote_manual_override_amount"] == pytest.approx(
+        st.session_state["quote_result"].final_quote
+    )
+    assert st.session_state["quote_pin_override"]["origin"]["lon"] == pytest.approx(
+        st.session_state["quote_result"].origin_lon
+    )
+
+    quote_builder.apply_quote_suggestion(conn, "destination", "Suggested Destination")
+
+    assert st.session_state["Destination"] == "Suggested Destination"
+    assert st.session_state["quote_inputs"].destination == "Suggested Destination"
+    assert (
+        st.session_state["quote_result"].destination_resolved == "Suggested Destination"
+    )
+    assert st.session_state["calculate_calls"] == [
+        ("Suggested Origin", inputs.destination),
+        ("Suggested Origin", "Suggested Destination"),
+    ]
+    assert st.session_state.get("query_params_called") == {"view": "Quote builder"}
