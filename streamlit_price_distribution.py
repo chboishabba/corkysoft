@@ -342,7 +342,7 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("Price distribution (Airbnb-style)")
+st.title("CRUSADER NATIONAL")
 st.caption(
     "Visualise $ per m³ by corridor and client, with break-even bands to spot loss-leaders."
 )
