@@ -1829,22 +1829,24 @@ def render_price_distribution_dashboard():
             st.warning("No jobs match the selected filters. Quote builder remains available below.")
 
         tab_labels = PRICE_DASHBOARD_TABS
+        tabs_key = "dashboard_active_tab"
         params = _get_query_params()
         requested_tab = params.get("view", [tab_labels[0]])[0]
         if requested_tab not in tab_labels:
             requested_tab = tab_labels[0]
-        if requested_tab != tab_labels[0]:
-            ordered_labels = [
-                requested_tab,
-                *[label for label in tab_labels if label != requested_tab],
-            ]
-        else:
-            ordered_labels = tab_labels
+        requested_tab_index = tab_labels.index(requested_tab)
+
+        view_param_requested = "view" in params
+        if tabs_key not in st.session_state or (
+            view_param_requested
+            and st.session_state.get(tabs_key) != requested_tab_index
+        ):
+            st.session_state[tabs_key] = requested_tab_index
 
         with tabs_placeholder:
-            streamlit_tabs = st.tabs(ordered_labels)
+            streamlit_tabs = st.tabs(tab_labels, key=tabs_key)
         tab_map: Dict[str, Any] = {
-            label: tab for label, tab in zip(ordered_labels, streamlit_tabs)
+            label: tab for label, tab in zip(tab_labels, streamlit_tabs)
         }
 
         summary: Optional[DistributionSummary] = None
