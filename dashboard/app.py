@@ -1835,7 +1835,13 @@ def render_price_distribution_dashboard():
         if requested_tab not in tab_labels:
             requested_tab = tab_labels[0]
         requested_tab_index = tab_labels.index(requested_tab)
-        st.session_state[tabs_key] = requested_tab_index
+
+        view_param_requested = "view" in params
+        if tabs_key not in st.session_state or (
+            view_param_requested
+            and st.session_state.get(tabs_key) != requested_tab_index
+        ):
+            st.session_state[tabs_key] = requested_tab_index
 
         with tabs_placeholder:
             streamlit_tabs = st.tabs(tab_labels, key=tabs_key)
