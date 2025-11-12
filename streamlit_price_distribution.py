@@ -344,7 +344,7 @@ st.set_page_config(
 
 st.title("CRUSADER NATIONAL")
 st.caption(
-    "Visualise $ per m³ by corridor and client, with break-even bands to spot loss-leaders."
+    "FOR TESTING PURPOSES ONLY - PROVIDED AS-IS AND WITHOUT WARRANTY, NO LIABILITY WILL BE ACCEPTED FOR LOSSES OR DAMAGES"
 )
 
 tabs_placeholder = st.container()
