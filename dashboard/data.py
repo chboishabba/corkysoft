@@ -281,6 +281,7 @@ def _sidebar_filters(
             value=postcode_prefix or "",
             disabled=not data_available,
             help="Match origin or destination postcode prefixes (e.g. 40 to match 4000-4099).",
+            key="sidebar_postcode_prefix_filter",
         ) or None
 
         if dataset_error:
@@ -307,8 +308,9 @@ def _sidebar_filters(
             value=float(break_even_value),
             step=5.0,
             help="Used to draw break-even bands on the histogram.",
+            key="sidebar_break_even_input",
         )
-        if st.button("Update break-even"):
+        if st.button("Update break-even", key="sidebar_break_even_update_button"):
             update_break_even(conn, new_break_even)
             st.success(f"Break-even updated to ${new_break_even:,.2f}")
             break_even_value = new_break_even

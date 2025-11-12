@@ -267,7 +267,13 @@ def main() -> None:
         page_title="Price distribution by corridor",
         layout="wide",
     )
-    render_price_distribution_dashboard()
+    try:
+        from streamlit.runtime import exists as runtime_exists
+    except ImportError:
+        runtime_exists = None
+
+    if runtime_exists is None or not runtime_exists():
+        render_price_distribution_dashboard()
 
 
 # -----------------------------------------------------------------------------
@@ -1618,13 +1624,13 @@ with prepare_dashboard_data() as dashboard_data:
             map_routes,
             truck_positions,
             active_routes,
-            toggle_key="network_map_live_overlay_toggle_overview",
+            toggle_key="price_distribution_network_map_toggle_overview",
         )
 
     with tab_map["Histogram"]:
         if has_filtered_data:
             histogram = create_histogram(filtered_df, break_even_value)
-            st.plotly_chart(histogram, width="stretch")
+            st.plotly_chart(histogram, width="stretch", key="price_histogram_chart")
             st.caption(
                 "Histogram overlays include the normal distribution fit plus kurtosis and dispersion markers for context."
             )
@@ -1648,10 +1654,10 @@ with prepare_dashboard_data() as dashboard_data:
                 list(view_options.keys()),
                 horizontal=True,
                 help="Switch between per-kilometre earnings and quoted-versus-cost comparisons.",
-                key="profitability_view",
+                key="price_profitability_view",
             )
             fig = view_options[selected_view](filtered_df)
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, width="stretch", key="price_profitability_chart")
 
             if selected_view == "Metro profitability spotlight":
                 st.caption(
@@ -1702,11 +1708,13 @@ with prepare_dashboard_data() as dashboard_data:
                 "Switch between individual routes/points, an aggregate density heatmap, "
                 "or travel-time isochrones around each corridor."
             ),
+            key="price_route_map_mode",
         )
         metro_only = st.checkbox(
             "Limit to metro jobs (≤100 km)",
             value=False,
             help="Apply a distance filter using distance_km ≤ 100 to focus on metro corridors.",
+            key="price_route_map_metro_only",
         )
 
         scoped_df = _filter_by_distance(
@@ -1738,15 +1746,24 @@ with prepare_dashboard_data() as dashboard_data:
                             "Switch between discrete attributes and continuous metrics "
                             "to colour the route and point layers."
                         ),
+                        key="price_route_colour_mode",
                     )
-                    show_routes = st.checkbox("Show route lines", value=True)
-                    show_points = st.checkbox("Show origin/destination points", value=True)
+                    show_routes = st.checkbox(
+                        "Show route lines",
+                        value=True,
+                        key="price_show_route_lines",
+                    )
+                    show_points = st.checkbox(
+                        "Show origin/destination points",
+                        value=True,
+                        key="price_show_route_points",
+                    )
 
                     geometry_toggle_help = (
                         "Switch between straight-line haversine chords and the stored route geometry "
                         "when plotting route lines."
                     )
-                    geometry_toggle_key = "route_map_use_route_geometry"
+                    geometry_toggle_key = "price_route_use_route_geometry"
                     default_geometry_value = st.session_state.get(
                         geometry_toggle_key, True
                     )
@@ -1793,6 +1810,7 @@ with prepare_dashboard_data() as dashboard_data:
                                 help=(
                                     "Choose which attribute drives the route and point colouring."
                                 ),
+                                key="price_route_colour_dimension",
                             )
                             selected_column = available_colour_dimensions[colour_label]
                             try:
@@ -1815,7 +1833,11 @@ with prepare_dashboard_data() as dashboard_data:
                                     show_points=show_points,
                                     use_route_geometry=use_route_geometry,
                                 )
-                                st.plotly_chart(route_map, width="stretch")
+                                st.plotly_chart(
+                                    route_map,
+                                    width="stretch",
+                                    key="price_route_map_categorical_chart",
+                                )
                     else:
                         metric_colour_options = {
                             "Margin $/m³": {
@@ -1899,6 +1921,7 @@ with prepare_dashboard_data() as dashboard_data:
                                 help=(
                                     "Select a metric to drive the continuous colour scale."
                                 ),
+                                key="price_route_metric_dimension",
                             )
                             metric_spec = available_metric_options[metric_label]
                             metric_column = metric_spec["column"]
@@ -1928,13 +1951,18 @@ with prepare_dashboard_data() as dashboard_data:
                                     colorbar_tickformat=metric_spec.get("tickformat"),
                                     use_route_geometry=use_route_geometry,
                                 )
-                                st.plotly_chart(route_map, width="stretch")
+                                st.plotly_chart(
+                                    route_map,
+                                    width="stretch",
+                                    key="price_route_map_metric_chart",
+                                )
         elif map_mode == "Heatmap":
             weight_options = available_heatmap_weightings(filtered_df)
             weight_label = st.selectbox(
                 "Heatmap weighting",
                 options=list(weight_options.keys()),
                 help="Choose which metric influences the heatmap intensity.",
+                key="price_heatmap_weighting",
             )
             weight_column = weight_options[weight_label]
 
@@ -2007,7 +2035,11 @@ with prepare_dashboard_data() as dashboard_data:
                         margin={"l": 0, "r": 0, "t": 0, "b": 0},
                         coloraxis_colorbar={"title": weight_label},
                     )
-                    st.plotly_chart(heatmap_fig, width="stretch")
+                    st.plotly_chart(
+                        heatmap_fig,
+                        width="stretch",
+                        key="price_route_heatmap_chart",
+                    )
         else:
             centre_label = st.radio(
                 "Isochrone centre",
@@ -2091,7 +2123,11 @@ with prepare_dashboard_data() as dashboard_data:
                     margin={"l": 0, "r": 0, "t": 0, "b": 0},
                     legend={"orientation": "h", "yanchor": "bottom", "y": 0.01},
                 )
-                st.plotly_chart(figure, width="stretch")
+                st.plotly_chart(
+                    figure,
+                    width="stretch",
+                    key="price_isochrone_chart",
+                )
 
 
     with tab_map["Quote builder"]:
