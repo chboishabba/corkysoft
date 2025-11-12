@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from datetime import date
-from typing import Any, Dict, List, MutableMapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, MutableMapping, Optional, Sequence, Tuple, Literal
 
 import pandas as pd
 import pydeck as pdk
@@ -49,6 +50,7 @@ _NULL_CLIENT_NOTES_KEY = "quote_null_client_notes"
 _NULL_CLIENT_DEFAULT_COMPANY = "Null (filler) client"
 _NULL_CLIENT_DEFAULT_NOTES = "Placeholder client captured via quote builder."
 _QUOTE_COUNTRY_STATE_KEY = "quote_builder_country"
+_SUGGESTION_PLACEHOLDER_OPTION = "Keep current input"
 
 
 def _initial_pin_state(result: QuoteResult) -> Dict[str, Any]:
@@ -184,6 +186,51 @@ def _rerun_app() -> None:
     st.experimental_rerun()
 
 
+def apply_quote_suggestion(
+    conn: Any,
+    field: Literal["origin", "destination"],
+    suggestion: str,
+) -> None:
+    """Update stored quote inputs with a selected suggestion and recalculate."""
+
+    if not suggestion:
+        return
+
+    text_key = "Origin" if field == "origin" else "Destination"
+    st.session_state[text_key] = suggestion
+
+    existing_inputs = st.session_state.get("quote_inputs")
+    if not isinstance(existing_inputs, QuoteInput):
+        st.session_state["quote_suggestion_error"] = (
+            "Unable to apply suggestion without an existing quote input."
+        )
+        return
+
+    updated_inputs = (
+        replace(existing_inputs, origin=suggestion)
+        if field == "origin"
+        else replace(existing_inputs, destination=suggestion)
+    )
+    st.session_state["quote_inputs"] = updated_inputs
+
+    try:
+        updated_result = calculate_quote(conn, updated_inputs)
+    except (RuntimeError, ValueError) as exc:
+        st.session_state["quote_suggestion_error"] = str(exc)
+        st.session_state.pop("quote_result", None)
+        return
+
+    st.session_state.pop("quote_suggestion_error", None)
+    st.session_state["quote_result"] = updated_result
+    st.session_state["quote_manual_override_enabled"] = False
+    st.session_state["quote_manual_override_amount"] = float(
+        updated_result.final_quote
+    )
+    st.session_state["quote_pin_override"] = _initial_pin_state(updated_result)
+    st.session_state.pop(_HAVERSINE_MODAL_STATE_KEY, None)
+    _set_query_params(view="Quote builder")
+
+
 def _first_non_empty(route: pd.Series, columns: Sequence[str]) -> Optional[str]:
     for column in columns:
         if column in route and isinstance(route[column], str):
@@ -275,6 +322,9 @@ def render_quote_builder(
     st.caption(
         "Use a historical route to pre-fill the quick quote form, calculate pricing and optionally persist the result."
     )
+    suggestion_error = st.session_state.pop("quote_suggestion_error", None)
+    if suggestion_error:
+        st.error(suggestion_error)
     session_inputs: Optional[QuoteInput] = st.session_state.get(  # type: ignore[assignment]
         "quote_inputs"
     )
@@ -836,17 +886,28 @@ def render_quote_builder(
         def _render_address_feedback(
             col: "st.delta_generator.DeltaGenerator",
             label: str,
+            field_key: Literal["origin", "destination"],
             candidates: Optional[List[str]],
             suggestions: Optional[List[str]],
             ambiguities: Optional[Dict[str, Sequence[str]]],
         ) -> None:
             clean_candidates = [c for c in candidates or [] if c]
-            clean_suggestions = [s for s in suggestions or [] if s]
+            clean_suggestions: List[str] = []
+            seen_suggestions: set[str] = set()
+            for suggestion in suggestions or []:
+                if not suggestion:
+                    continue
+                if suggestion in seen_suggestions:
+                    continue
+                clean_suggestions.append(suggestion)
+                seen_suggestions.add(suggestion)
             clean_ambiguities = {
                 abbr: list(options)
                 for abbr, options in (ambiguities or {}).items()
                 if options
             }
+            suggestions_state_key = f"quote_{field_key}_suggestions"
+            st.session_state[suggestions_state_key] = list(clean_suggestions)
             if not (
                 clean_candidates
                 or clean_suggestions
@@ -863,9 +924,23 @@ def render_quote_builder(
                 )
             if clean_suggestions:
                 col.caption("Autocorrected place names from geocoding:")
-                col.markdown(
-                    "\n".join(f"- {suggestion}" for suggestion in clean_suggestions)
+                select_key = f"quote_{field_key}_suggestion_select"
+                if select_key not in st.session_state:
+                    st.session_state[select_key] = _SUGGESTION_PLACEHOLDER_OPTION
+                options = [_SUGGESTION_PLACEHOLDER_OPTION] + clean_suggestions
+                selected_option = col.selectbox(
+                    f"Apply {label.lower()} suggestion",
+                    options=options,
+                    key=select_key,
+                    help=(
+                        "Replace the current input with a suggested location and "
+                        "recalculate the quote."
+                    ),
                 )
+                if selected_option != _SUGGESTION_PLACEHOLDER_OPTION:
+                    apply_quote_suggestion(conn, field_key, selected_option)
+                    st.session_state[select_key] = _SUGGESTION_PLACEHOLDER_OPTION
+                    _rerun_app()
             if clean_ambiguities:
                 col.caption("Ambiguous abbreviations detected:")
                 col.markdown(
@@ -878,6 +953,7 @@ def render_quote_builder(
         _render_address_feedback(
             suggestion_cols[0],
             "Origin",
+            "origin",
             quote_result.origin_candidates,
             quote_result.origin_suggestions,
             quote_result.origin_ambiguities,
@@ -885,6 +961,7 @@ def render_quote_builder(
         _render_address_feedback(
             suggestion_cols[1],
             "Destination",
+            "destination",
             quote_result.destination_candidates,
             quote_result.destination_suggestions,
             quote_result.destination_ambiguities,
