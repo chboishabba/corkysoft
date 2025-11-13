@@ -125,6 +125,35 @@ def _build_target_token_sets(
     return [tokens for tokens in token_sets if tokens]
 
 
+_SLASHED_UNIT_RE = re.compile(
+    r"^\s*(?P<unit>[\w-]+)\s*/\s*(?P<housenumber>[\w-]+)(?:\s+|$)"
+)
+
+
+def _extract_unit_components(
+    normalization: Optional["AddressNormalization"],
+) -> tuple[Optional[str], Optional[str]]:
+    """Return unit and housenumber details inferred from normalization data."""
+
+    if not normalization or not normalization.canonical:
+        return None, None
+
+    match = _SLASHED_UNIT_RE.match(normalization.canonical)
+    if not match:
+        return None, None
+
+    unit = match.group("unit") or None
+    housenumber = match.group("housenumber") or None
+    return unit, housenumber
+
+
+def _contains_token(text: Optional[str], token: Optional[str]) -> bool:
+    if not text or not token:
+        return False
+    pattern = rf"(?<![\w/]){re.escape(token)}(?![\w/])"
+    return bool(re.search(pattern, text))
+
+
 def _score_feature_against_targets(
     feature: dict,
     target_token_sets: Sequence[set[str]],
@@ -418,6 +447,32 @@ def geocode_with_normalization(
         or props.get("name")
         or (normalization.canonical if normalization else cleaned_input)
     )
+    if label is not None:
+        label = _collapse_whitespace(str(label)) or None
+
+    if normalization is not None:
+        unit, normalized_housenumber = _extract_unit_components(normalization)
+    else:
+        unit, normalized_housenumber = (None, None)
+
+    if normalization is not None and label is None:
+        label = normalization.canonical or cleaned_input
+    if label is None:
+        label = cleaned_input or place
+
+    if normalization is not None:
+        # Some Pelias results omit or misclassify unit and house numbers.
+        # Re-introduce them when we can infer the intent from the original
+        # normalized input so downstream consumers receive the precise address.
+        enriched_label = label
+        housenumber = normalized_housenumber
+        if housenumber and not _contains_token(enriched_label, housenumber):
+            enriched_label = f"{housenumber} {enriched_label}".strip()
+
+        if unit and not _contains_token(enriched_label, unit):
+            enriched_label = f"Unit {unit}, {enriched_label}".strip()
+
+        label = enriched_label
 
     postalcode = _clean_component(props.get("postalcode"))
     locality = _clean_component(props.get("locality"))

@@ -184,4 +184,7 @@ def test_geocode_prefers_address_with_misspelt_query() -> None:
         "Australia",
     )
 
-    assert result.label == "Champions Cresent, Brookwater QLD 4300, Australia"
+    assert (
+        result.label
+        == "Unit 26, 100 Champions Cresent, Brookwater QLD 4300, Australia"
+    )
