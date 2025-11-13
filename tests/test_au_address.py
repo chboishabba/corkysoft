@@ -185,3 +185,42 @@ def test_geocode_prefers_address_with_misspelt_query() -> None:
     )
 
     assert result.label == "Champions Cresent, Brookwater QLD 4300, Australia"
+
+
+def test_geocode_rejects_high_confidence_address_without_token_overlap() -> None:
+    fake_client = FakePeliasClient(
+        {
+            "Riverview QLD, Australia": {
+                "features": [
+                    {
+                        "geometry": {"coordinates": [151.2, -33.9]},
+                        "properties": {
+                            "label": "123 Example Road, Sydney NSW 2000",
+                            "name": "123 Example Road",
+                            "street": "Example Road",
+                            "locality": "Sydney",
+                            "region": "New South Wales",
+                            "layer": "address",
+                            "housenumber": "123",
+                            "confidence": 0.99,
+                        },
+                    },
+                    {
+                        "geometry": {"coordinates": [152.88, -27.6]},
+                        "properties": {
+                            "label": "Riverview",
+                            "name": "Riverview",
+                            "locality": "Riverview",
+                            "layer": "locality",
+                            "confidence": 0.6,
+                        },
+                    },
+                ]
+            }
+        }
+    )
+
+    result = geocode_with_normalization(fake_client, "Riverview QLD", "Australia")
+
+    assert result.label == "Riverview"
+    assert result.locality == "Riverview"
