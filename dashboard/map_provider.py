@@ -32,6 +32,7 @@ def _google_tile_layer(api_key: Optional[str]) -> Dict[str, Any]:
     return {
         "sourcetype": "raster",
         "source": [f"https://mt1.google.com/vt/lyrs=m&x={{x}}&y={{y}}&z={{z}}{token}"],
+        "below": "traces",
     }
 
 
