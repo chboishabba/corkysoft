@@ -42,6 +42,7 @@ from analytics.price_distribution import (
     summarise_last_year_distributions,
     summarise_profitability,
 )
+from analytics.routing_provider import IsochroneResult
 from dashboard.components.maps import build_route_map
 
 
@@ -1535,31 +1536,44 @@ def test_aggregate_corridor_performance_handles_missing_columns():
 
 
 def test_build_isochrone_polygons_uses_duration_for_speed():
-    class DummyIsochroneClient:
+    class DummyIsochroneProvider:
         def __init__(self) -> None:
-            self.calls: list[dict[str, Any]] = []
+            self.calls: list[tuple[tuple[float, float], str, list[int]]] = []
 
-        def isochrones(self, **kwargs: Any) -> dict[str, Any]:
-            self.calls.append(kwargs)
-            return {
-                "features": [
-                    {
-                        "properties": {"value": kwargs["range"][0]},
-                        "geometry": {
-                            "type": "Polygon",
-                            "coordinates": [
-                                [
-                                    [153.0260, -27.4705],
-                                    [153.2260, -27.4705],
-                                    [153.2260, -27.6705],
-                                    [153.0260, -27.6705],
-                                    [153.0260, -27.4705],
-                                ]
-                            ],
-                        },
-                    }
-                ]
-            }
+        def route_geometry(self, **_: Any) -> Any:  # pragma: no cover - unused stub
+            raise NotImplementedError
+
+        def isochrone(
+            self,
+            *,
+            centre: tuple[float, float],
+            profile: str,
+            range_seconds: list[int],
+        ) -> IsochroneResult:
+            self.calls.append((centre, profile, list(range_seconds)))
+            return IsochroneResult(
+                feature_collection={
+                    "type": "FeatureCollection",
+                    "features": [
+                        {
+                            "type": "Feature",
+                            "properties": {"value": range_seconds[0]},
+                            "geometry": {
+                                "type": "Polygon",
+                                "coordinates": [
+                                    [
+                                        [153.0260, -27.4705],
+                                        [153.2260, -27.4705],
+                                        [153.2260, -27.6705],
+                                        [153.0260, -27.6705],
+                                        [153.0260, -27.4705],
+                                    ]
+                                ],
+                            },
+                        }
+                    ],
+                }
+            )
 
     df = pd.DataFrame(
         {
@@ -1573,7 +1587,7 @@ def test_build_isochrone_polygons_uses_duration_for_speed():
         }
     )
 
-    client = DummyIsochroneClient()
+    provider = DummyIsochroneProvider()
     iso_df = build_isochrone_polygons(
         df,
         centre="origin",
@@ -1581,7 +1595,7 @@ def test_build_isochrone_polygons_uses_duration_for_speed():
         default_speed_kmh=60.0,
         max_routes=5,
         points=12,
-        ors_client=client,
+        routing_provider=provider,
     )
 
     assert len(iso_df) == 1
@@ -1603,13 +1617,57 @@ def test_build_isochrone_polygons_uses_duration_for_speed():
     ]
     assert record["speed_kmh"] == pytest.approx(92.0, rel=1e-6)
     assert record["radius_km"] == pytest.approx(184.0, rel=1e-6)
-    assert "hr reach" in record["tooltip"]
+    assert record["tooltip"] == "Brisbane → Sydney — 2.0 hr reach ≈ 184 km (avg 92 km/h)"
+    assert provider.calls
 
-    assert len(client.calls) == 1
-    call = client.calls[0]
-    assert call["profile"] == "driving-hgv"
-    assert call["locations"] == [[153.0260, -27.4705]]
-    assert call["range"] == [int(2.0 * 3600)]
+
+def test_build_isochrone_polygons_decodes_encoded_isochrones():
+    encoded_isochrone = "~hlhE_esx[~oR_af@~oR~`f@_af@?"
+
+    class EncodedIsochroneProvider:
+        def route_geometry(self, **_: Any) -> Any:  # pragma: no cover - unused stub
+            raise NotImplementedError
+
+        def isochrone(
+            self,
+            *,
+            centre: tuple[float, float],
+            profile: str,
+            range_seconds: list[int],
+        ) -> IsochroneResult:
+            return IsochroneResult(encoded_polylines=[encoded_isochrone])
+
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705],
+            "origin_lon": [153.0260],
+            "dest_lat": [-33.8688],
+            "dest_lon": [151.2093],
+            "distance_km": [920.0],
+            "duration_hr": [10.0],
+            "corridor_display": ["Brisbane → Sydney"],
+        }
+    )
+
+    provider = EncodedIsochroneProvider()
+    iso_df = build_isochrone_polygons(
+        df,
+        centre="origin",
+        horizon_hours=2.0,
+        default_speed_kmh=60.0,
+        max_routes=5,
+        points=12,
+        routing_provider=provider,
+    )
+
+    assert len(iso_df) == 1
+    record = iso_df.iloc[0]
+    assert record["label"] == "Brisbane → Sydney"
+    assert record["latitudes"] == pytest.approx([-33.0, -33.1, -33.2, -33.0])
+    assert record["longitudes"] == pytest.approx([151.0, 151.2, 151.0, 151.0])
+    assert record["latitudes"][0] == pytest.approx(record["latitudes"][-1])
+    assert record["longitudes"][0] == pytest.approx(record["longitudes"][-1])
+    assert record["tooltip"] == "Brisbane → Sydney — 2.0 hr reach ≈ 184 km (avg 92 km/h)"
 
 
 def test_build_isochrone_polygons_handles_missing_inputs():
