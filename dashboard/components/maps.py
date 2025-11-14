@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -22,6 +23,9 @@ from analytics.price_distribution import (
     compute_tapered_route_polygon,
 )
 from dashboard.map_provider import plotly_map_layout, pydeck_map_kwargs
+
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "build_route_map",
@@ -101,6 +105,20 @@ def build_route_map(
 ) -> go.Figure:
     """Construct a Plotly map figure showing coloured routes and points."""
 
+    logger.info(
+        "ROUTE MAP DEBUG build_route_map start: shape=%s, columns=%s, show_routes=%s, "
+        "show_points=%s, colour_mode=%s, use_route_geometry=%s, colour_scale_provided=%s, "
+        "colorbar_tickformat=%s",
+        df.shape,
+        list(df.columns),
+        show_routes,
+        show_points,
+        colour_mode,
+        use_route_geometry,
+        bool(colour_scale),
+        colorbar_tickformat,
+    )
+
     def _coerce_geojson(value: Any) -> Optional[str]:
         if value is None:
             return None
@@ -124,7 +142,12 @@ def build_route_map(
     def _row_route_points(row: pd.Series) -> List[Tuple[float, float]]:
         """Return the ordered ``(lat, lon)`` points for ``row`` when available."""
 
+        job_id = row.get("id", "n/a")
         if not use_route_geometry:
+            logger.info(
+                "ROUTE MAP DEBUG route geometry skipped: job_id=%s use_route_geometry disabled",
+                job_id,
+            )
             return []
 
         geojson_value: Optional[str] = None
@@ -133,31 +156,36 @@ def build_route_map(
             if candidate:
                 geojson_value = candidate
                 break
+        route_points: List[Tuple[float, float]] = []
+        geometry_source = None
         if geojson_value:
             try:
-                return extract_route_path(geojson_value)
+                route_points = extract_route_path(geojson_value)
+                geometry_source = "geojson"
             except Exception:
-                pass
+                route_points = []
 
         path_value = row.get("route_path")
         if isinstance(path_value, str):
             raw = path_value.strip()
-            if not raw:
-                return []
-            try:
-                parsed = json.loads(raw)
-            except json.JSONDecodeError:
-                parsed = None
+            if raw:
+                try:
+                    parsed = json.loads(raw)
+                except json.JSONDecodeError:
+                    parsed = None
+                else:
+                    path_value = parsed
             else:
-                path_value = parsed
+                path_value = None
 
-        if isinstance(path_value, dict):
+        if isinstance(path_value, dict) and not route_points:
             try:
-                return extract_route_path(json.dumps(path_value))
+                route_points = extract_route_path(json.dumps(path_value))
+                geometry_source = geometry_source or "route_path_dict"
             except Exception:
-                return []
+                route_points = []
 
-        if isinstance(path_value, (list, tuple)):
+        if isinstance(path_value, (list, tuple)) and not route_points:
             coords: List[Tuple[float, float]] = []
             for point in path_value:
                 lon: Optional[float]
@@ -176,9 +204,26 @@ def build_route_map(
                     continue
 
             if coords:
-                return coords
+                route_points = coords
+                geometry_source = geometry_source or "route_path_iterable"
 
-        return []
+        if route_points:
+            sample_points = route_points[:3]
+            logger.info(
+                "ROUTE MAP DEBUG route geometry summary: job_id=%s source=%s points=%d sample=%s",
+                job_id,
+                geometry_source or "geojson",
+                len(route_points),
+                sample_points,
+            )
+        else:
+            logger.info(
+                "ROUTE MAP DEBUG route geometry missing: job_id=%s source=%s",
+                job_id,
+                geometry_source,
+            )
+
+        return route_points
 
     def _coerce_float(value: Any) -> Optional[float]:
         try:
@@ -536,6 +581,25 @@ def build_route_map(
         ),
         margin={"r": 0, "t": 0, "l": 0, "b": 0},
         legend={"orientation": "h", "yanchor": "bottom", "y": 0.01},
+    )
+    trace_debug: List[Dict[str, Any]] = []
+    for idx, trace in enumerate(figure.data):
+        lat_values = list(getattr(trace, "lat", []) or [])
+        lon_values = list(getattr(trace, "lon", []) or [])
+        lat_count = sum(1 for value in lat_values if value is not None)
+        lon_count = sum(1 for value in lon_values if value is not None)
+        trace_debug.append(
+            {
+                "index": idx,
+                "name": getattr(trace, "name", f"trace_{idx}"),
+                "lat_count": lat_count,
+                "lon_count": lon_count,
+            }
+        )
+    logger.info(
+        "ROUTE MAP DEBUG figure traces: total=%s details=%s",
+        len(figure.data),
+        trace_debug,
     )
     return figure
 
