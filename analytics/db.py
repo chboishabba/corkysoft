@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Iterable, Optional, Sequence
 
 DEFAULT_DB_PATH = os.environ.get("CORKYSOFT_DB", os.environ.get("ROUTES_DB", "routes.db"))
@@ -149,7 +149,7 @@ def set_parameter_value(
             description = COALESCE(excluded.description, global_parameters.description),
             updated_at = excluded.updated_at
         """,
-        (key, float(value), description, datetime.utcnow().isoformat()),
+        (key, float(value), description, datetime.now(UTC).isoformat()),
     )
     conn.commit()
 
