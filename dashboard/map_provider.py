@@ -84,3 +84,35 @@ def pydeck_map_kwargs(default_style: Optional[str]) -> Dict[str, Any]:
     if default_style is not None:
         kwargs["map_style"] = default_style
     return kwargs
+
+
+def folium_map_configuration(
+    default_tiles: str = "OpenStreetMap",
+    *,
+    default_attr: Optional[str] = None,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    """Return base map kwargs and optional tile layer for Folium maps."""
+
+    map_kwargs: Dict[str, Any] = {"tiles": default_tiles}
+    if default_attr:
+        map_kwargs["attr"] = default_attr
+
+    tile_layer_kwargs: Optional[Dict[str, Any]] = None
+
+    if using_google_maps():
+        api_key = google_maps_api_key()
+        if api_key:
+            map_kwargs.pop("attr", None)
+            map_kwargs["tiles"] = None
+            tile_layer_kwargs = {
+                "tiles": (
+                    "https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&key="
+                    f"{api_key}"
+                ),
+                "attr": "Google Maps",
+                "name": "Google Maps",
+                "overlay": False,
+                "control": False,
+            }
+
+    return map_kwargs, tile_layer_kwargs
