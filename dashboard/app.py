@@ -1,6 +1,7 @@
 """Streamlit dashboard for the price distribution analysis."""
 from __future__ import annotations
 
+import inspect
 import io
 import json
 import math
@@ -1829,24 +1830,45 @@ def render_price_distribution_dashboard():
             st.warning("No jobs match the selected filters. Quote builder remains available below.")
 
         tab_labels = PRICE_DASHBOARD_TABS
-        tabs_key = "dashboard_active_tab"
         params = _get_query_params()
         requested_tab = params.get("view", [tab_labels[0]])[0]
         if requested_tab not in tab_labels:
             requested_tab = tab_labels[0]
         requested_tab_index = tab_labels.index(requested_tab)
 
-        view_param_requested = "view" in params
-        if tabs_key not in st.session_state or (
-            view_param_requested
-            and st.session_state.get(tabs_key) != requested_tab_index
-        ):
-            st.session_state[tabs_key] = requested_tab_index
+        can_assign_tab_key = False
+        try:
+            can_assign_tab_key = "key" in inspect.signature(st.tabs).parameters
+        except (TypeError, ValueError):
+            can_assign_tab_key = False
 
-        with tabs_placeholder:
-            streamlit_tabs = st.tabs(tab_labels, key=tabs_key)
+        tab_order = tab_labels
+        if can_assign_tab_key:
+            tabs_key = "dashboard_active_tab"
+            view_param_requested = "view" in params
+            if tabs_key not in st.session_state or (
+                view_param_requested
+                and st.session_state.get(tabs_key) != requested_tab_index
+            ):
+                st.session_state[tabs_key] = requested_tab_index
+
+            with tabs_placeholder:
+                streamlit_tabs = st.tabs(tab_order, key=tabs_key)
+        else:
+            if requested_tab_index != 0:
+                tab_order = [
+                    requested_tab,
+                    *[
+                        label
+                        for idx, label in enumerate(tab_labels)
+                        if idx != requested_tab_index
+                    ],
+                ]
+            with tabs_placeholder:
+                streamlit_tabs = st.tabs(tab_order)
+
         tab_map: Dict[str, Any] = {
-            label: tab for label, tab in zip(tab_labels, streamlit_tabs)
+            label: tab for label, tab in zip(tab_order, streamlit_tabs)
         }
 
         summary: Optional[DistributionSummary] = None
@@ -4070,3 +4092,17 @@ def render_price_distribution_dashboard():
             file_name="price_distribution_filtered.csv",
             mime="text/csv",
         )
+
+
+def main() -> None:
+    """Configure Streamlit and render the price distribution dashboard."""
+
+    st.set_page_config(
+        page_title="Price distribution by corridor",
+        layout="wide",
+    )
+    render_price_distribution_dashboard()
+
+
+if __name__ == "__main__":  # pragma: no cover - manual execution convenience
+    main()
