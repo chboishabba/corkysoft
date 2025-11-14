@@ -39,6 +39,7 @@ from corkysoft.repo import (
     persist_quote,
 )
 from corkysoft.routing import snap_coordinates_to_road
+from dashboard.map_provider import pydeck_map_kwargs
 
 DEFAULT_TARGET_MARGIN_PERCENT = 20.0
 _AUS_LAT_LON = (-25.2744, 133.7751)
@@ -549,15 +550,14 @@ def render_quote_builder(
                         "color": [244, 67, 54, 200],
                     },
                 ]
-                deck = pdk.Deck(
-                    map_style="mapbox://styles/mapbox/light-v9",
-                    initial_view_state=pdk.ViewState(
+                deck_kwargs = {
+                    "initial_view_state": pdk.ViewState(
                         latitude=midpoint_lat,
                         longitude=midpoint_lon,
                         zoom=5,
                         pitch=30,
                     ),
-                    layers=[
+                    "layers": [
                         pdk.Layer(
                             "LineLayer",
                             data=line_data,
@@ -584,7 +584,9 @@ def render_quote_builder(
                             get_alignment_baseline="top",
                         ),
                     ],
-                )
+                }
+                deck_kwargs.update(pydeck_map_kwargs("mapbox://styles/mapbox/light-v9"))
+                deck = pdk.Deck(**deck_kwargs)
                 st.pydeck_chart(deck)
                 st.caption("Selected route visualised on the map.")
         else:

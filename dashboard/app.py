@@ -100,6 +100,7 @@ from corkysoft.repo import (
 )
 from corkysoft.routing import snap_coordinates_to_road
 from corkysoft.schema import ensure_schema as ensure_core_schema
+from dashboard.map_provider import plotly_map_layout, pydeck_map_kwargs
 
 
 DEFAULT_TARGET_MARGIN_PERCENT = 20.0
@@ -982,11 +983,11 @@ def build_route_map(
     center_lon = float(all_lon.mean()) if not all_lon.empty else 0.0
 
     figure.update_layout(
-        map={
-            "style": "carto-positron",
-            "center": {"lat": center_lat, "lon": center_lon},
-            "zoom": 3,
-        },
+        **plotly_map_layout(
+            {"lat": center_lat, "lon": center_lon},
+            zoom=3,
+            engine="map",
+        ),
         legend={"orientation": "h", "yanchor": "bottom", "y": 0.01},
         margin={"l": 0, "r": 0, "t": 0, "b": 0},
     )
@@ -1042,14 +1043,17 @@ def render_network_map(
             key=toggle_key,
         )
 
-    base_map_layer = pdk.Layer(
-        "TileLayer",
-        data="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-        min_zoom=0,
-        max_zoom=19,
-        tile_size=256,
-        attribution="© OpenStreetMap contributors",
-    )
+    deck_map_kwargs = pydeck_map_kwargs(None)
+    base_map_layer: Optional[pdk.Layer] = None
+    if "map_provider" not in deck_map_kwargs:
+        base_map_layer = pdk.Layer(
+            "TileLayer",
+            data="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+            min_zoom=0,
+            max_zoom=19,
+            tile_size=256,
+            attribution="© OpenStreetMap contributors",
+        )
 
     truck_data = trucks.copy()
     if not truck_data.empty:
@@ -1401,14 +1405,14 @@ def render_network_map(
         if show_live_overlay and overlay_layers:
             tooltip = {"html": "<b>{tooltip}</b>", "style": {"color": "white"}}
 
-        st.pydeck_chart(
-            pdk.Deck(
-                layers=[base_map_layer, *overlay_layers],
-                initial_view_state=_initial_view_state(view_df),
-                tooltip=tooltip,
-                map_style=None,
-            )
-        )
+        layer_stack = [layer for layer in [base_map_layer, *overlay_layers] if layer is not None]
+        deck_kwargs = {
+            "layers": layer_stack,
+            "initial_view_state": _initial_view_state(view_df),
+            "tooltip": tooltip,
+        }
+        deck_kwargs.update(deck_map_kwargs)
+        st.pydeck_chart(pdk.Deck(**deck_kwargs))
 
         if show_live_overlay and overlay_layers:
             legend_cols = st.columns(len(PROFITABILITY_COLOURS))
@@ -1462,14 +1466,14 @@ def render_network_map(
             intensity=intensity,
         )
 
-        st.pydeck_chart(
-            pdk.Deck(
-                layers=[base_map_layer, heatmap_layer],
-                initial_view_state=_initial_view_state(heatmap_source),
-                tooltip=None,
-                map_style=None,
-            )
-        )
+        layer_stack = [layer for layer in [base_map_layer, heatmap_layer] if layer is not None]
+        deck_kwargs = {
+            "layers": layer_stack,
+            "initial_view_state": _initial_view_state(heatmap_source),
+            "tooltip": None,
+        }
+        deck_kwargs.update(deck_map_kwargs)
+        st.pydeck_chart(pdk.Deck(**deck_kwargs))
 
         st.caption(
             "Historical endpoints provide the base density, active routes carry more weight, "
@@ -2775,11 +2779,11 @@ def render_price_distribution_dashboard():
                             trace.hovertemplate = hover_template
 
                         heatmap_fig.update_layout(
-                            map={
-                                "style": "carto-positron",
-                                "center": centre,
-                                "zoom": 4,
-                            },
+                            **plotly_map_layout(
+                                centre,
+                                zoom=4,
+                                engine="map",
+                            ),
                             margin={"l": 0, "r": 0, "t": 0, "b": 0},
                             coloraxis_colorbar={"title": weight_label},
                         )
@@ -2859,11 +2863,11 @@ def render_price_distribution_dashboard():
                     centre_lon = float(iso_source["centre_lon"].mean())
 
                     figure.update_layout(
-                        map={
-                            "style": "carto-positron",
-                            "center": {"lat": centre_lat, "lon": centre_lon},
-                            "zoom": 4,
-                        },
+                        **plotly_map_layout(
+                            {"lat": centre_lat, "lon": centre_lon},
+                            zoom=4,
+                            engine="map",
+                        ),
                         margin={"l": 0, "r": 0, "t": 0, "b": 0},
                         legend={"orientation": "h", "yanchor": "bottom", "y": 0.01},
                     )
@@ -3044,15 +3048,14 @@ def render_price_distribution_dashboard():
                                 "color": [244, 67, 54, 200],
                             },
                         ]
-                        deck = pdk.Deck(
-                            map_style="mapbox://styles/mapbox/light-v9",
-                            initial_view_state=pdk.ViewState(
+                        deck_kwargs = {
+                            "initial_view_state": pdk.ViewState(
                                 latitude=midpoint_lat,
                                 longitude=midpoint_lon,
                                 zoom=5,
                                 pitch=30,
                             ),
-                            layers=[
+                            "layers": [
                                 pdk.Layer(
                                     "LineLayer",
                                     data=line_data,
@@ -3079,7 +3082,11 @@ def render_price_distribution_dashboard():
                                     get_alignment_baseline="top",
                                 ),
                             ],
+                        }
+                        deck_kwargs.update(
+                            pydeck_map_kwargs("mapbox://styles/mapbox/light-v9")
                         )
+                        deck = pdk.Deck(**deck_kwargs)
                         st.pydeck_chart(deck)
                         st.caption("Selected route visualised on the map.")
                 else:

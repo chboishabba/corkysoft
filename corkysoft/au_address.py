@@ -6,6 +6,13 @@ from itertools import product
 import re
 from typing import Iterable, List, Optional, Sequence
 
+try:  # pragma: no cover - optional dependency
+    from openrouteservice import exceptions as _ors_exceptions
+except ImportError:  # pragma: no cover - used when ORS isn't installed
+    _ors_exceptions = None
+
+ors_exceptions = _ors_exceptions
+
 
 STATE_CODES = {"ACT", "NSW", "NT", "QLD", "SA", "TAS", "VIC", "WA"}
 STATE_NAME_TO_CODE = {
@@ -380,6 +387,41 @@ def _coerce_pelias_param(value: Optional[Sequence[str] | str]) -> Optional[List[
     return list(value)
 
 
+def _is_invalid_sources_error(exc: Exception) -> bool:
+    """Return whether *exc* represents an invalid ``sources`` parameter."""
+
+    if ors_exceptions is not None and isinstance(exc, ors_exceptions.ApiError):
+        message = " ".join(str(arg) for arg in getattr(exc, "args", ()))
+    else:
+        message = str(exc)
+    lowered = message.lower()
+    return "invalid sources parameter" in lowered or "invalid sources" in lowered
+
+
+def _pelias_search_with_fallback(
+    client,
+    *,
+    text: str,
+    layers: Optional[Sequence[str]],
+    sources: Optional[List[str]],
+    size: int,
+) -> tuple[dict, Optional[List[str]]]:
+    """Call ``client.pelias_search`` retrying without PSMA when unsupported."""
+
+    active_sources = list(sources) if sources else None
+    try:
+        result = client.pelias_search(text=text, layers=layers, sources=active_sources, size=size)
+        return result, active_sources
+    except Exception as exc:
+        if not (active_sources and _is_invalid_sources_error(exc)):
+            raise
+        filtered = [src for src in active_sources if src.lower() != "psma"]
+        if len(filtered) == len(active_sources):
+            raise
+        result = client.pelias_search(text=text, layers=layers, sources=filtered, size=size)
+        return result, filtered or None
+
+
 def geocode_with_normalization(
     client,
     place: str,
@@ -424,7 +466,8 @@ def geocode_with_normalization(
 
     for candidate in candidates:
         query = f"{candidate}, {country}".strip()
-        res = client.pelias_search(
+        res, sources = _pelias_search_with_fallback(
+            client,
             text=query,
             layers=layers,
             sources=sources,
@@ -531,4 +574,3 @@ def geocode_with_normalization(
         locality=locality,
         county=county,
     )
-

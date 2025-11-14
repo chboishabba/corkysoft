@@ -188,3 +188,38 @@ def test_geocode_prefers_address_with_misspelt_query() -> None:
         result.label
         == "Unit 26, 100 Champions Cresent, Brookwater QLD 4300, Australia"
     )
+
+
+def test_geocode_with_normalization_removes_psma_when_service_disallows() -> None:
+    class FlakyClient:
+        def __init__(self) -> None:
+            self.calls: list[Dict[str, Any]] = []
+            self.first = True
+
+        def pelias_search(self, **kwargs: Any) -> Dict[str, Any]:
+            self.calls.append(kwargs)
+            if self.first:
+                self.first = False
+                raise RuntimeError("'psma' is an invalid sources parameter.")
+            return {
+                "features": [
+                    {
+                        "geometry": {"coordinates": [151.95, -27.56]},
+                        "properties": {"label": "Test Address"},
+                    }
+                ]
+            }
+
+    client = FlakyClient()
+    result = geocode_with_normalization(
+        client,
+        "12 Carlton Street Toowoomba",
+        "Australia",
+    )
+
+    assert isinstance(result, GeocodeResult)
+    assert len(client.calls) == 2
+    first_sources = client.calls[0].get("sources")
+    second_sources = client.calls[1].get("sources")
+    assert first_sources and "psma" in first_sources
+    assert second_sources and all(src != "psma" for src in second_sources)

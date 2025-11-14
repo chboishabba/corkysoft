@@ -21,6 +21,7 @@ from analytics.price_distribution import (
     compute_profitability_line_width,
     compute_tapered_route_polygon,
 )
+from dashboard.map_provider import plotly_map_layout, pydeck_map_kwargs
 
 __all__ = [
     "build_route_map",
@@ -515,11 +516,11 @@ def build_route_map(
         raise ValueError(f"Unsupported colour mode: {colour_mode}")
 
     figure.update_layout(
-        mapbox={
-            "style": "carto-positron",
-            "zoom": 3,
-            "center": {"lat": -25.0, "lon": 133.0},
-        },
+        **plotly_map_layout(
+            {"lat": -25.0, "lon": 133.0},
+            zoom=3,
+            engine="mapbox",
+        ),
         margin={"r": 0, "t": 0, "l": 0, "b": 0},
         legend={"orientation": "h", "yanchor": "bottom", "y": 0.01},
     )
@@ -575,14 +576,17 @@ def render_network_map(
             key=toggle_key,
         )
 
-    base_map_layer = pdk.Layer(
-        "TileLayer",
-        data="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-        min_zoom=0,
-        max_zoom=19,
-        tile_size=256,
-        attribution="© OpenStreetMap contributors",
-    )
+    deck_map_kwargs = pydeck_map_kwargs(None)
+    base_map_layer: Optional[pdk.Layer] = None
+    if "map_provider" not in deck_map_kwargs:
+        base_map_layer = pdk.Layer(
+            "TileLayer",
+            data="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+            min_zoom=0,
+            max_zoom=19,
+            tile_size=256,
+            attribution="© OpenStreetMap contributors",
+        )
 
     truck_data = trucks.copy()
     if not truck_data.empty:
@@ -932,14 +936,14 @@ def render_network_map(
         if show_live_overlay and overlay_layers:
             tooltip = {"html": "<b>{tooltip}</b>", "style": {"color": "white"}}
 
-        st.pydeck_chart(
-            pdk.Deck(
-                layers=[base_map_layer, *overlay_layers],
-                initial_view_state=_initial_view_state(view_df),
-                tooltip=tooltip,
-                map_style=None,
-            )
-        )
+        layer_stack = [layer for layer in [base_map_layer, *overlay_layers] if layer is not None]
+        deck_kwargs = {
+            "layers": layer_stack,
+            "initial_view_state": _initial_view_state(view_df),
+            "tooltip": tooltip,
+        }
+        deck_kwargs.update(deck_map_kwargs)
+        st.pydeck_chart(pdk.Deck(**deck_kwargs))
 
         if show_live_overlay and overlay_layers:
             legend_cols = st.columns(len(PROFITABILITY_COLOURS))
@@ -993,14 +997,14 @@ def render_network_map(
             intensity=intensity,
         )
 
-        st.pydeck_chart(
-            pdk.Deck(
-                layers=[base_map_layer, heatmap_layer],
-                initial_view_state=_initial_view_state(heatmap_source),
-                tooltip=None,
-                map_style=None,
-            )
-        )
+        layer_stack = [layer for layer in [base_map_layer, heatmap_layer] if layer is not None]
+        deck_kwargs = {
+            "layers": layer_stack,
+            "initial_view_state": _initial_view_state(heatmap_source),
+            "tooltip": None,
+        }
+        deck_kwargs.update(deck_map_kwargs)
+        st.pydeck_chart(pdk.Deck(**deck_kwargs))
 
         st.caption(
             "Historical endpoints provide the base density, active routes carry more weight, "
