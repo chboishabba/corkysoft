@@ -9,23 +9,12 @@ Route profitability tooling for removals operators. The project couples a comman
 
 ## Dashboard Preview
 
-Explore the main dashboard workflows currently deployed at `http://192.168.4.53:8501/`:
-
-<div align="center">
-  <img src="docs/img/dashboard-histogram.png" alt="Histogram view with price distribution overlays" width="48%" />
-  <img src="docs/img/dashboard-price-history.png" alt="Price history view with resampling controls" width="48%" />
-</div>
-<div align="center">
-  <img src="docs/img/dashboard-profitability.png" alt="Profitability insights view with corridor benchmarking" width="48%" />
-  <img src="docs/img/dashboard-live-network.png" alt="Live network overview highlighting active trucks and lanes" width="48%" />
-</div>
-<div align="center">
-  <img src="docs/img/dashboard-route-maps.png" alt="Route maps tab showcasing deck.gl corridor overlays" width="48%" />
-  <img src="docs/img/dashboard-quote-builder.png" alt="Quote builder tab with client enrichment helpers" width="48%" />
-</div>
-<div align="center">
-  <img src="docs/img/dashboard-optimizer.png" alt="Optimizer tab recommending corridor uplifts" width="60%" />
-</div>
+Explore the main dashboard workflows currently deployable locally.
+| | | |
+| :---: | :---: | :---: |
+| <img src="docs/img/dashboard-histogram.png" alt="Histogram view with price distribution overlays" height="200"/> | <img src="docs/img/dashboard-price-history.png" alt="Price history view with resampling controls" height="200"/> | <img src="docs/img/dashboard-profitability.png" alt="Profitability insights view with corridor benchmarking" height="200"/> |
+| <img src="docs/img/dashboard-live-network.png" alt="Live network overview highlighting active trucks and lanes" height="200"/> | <img src="docs/img/dashboard-route-maps.png" alt="Route maps tab showcasing deck.gl corridor overlays" height="200"/> | <img src="docs/img/dashboard-quote-builder.png" alt="Quote builder tab with client enrichment helpers" height="200"/> |
+| <img src="docs/img/dashboard-optimizer.png" alt="Optimizer tab recommending corridor uplifts" height="200"/> | | |
 
 ## Table of Contents
 - [Overview](#overview)
