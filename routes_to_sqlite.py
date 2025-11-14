@@ -216,7 +216,7 @@ def parse_date(value: str) -> dt.date:
 
 # ---------- Geocoding helpers ----------
 STRICT_PELIAS_LAYERS = ["address", "street", "locality"]
-STRICT_PELIAS_SOURCES = ["osm", "wof"]
+STRICT_PELIAS_SOURCES = ["osm", "wof", "psma"]
 
 
 def pelias_geocode(place: str, country: str):
