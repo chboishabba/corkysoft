@@ -798,6 +798,7 @@ def render_network_map(
                             width_min_pixels=1,
                             pickable=True,
                             opacity=0.4,
+                            parameters={"depthTest": False},
                         )
                         overlay_layers.append(history_layer)
                 else:
@@ -889,6 +890,7 @@ def render_network_map(
                         width_min_pixels=2,
                         pickable=True,
                         opacity=0.9,
+                        parameters={"depthTest": False},
                     )
                     overlay_layers.append(active_layer)
             else:
