@@ -945,6 +945,21 @@ def render_price_distribution_dashboard():
 
         with tab_map["Histogram"]:
             if has_filtered_data:
+                with st.popover("❓ Histogram stats", use_container_width=True):
+                    st.markdown(
+                        """
+                        **Break-even bands**  
+                        Vertical markers highlight how far each band sits from the selected break-even $/m³. They help you quickly spot how much headroom or shortfall each cluster of jobs has.
+
+                        **Normal fit overlay**  
+                        The dark curve shows a normal distribution fitted to the selected jobs. It makes it easy to compare the real-world distribution with an ideal bell curve.
+
+                        **Summary statistics**  
+                        • **μ (mean)** — the average $/m³ across the visible jobs.  
+                        • **σ (standard deviation)** — the typical spread around the mean.  
+                        • **Kurtosis** — how heavy the tails are compared with a normal distribution (positive values mean more extreme outliers).
+                        """
+                    )
                 histogram = create_histogram(filtered_df, break_even_value)
                 st.plotly_chart(histogram, width="stretch")
                 st.caption(
