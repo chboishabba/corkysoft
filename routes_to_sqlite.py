@@ -6,12 +6,17 @@ from datetime import timezone
 import argparse, csv, sys
 from typing import Optional
 
+from analytics.routing_provider import (
+    GoogleRoutesProvider,
+    OpenRouteServiceProvider,
+    RoutingProvider,
+)
+
 from corkysoft.au_address import GeocodeResult, geocode_with_normalization
 
 DB_PATH = os.environ.get("ROUTES_DB", "routes.db")
 COUNTRY_DEFAULT = os.environ.get("ORS_COUNTRY", "Australia")
 GEOCODE_BACKOFF = 0.2   # seconds between calls (be polite)
-ROUTE_BACKOFF = 0.2
 
 _ors_client: Optional[ors.Client] = None
 
@@ -29,6 +34,44 @@ def get_ors_client() -> ors.Client:
         _ors_client = ors.Client(key=api_key)
     return _ors_client
 
+
+def create_google_routes_client():
+    """Return a configured Google Maps client for routing requests."""
+
+    try:
+        import googlemaps
+    except ImportError as exc:  # pragma: no cover - exercised in runtime environments
+        raise RuntimeError(
+            "Install the 'googlemaps' package to use the Google routing provider"
+        ) from exc
+
+    api_key = os.environ.get("GOOGLE_MAPS_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "Set GOOGLE_MAPS_API_KEY env var when ROUTING_PROVIDER=google"
+        )
+
+    return googlemaps.Client(key=api_key)
+
+
+def create_routing_provider(
+    provider_name: Optional[str] = None,
+    *,
+    client: Optional[object] = None,
+    provider: Optional[RoutingProvider] = None,
+) -> RoutingProvider:
+    """Return a routing provider instance matching ``provider_name``."""
+
+    if provider is not None:
+        return provider
+
+    resolved_name = (provider_name or os.environ.get("ROUTING_PROVIDER", "ors")).strip().lower()
+    if resolved_name == "google":
+        google_client = client if client is not None else create_google_routes_client()
+        return GoogleRoutesProvider(google_client)
+
+    return OpenRouteServiceProvider(client)
+
 SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS geocode_cache (
@@ -45,6 +88,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   hourly_rate REAL NOT NULL DEFAULT 200.0,
   per_km_rate REAL NOT NULL DEFAULT 0.0,
   country TEXT NOT NULL DEFAULT 'Australia',
+  provider TEXT NOT NULL DEFAULT 'ors',
   -- outputs
   distance_km REAL,
   duration_hr REAL,
@@ -54,7 +98,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   internal_cost_total REAL DEFAULT 0,
   internal_cost_updated_at TEXT,
   updated_at TEXT,
-  UNIQUE(origin, destination)
+  UNIQUE(origin, destination, provider)
 );
 
 CREATE TABLE IF NOT EXISTS job_cost_components (
@@ -108,6 +152,7 @@ def migrate_schema(conn: sqlite3.Connection):
     def add(col, decl):
         if col not in cols:
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {decl}")
+    add("provider", "TEXT DEFAULT 'ors'")
     add("origin_resolved", "TEXT")
     add("destination_resolved", "TEXT")
     add("origin_lon", "REAL")
@@ -140,6 +185,13 @@ def migrate_schema(conn: sqlite3.Connection):
         ON job_cost_components(job_id)
         """
     )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_origin_dest_provider
+        ON jobs(origin, destination, COALESCE(provider, 'ors'))
+        """
+    )
+    conn.execute("UPDATE jobs SET provider = COALESCE(provider, 'ors')")
     conn.commit()
 
 # ---------- Address normalization (AU-focused) ----------
@@ -265,7 +317,13 @@ def geocode_cached(conn: sqlite3.Connection, place: str, country: str) -> Geocod
 
 # ---------- Routing / Costs (with full geometry) ----------
 def route_with_geometry(
-    conn: sqlite3.Connection, origin: str, destination: str, country: str
+    conn: sqlite3.Connection,
+    origin: str,
+    destination: str,
+    country: str,
+    *,
+    routing_provider: Optional[RoutingProvider] = None,
+    provider_name: Optional[str] = None,
 ):
     origin_geo = geocode_cached(conn, origin, country)
     dest_geo = geocode_cached(conn, destination, country)
@@ -280,27 +338,19 @@ def route_with_geometry(
     o_label = resolved_label(origin_geo, origin)
     d_label = resolved_label(dest_geo, destination)
 
-    # Ask ORS for full GeoJSON — includes properties.summary distance/duration + LineString geometry
-    client = get_ors_client()
-    route_fc = client.directions(
-        coordinates=[[origin_geo.lon, origin_geo.lat], [dest_geo.lon, dest_geo.lat]],
-        profile="driving-car",
-        format="geojson"
+    provider = create_routing_provider(
+        provider_name, provider=routing_provider
     )
-    # route_fc is a FeatureCollection with one Feature
-    feat = route_fc["features"][0]
-    props = feat["properties"]
-    summary = props["summary"]
-    meters = float(summary["distance"])
-    seconds = float(summary["duration"])
+    route_result = provider.route_geometry(
+        origin=(float(origin_geo.lon), float(origin_geo.lat)),
+        destination=(float(dest_geo.lon), float(dest_geo.lat)),
+        profile="driving-car",
+    )
 
-    time.sleep(ROUTE_BACKOFF)
-
-    # Return the raw GeoJSON string for storage
-    route_geojson = json.dumps(route_fc, separators=(",", ":"))
+    route_geojson = route_result.dumps()
     return (
-        meters / 1000.0,
-        seconds / 3600.0,
+        route_result.distance_km,
+        route_result.duration_hr,
         origin_geo,
         dest_geo,
         o_label,
@@ -482,9 +532,16 @@ def import_historical_jobs(
     geocode: bool = False,
     route: bool = False,
     country: str = COUNTRY_DEFAULT,
+    routing_provider: Optional[RoutingProvider] = None,
+    provider_name: Optional[str] = None,
 ):
     if route:
         geocode = True
+    resolved_provider: Optional[RoutingProvider] = None
+    if route:
+        resolved_provider = create_routing_provider(
+            provider_name, provider=routing_provider
+        )
 
     inserted = 0
     updated = 0
@@ -552,16 +609,19 @@ def import_historical_jobs(
 
                 if route and None not in (origin_lon, origin_lat, dest_lon, dest_lat):
                     try:
-                        ors_client = get_ors_client()
-                        route_res = ors_client.directions(
-                            coordinates=[[origin_lon, origin_lat], [dest_lon, dest_lat]],
+                        provider_for_route = resolved_provider
+                        if provider_for_route is None:
+                            provider_for_route = create_routing_provider(
+                                provider_name, provider=routing_provider
+                            )
+                            resolved_provider = provider_for_route
+                        route_result = provider_for_route.route_geometry(
+                            origin=(float(origin_lon), float(origin_lat)),
+                            destination=(float(dest_lon), float(dest_lat)),
                             profile="driving-car",
-                            format="json",
                         )
-                        summary = route_res["routes"][0]["summary"]
-                        distance_km = float(summary["distance"]) / 1000.0
-                        duration_hr = float(summary["duration"]) / 3600.0
-                        time.sleep(ROUTE_BACKOFF)
+                        distance_km = route_result.distance_km
+                        duration_hr = route_result.duration_hr
                     except Exception as exc:
                         print(f"[WARN] Line {idx}: failed to route {origin!r} -> {destination!r}: {exc}", file=sys.stderr)
 
@@ -632,22 +692,39 @@ def import_historical_jobs(
     print(f"Imported historical jobs: {inserted} inserted, {updated} updated.")
 
 # ---------- Processing ----------
-def process_pending(conn: sqlite3.Connection, limit: int = 1000):
+def process_pending(
+    conn: sqlite3.Connection,
+    limit: int = 1000,
+    *,
+    routing_provider: Optional[RoutingProvider] = None,
+    provider_name: Optional[str] = None,
+):
+    active_provider = (provider_name or os.environ.get("ROUTING_PROVIDER", "ors")).strip().lower()
     rows = conn.execute(
         """
-        SELECT id, origin, destination, hourly_rate, per_km_rate, country
+        SELECT id, origin, destination, hourly_rate, per_km_rate, country, provider
         FROM jobs
-        WHERE distance_km IS NULL OR duration_hr IS NULL OR route_geojson IS NULL
+        WHERE (provider IS NULL OR provider = '' OR provider = ?)
+          AND (distance_km IS NULL OR duration_hr IS NULL OR route_geojson IS NULL)
         LIMIT ?
-        """, (limit,)
+        """,
+        (active_provider, limit),
     ).fetchall()
 
     if not rows:
         print("No pending jobs.")
         return
 
-    get_ors_client()
-    for (jid, origin, dest, hourly_rate, per_km_rate, country) in rows:
+    provider = create_routing_provider(active_provider, provider=routing_provider)
+    for (
+        jid,
+        origin,
+        dest,
+        hourly_rate,
+        per_km_rate,
+        country,
+        _current_provider,
+    ) in rows:
         try:
             country = country or COUNTRY_DEFAULT
             (
@@ -658,7 +735,14 @@ def process_pending(conn: sqlite3.Connection, limit: int = 1000):
                 o_label,
                 d_label,
                 route_geojson,
-            ) = route_with_geometry(conn, origin, dest, country)
+            ) = route_with_geometry(
+                conn,
+                origin,
+                dest,
+                country,
+                routing_provider=provider,
+                provider_name=active_provider,
+            )
 
             cost_time, cost_dist, cost_total = cost_breakdown(distance_km, duration_hr, hourly_rate, per_km_rate)
             conn.execute(
@@ -669,6 +753,7 @@ def process_pending(conn: sqlite3.Connection, limit: int = 1000):
                     destination_resolved=COALESCE(?, destination_resolved),
                     origin_lon=?, origin_lat=?, dest_lon=?, dest_lat=?,
                     route_geojson=?,
+                    provider=?,
                     updated_at=?
                 WHERE id=?
                 """,
@@ -685,7 +770,10 @@ def process_pending(conn: sqlite3.Connection, limit: int = 1000):
                     dest_geo.lon,
                     dest_geo.lat,
                     route_geojson,
-                 dt.datetime.now(timezone.utc).isoformat(), jid)
+                    active_provider,
+                    dt.datetime.now(timezone.utc).isoformat(),
+                    jid,
+                ),
             )
             conn.commit()
             print(f"[OK] #{jid} {origin} → {dest} | {distance_km:.1f} km | {duration_hr:.2f} h | ${cost_total:,.2f}")
@@ -710,13 +798,63 @@ def process_pending(conn: sqlite3.Connection, limit: int = 1000):
         except Exception as e:
             print(f"[ERR] #{jid} {origin} → {dest}: {e}")
 
+
 # ---------- CLI helpers ----------
-def add_job(conn, origin, destination, hourly_rate=200.0, per_km_rate=0.80, country="Australia"):
-    conn.execute("""
-      INSERT INTO jobs (origin, destination, hourly_rate, per_km_rate, country)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(origin, destination) DO NOTHING
-    """, (origin, destination, hourly_rate, per_km_rate, country))
+def add_job(
+    conn,
+    origin,
+    destination,
+    hourly_rate=200.0,
+    per_km_rate=0.80,
+    country="Australia",
+    *,
+    provider: Optional[str] = None,
+):
+    provider_value = (provider or os.environ.get("ROUTING_PROVIDER", "ors")).strip().lower()
+    conn.execute(
+        """
+      INSERT INTO jobs (origin, destination, hourly_rate, per_km_rate, country, provider)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT DO UPDATE SET
+        hourly_rate=excluded.hourly_rate,
+        per_km_rate=excluded.per_km_rate,
+        country=excluded.country,
+        provider=COALESCE(excluded.provider, jobs.provider),
+        distance_km=CASE
+            WHEN COALESCE(excluded.provider, jobs.provider) != jobs.provider THEN NULL
+            ELSE jobs.distance_km
+        END,
+        duration_hr=CASE
+            WHEN COALESCE(excluded.provider, jobs.provider) != jobs.provider THEN NULL
+            ELSE jobs.duration_hr
+        END,
+        cost_time=CASE
+            WHEN COALESCE(excluded.provider, jobs.provider) != jobs.provider THEN NULL
+            ELSE jobs.cost_time
+        END,
+        cost_distance=CASE
+            WHEN COALESCE(excluded.provider, jobs.provider) != jobs.provider THEN NULL
+            ELSE jobs.cost_distance
+        END,
+        cost_total=CASE
+            WHEN COALESCE(excluded.provider, jobs.provider) != jobs.provider THEN NULL
+            ELSE jobs.cost_total
+        END,
+        route_geojson=CASE
+            WHEN COALESCE(excluded.provider, jobs.provider) != jobs.provider THEN NULL
+            ELSE jobs.route_geojson
+        END,
+        updated_at=NULL
+    """,
+        (
+            origin,
+            destination,
+            hourly_rate,
+            per_km_rate,
+            country,
+            provider_value,
+        ),
+    )
     conn.commit()
 
 def list_jobs(conn):
@@ -728,6 +866,7 @@ def list_jobs(conn):
              ROUND(duration_hr,2) AS hours,
              ROUND(cost_total,2) AS total,
              ROUND(internal_cost_total,2) AS internal_total,
+             provider,
              updated_at
       FROM jobs
       ORDER BY updated_at DESC NULLS LAST, id
@@ -747,12 +886,13 @@ def list_jobs(conn):
         "Hours",
         "Total $",
         "Internal $",
+        "Provider",
         "Updated (UTC)",
     ]
-    widths  = [4, 18, 34, 20, 34, 7, 7, 12, 12, 25]
+    widths  = [4, 18, 34, 20, 34, 7, 7, 12, 12, 10, 25]
 
     def fmt_row(r):
-        id_, o, or_, d, dr_, km, hr, tot, internal_tot, upd = r
+        id_, o, or_, d, dr_, km, hr, tot, internal_tot, provider, upd = r
         items = [
             f"{id_}".ljust(widths[0]),
             (o or "")[:widths[1]-1].ljust(widths[1]),
@@ -763,7 +903,8 @@ def list_jobs(conn):
             (f"{hr:.2f}" if hr is not None else "").rjust(widths[6]),
             (f"{tot:,.2f}" if tot is not None else "").rjust(widths[7]),
             (f"{internal_tot:,.2f}" if internal_tot is not None else "").rjust(widths[8]),
-            (upd or "").ljust(widths[9]),
+            (provider or "").ljust(widths[9]),
+            (upd or "").ljust(widths[10]),
         ]
         return "  ".join(items)
 
@@ -772,7 +913,7 @@ def list_jobs(conn):
     for r in rows:
         print(fmt_row(r))
 
-def add_from_csv(conn, csv_path):
+def add_from_csv(conn, csv_path, *, provider: Optional[str] = None):
     with open(csv_path, newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -782,7 +923,8 @@ def add_from_csv(conn, csv_path):
                 row["destination"],
                 float(row.get("hourly_rate", 200) or 200),
                 float(row.get("per_km_rate", 0.80) or 0.80),
-                row.get("country") or "Australia"
+                row.get("country") or "Australia",
+                provider=provider,
             )
 
 # ---------- Map generation (Folium) ----------
@@ -856,6 +998,12 @@ def map_jobs(conn, out_html="routes_map.html"):
 # ---------- CLI ----------
 def cli():
     p = argparse.ArgumentParser()
+    p.add_argument(
+        "--routing-provider",
+        choices=["ors", "google"],
+        default=os.environ.get("ROUTING_PROVIDER", "ors").strip().lower(),
+        help="Routing provider to use for route calculations",
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
     a1 = sub.add_parser("add")
@@ -905,22 +1053,39 @@ def cli():
     cost_summary.add_argument("job_id", type=int)
 
     args = p.parse_args()
+    provider_choice = args.routing_provider
+    if provider_choice:
+        os.environ["ROUTING_PROVIDER"] = provider_choice
     conn = sqlite3.connect(DB_PATH)
     ensure_schema(conn)
     migrate_schema(conn)
 
     if args.cmd == "add":
-        add_job(conn, args.origin, args.destination, args.hourly, args.perkm, args.country)
+        add_job(
+            conn,
+            args.origin,
+            args.destination,
+            args.hourly,
+            args.perkm,
+            args.country,
+            provider=provider_choice,
+        )
         print("Added.")
     elif args.cmd == "add-csv":
-        add_from_csv(conn, args.csv)
+        add_from_csv(conn, args.csv, provider=provider_choice)
         print("Imported.")
     elif args.cmd == "import-history":
-        import_historical_jobs(conn, args.csv, geocode=args.geocode, route=args.route)
+        import_historical_jobs(
+            conn,
+            args.csv,
+            geocode=args.geocode,
+            route=args.route,
+            provider_name=provider_choice,
+        )
     elif args.cmd == "list":
         list_jobs(conn)
     elif args.cmd == "run":
-        process_pending(conn)
+        process_pending(conn, provider_name=provider_choice)
     elif args.cmd == "map":
         map_jobs(conn, out_html=args.out)
     elif args.cmd == "cost":
