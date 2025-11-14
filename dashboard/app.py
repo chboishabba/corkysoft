@@ -934,18 +934,52 @@ def render_price_distribution_dashboard():
                 with st.popover("❓ Histogram stats", use_container_width=True):
                     st.markdown(
                         """
-                        **Break-even bands**  
-                        Vertical markers highlight how far each band sits from the selected break-even $/m³. They help you quickly spot how much headroom or shortfall each cluster of jobs has.
+                        ### **Break-even bands**
+                        Vertical guide-lines centred on your **break-even $/m³**.
 
-                        **Normal fit overlay**  
-                        The dark curve shows a normal distribution fitted to the selected jobs. It makes it easy to compare the real-world distribution with an ideal bell curve.
+                        Each band shows your break-even target (**$/m³ needed to make profit**), along with percentages indicating how far real jobs fall above or below it.
 
-                        **Summary statistics**  
-                        • **μ (mean)** — the average $/m³ across the visible jobs.  
-                        • **σ (standard deviation)** — the typical spread around the mean.  
-                        • **Kurtosis** — how heavy the tails are compared with a normal distribution (positive values mean more extreme outliers).
-                        """
+                        You can quickly see:
+
+                        - **Which corridors frequently underperform**
+                        - **Whether a client consistently prices below your minimum**
+                        - **How much “safety margin” you have on metro jobs**
+                        - The **normal-fit overlay**, showing a bell curve fitted to your $/m³ distribution
+                        - Real-world job pricing is messy and often skewed — the normal fit gives an *idealised baseline*.
+                        - These are methods derived from the formal study of statistics and can be used to inform operators and managers about pricing trends.
+
+                        ---
+
+                        ### **Reading the curve**
+                        - **Skew** → are there lots of cheap jobs or lots of expensive jobs?
+                        - **Fat tails** → outliers on either side
+                        - **Pricing stability** → is your pricing consistent or chaotic?
+
+                        **Tall, narrow curve** → stable, predictable pricing
+                        **Wide, flat curve** → highly variable pricing
+
+                        ---
+
+                        ### **Summary statistics**
+                        These quantify the shape and behaviour of your pricing:
+
+                        - **Percentiles** — e.g., 75th percentile means a value is higher than 75% of jobs.
+                        - **Mean (μ)** — your overall *average* revenue density.
+                        - **Median** — midpoint of all jobs.
+                        More stable than the mean when outliers exist.
+                        - **Standard deviation (σ)** — measures volatility.
+                        **High σ** = inconsistent pricing; **Low σ** = tightly clustered pricing.
+                        - **Kurtosis** — how “outlier-heavy” your distribution is.
+                        Over > 3 = fat tails - some data is very unlike others; Under < 3 = tighter, more predictable.
+                        - **Skewness** — asymmetry.
+                        **Positive skew** → many cheap jobs, few expensive ones.
+                        **Negative skew** → many expensive jobs, few cheap ones.
+                        - **% below break-even** — proportion of unprofitable jobs.
+                        **Ideal:** 0–10% **Warning:** 20–30% **Critical:** >30%
+                        """,
+                        unsafe_allow_html=True,
                     )
+
                 histogram = create_histogram(filtered_df, break_even_value)
                 st.plotly_chart(histogram, width="stretch")
                 st.caption(
