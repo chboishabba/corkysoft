@@ -109,6 +109,7 @@ from dashboard.components.maps import (
     render_network_map,
 )
 from dashboard.map_provider import (
+    folium_map_configuration,
     google_maps_api_key,
     plotly_map_layout,
     pydeck_map_kwargs,
@@ -223,7 +224,14 @@ def _render_pin_picker(
     map_available = folium is not None and st_folium is not None
     if map_available:
         zoom = 12 if entry.get("lon") is not None and entry.get("lat") is not None else 4
-        map_obj = folium.Map(location=[current_lat, current_lon], zoom_start=zoom)
+        map_kwargs, tile_layer_kwargs = folium_map_configuration()
+        map_obj = folium.Map(
+            location=[current_lat, current_lon],
+            zoom_start=zoom,
+            **map_kwargs,
+        )
+        if tile_layer_kwargs:
+            folium.TileLayer(**tile_layer_kwargs).add_to(map_obj)
         folium.Marker(
             [current_lat, current_lon],
             tooltip=f"{label} pin",
