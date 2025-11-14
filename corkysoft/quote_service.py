@@ -247,6 +247,86 @@ def build_summary(inputs: QuoteInput, result: QuoteResult) -> str:
     return "\n".join(lines)
 
 
+_STREET_HINT_TOKENS = {
+    "street",
+    "st",
+    "road",
+    "rd",
+    "avenue",
+    "ave",
+    "crescent",
+    "cres",
+    "circuit",
+    "crt",
+    "court",
+    "ct",
+    "drive",
+    "dr",
+    "parade",
+    "pde",
+    "way",
+    "wy",
+    "lane",
+    "ln",
+    "boulevard",
+    "blvd",
+    "highway",
+    "hwy",
+    "place",
+    "pl",
+    "terrace",
+    "tce",
+}
+
+
+def _score_label_specificity(value: str) -> tuple[int, int]:
+    """Return a tuple allowing comparison of address richness."""
+
+    cleaned = normalize_place(value)
+    if not cleaned:
+        return (0, 0)
+
+    lowered = cleaned.lower()
+    tokens = [token.strip(",") for token in lowered.replace("/", " ").split()]
+    has_number = any(char.isdigit() for char in cleaned)
+    has_street_hint = any(token in _STREET_HINT_TOKENS for token in tokens)
+    comma_bonus = cleaned.count(",")
+    token_bonus = min(3, len(tokens))
+
+    score = 0
+    if has_number:
+        score += 4
+    if has_street_hint:
+        score += 2
+    score += comma_bonus
+    score += token_bonus
+    return (score, len(cleaned))
+
+
+def _resolved_label(geo: GeocodeResult, fallback: str) -> str:
+    """Pick the richest available label for display."""
+
+    candidates: List[str] = []
+
+    def _add_candidate(value: Optional[str]) -> None:
+        if not value:
+            return
+        cleaned = normalize_place(value)
+        if cleaned and cleaned not in candidates:
+            candidates.append(cleaned)
+
+    _add_candidate(geo.label)
+    if geo.normalization and geo.normalization.canonical:
+        _add_candidate(geo.normalization.canonical)
+    _add_candidate(fallback)
+
+    if not candidates:
+        return fallback
+
+    candidates.sort(key=_score_label_specificity, reverse=True)
+    return candidates[0]
+
+
 def calculate_quote(
     conn: sqlite3.Connection,
     inputs: QuoteInput,
@@ -263,15 +343,8 @@ def calculate_quote(
         destination_override=inputs.destination_coordinates,
     )
 
-    def resolved_label(geo: GeocodeResult, fallback: str) -> str:
-        if geo.label:
-            return geo.label
-        if geo.normalization and geo.normalization.canonical:
-            return geo.normalization.canonical
-        return fallback
-
-    origin_resolved = resolved_label(origin_geo, normalize_place(inputs.origin))
-    destination_resolved = resolved_label(
+    origin_resolved = _resolved_label(origin_geo, normalize_place(inputs.origin))
+    destination_resolved = _resolved_label(
         dest_geo, normalize_place(inputs.destination)
     )
 

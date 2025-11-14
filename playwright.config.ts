@@ -13,6 +13,8 @@ const pythonPath = process.env.PYTHONPATH
   ? `${projectRoot}${path.delimiter}${process.env.PYTHONPATH}`
   : projectRoot;
 
+const isCI = !!process.env.CI;
+
 /**
  * See https://playwright.dev/docs/test-configuration.
  */
@@ -21,68 +23,64 @@ export default defineConfig({
   /* Run tests in files in parallel */
   fullyParallel: true,
   /* Fail the build on CI if you accidentally left test.only in the source code. */
-  forbidOnly: !!process.env.CI,
+  forbidOnly: isCI,
   /* Retry on CI only */
-  retries: process.env.CI ? 2 : 0,
+  retries: isCI ? 2 : 0,
   /* Opt out of parallel tests on CI. */
-  workers: process.env.CI ? 1 : undefined,
-  /* Reporter to use. See https://playwright.dev/docs/test-reporters */
+  workers: isCI ? 1 : undefined,
+  /* Reporter to use. */
   reporter: 'html',
-  /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
-  use: {
-    /* Base URL to use in actions like `await page.goto('')`. */
-    baseURL: 'http://127.0.0.1:8501',
 
-    /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
+  use: {
+    baseURL: 'http://127.0.0.1:8501',
     trace: 'on-first-retry',
   },
 
-  /* Configure projects for major browsers */
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: {
+        ...devices['Desktop Chrome'],
+
+        /*
+         * Use **system browser** on Arch Linux.
+         * Uncomment ONE of the following:
+         */
+
+        // 1) System Chromium (recommended, fewer crashes)
+        executablePath: '/usr/bin/chromium',
+
+        // 2) OR system Google Chrome Stable:
+        // executablePath: '/usr/bin/google-chrome-stable',
+      },
     },
 
     {
       name: 'firefox',
-      use: { ...devices['Desktop Firefox'] },
+      use: {
+        ...devices['Desktop Firefox'],
+        executablePath: '/usr/bin/firefox',
+      },
     },
 
-    {
-      name: 'webkit',
-      use: { ...devices['Desktop Safari'] },
-    },
-
-    /* Test against mobile viewports. */
-    // {
-    //   name: 'Mobile Chrome',
-    //   use: { ...devices['Pixel 5'] },
-    // },
-    // {
-    //   name: 'Mobile Safari',
-    //   use: { ...devices['iPhone 12'] },
-    // },
-
-    /* Test against branded browsers. */
-    // {
-    //   name: 'Microsoft Edge',
-    //   use: { ...devices['Desktop Edge'], channel: 'msedge' },
-    // },
-    // {
-    //   name: 'Google Chrome',
-    //   use: { ...devices['Desktop Chrome'], channel: 'chrome' },
-    // },
+    // WebKit fails on Arch (missing libicudata.so.66 etc.)
+    // Enable only in CI environments where Playwright deps can be satisfied.
+    ...(isCI
+      ? [
+          {
+            name: 'webkit',
+            use: { ...devices['Desktop Safari'] },
+          },
+        ]
+      : []),
   ],
 
-  /* Run your local dev server before starting the tests */
   webServer: {
-    command: 'npm run start:dashboard',
-    url: 'http://127.0.0.1:8501',
+    // adjust path if your venv is elsewhere
+    command:
+      'venv/bin/streamlit run dashboard/app.py --server.port=8501 --server.headless=true',
+    url: 'http://127.0.0.1:8501/',
     reuseExistingServer: !process.env.CI,
-    timeout: 180 * 1000,
-    env: {
-      PYTHONPATH: pythonPath,
-    },
+    timeout: 120_000,
   },
 });

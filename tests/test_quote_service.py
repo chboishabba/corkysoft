@@ -35,7 +35,7 @@ from analytics.db import ensure_dashboard_tables
 from analytics.price_distribution import load_quotes
 import corkysoft.quote_service as quote_service
 import corkysoft.routing as routing
-from corkysoft.au_address import GeocodeResult
+from corkysoft.au_address import AddressNormalization, GeocodeResult
 from corkysoft.pricing import (
     DEFAULT_MODIFIERS,
     PRICING_MODELS,
@@ -579,6 +579,55 @@ def test_calculate_quote_applies_margin(monkeypatch: pytest.MonkeyPatch) -> None
     assert result.final_quote == pytest.approx(
         result.total_before_margin * (1 + inputs.target_margin_percent / 100.0)
     )
+
+    conn.close()
+
+
+def test_calculate_quote_prefers_canonical_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    ensure_dashboard_tables(conn)
+
+    inputs = _quote_input()
+    inputs.origin = "21/100 Champions Cres Brookwater"
+    inputs.destination = "12 Carlton Street Toowoomba"
+
+    origin_geo = GeocodeResult(
+        lon=152.9,
+        lat=-27.6,
+        label="Brookwater, QLD, Australia",
+    )
+    origin_geo.normalization = AddressNormalization(
+        raw=inputs.origin,
+        canonical="21/100 Champions Crescent, Brookwater, QLD 4300",
+    )
+
+    dest_geo = GeocodeResult(
+        lon=151.95,
+        lat=-27.5,
+        label="Toowoomba, QLD, Australia",
+    )
+    dest_geo.normalization = AddressNormalization(
+        raw=inputs.destination,
+        canonical="12 Carlton Street, Toowoomba QLD 4350",
+    )
+
+    def _fake_route_distance(
+        *_args: object, **_kwargs: object
+    ) -> tuple[float, float, GeocodeResult, GeocodeResult]:
+        return 115.1, 1.6, origin_geo, dest_geo
+
+    monkeypatch.setattr(
+        "corkysoft.quote_service.route_distance",
+        _fake_route_distance,
+    )
+
+    result = calculate_quote(conn, inputs)
+
+    assert result.origin_resolved == "21/100 Champions Crescent, Brookwater, QLD 4300"
+    assert result.destination_resolved == "12 Carlton Street, Toowoomba QLD 4350"
 
     conn.close()
 
