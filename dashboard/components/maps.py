@@ -99,7 +99,7 @@ def build_route_map(
     colorbar_tickformat: Optional[str] = None,
     use_route_geometry: bool = True,
 ) -> go.Figure:
-    """Construct a Plotly Mapbox figure showing coloured routes and points."""
+    """Construct a Plotly map figure showing coloured routes and points."""
 
     def _row_route_points(row: pd.Series) -> List[Tuple[float, float]]:
         """Return the ordered ``(lat, lon)`` points for ``row`` when available."""
@@ -295,7 +295,7 @@ def build_route_map(
                 if lat_values and lon_values:
                     colour = colour_map.get(value, "#636EFA")
                     figure.add_trace(
-                        go.Scattermapbox(
+                        go.Scattermap(
                             lat=lat_values,
                             lon=lon_values,
                             mode="lines",
@@ -356,7 +356,7 @@ def build_route_map(
                 if marker_lat and marker_lon:
                     colour = colour_map.get(value, "#636EFA")
                     figure.add_trace(
-                        go.Scattermapbox(
+                        go.Scattermap(
                             lat=marker_lat,
                             lon=marker_lon,
                             mode="markers",
@@ -445,7 +445,7 @@ def build_route_map(
                 if lat_values and lon_values:
                     line_colour = colour_values_for_lines[0] if colour_values_for_lines else colour_scale[0]
                     figure.add_trace(
-                        go.Scattermapbox(
+                        go.Scattermap(
                             lat=lat_values,
                             lon=lon_values,
                             mode="lines",
@@ -502,7 +502,7 @@ def build_route_map(
                     if cmid_value is not None:
                         marker_dict["cmid"] = cmid_value
                     figure.add_trace(
-                        go.Scattermapbox(
+                        go.Scattermap(
                             lat=marker_lat,
                             lon=marker_lon,
                             mode="markers",
@@ -519,7 +519,7 @@ def build_route_map(
         **plotly_map_layout(
             {"lat": -25.0, "lon": 133.0},
             zoom=3,
-            engine="mapbox",
+            engine="map",
         ),
         margin={"r": 0, "t": 0, "l": 0, "b": 0},
         legend={"orientation": "h", "yanchor": "bottom", "y": 0.01},
