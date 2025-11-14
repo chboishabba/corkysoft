@@ -42,13 +42,17 @@ def _get_query_params() -> Dict[str, List[str]]:
 
 def _rerun_app() -> None:
     """Trigger a Streamlit rerun using the available API."""
-
     rerun = getattr(st, "rerun", None)
-    if rerun is not None:
+    if callable(rerun):
         rerun()
         return
 
-    st.experimental_rerun()
+    experimental_rerun = getattr(st, "experimental_rerun", None)
+    if callable(experimental_rerun):
+        experimental_rerun()
+        return
+
+    raise RuntimeError("Streamlit rerun API is unavailable.")
 
 
 def _initial_pin_state(result: QuoteResult) -> Dict[str, Any]:

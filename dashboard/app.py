@@ -1507,10 +1507,16 @@ def _get_query_params() -> Dict[str, List[str]]:
 def _rerun_app() -> None:
     """Trigger a Streamlit rerun using the available API."""
     rerun = getattr(st, "rerun", None)
-    if rerun is not None:
+    if callable(rerun):
         rerun()
         return
-    st.experimental_rerun()
+
+    experimental_rerun = getattr(st, "experimental_rerun", None)
+    if callable(experimental_rerun):
+        experimental_rerun()
+        return
+
+    raise RuntimeError("Streamlit rerun API is unavailable.")
 
 
 def _first_non_empty(route: pd.Series, columns: Sequence[str]) -> Optional[str]:
@@ -2568,7 +2574,7 @@ def render_price_distribution_dashboard():
                                                     st.warning(
                                                         "No route geometry could be retrieved for the current selection."
                                                     )
-                                                st.experimental_rerun()
+                                                _rerun_app()
                                     elif missing_route_ids:
                                         st.caption(
                                             "Populate the historical or live job tables to store route geometry."
