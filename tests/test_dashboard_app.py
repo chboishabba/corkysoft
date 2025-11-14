@@ -27,7 +27,7 @@ def test_streamlit_entrypoint_exposed() -> None:
 
 def test_streamlit_app_runs_cleanly(capsys) -> None:
     app = AppTest.from_file(
-        Path(__file__).resolve().parents[1] / "streamlit_price_distribution.py"
+        Path(__file__).resolve().parents[1] / "dashboard" / "app.py"
     )
     try:
         app.run(timeout=30)
