@@ -54,6 +54,7 @@ def test_plotly_map_layout_uses_google_tiles(monkeypatch: pytest.MonkeyPatch) ->
     tile_url = config["layers"][0]["source"][0]
     assert "google.com" in tile_url
     assert "abc123" in tile_url
+    assert config["layers"][0]["below"] == "traces"
 
 
 def test_plotly_map_layout_defaults_when_not_google(monkeypatch: pytest.MonkeyPatch) -> None:
