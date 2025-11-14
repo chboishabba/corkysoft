@@ -1,4 +1,9 @@
 # corkysoft
+[Live Network](docs/live_network_overview.md)
+[Telemetry](docs/mock_telemetry_workflow.md)
+[Price History](docs/price_history.md)
+[Roadmap](ROADMAP.md)
+
 
 Route profitability tooling for removals operators. The project couples a command-line workflow for distance lookups and cost capture with a Streamlit dashboard that surfaces price distribution, lane performance, and live telemetry overlays.
 
