@@ -26,19 +26,17 @@ from .db import (
     migrate_geojson_to_routes,
     set_parameter_value,
 )
+from .routing_provider import RoutingProvider, get_routing_provider
 
 
 try:  # pragma: no cover - availability exercised via tests
-    from corkysoft.routing import (
-        get_ors_client as _get_ors_client,
-        geocode_cached as _geocode_cached,
-    )
+    from corkysoft.routing import geocode_cached as _geocode_cached
 except Exception:  # pragma: no cover - optional dependency
-    _get_ors_client = None
     geocode_cached = None  # type: ignore[assignment]
-    _QUOTE_COUNTRY_DEFAULT = "Australia"
 else:
     geocode_cached = _geocode_cached
+
+_QUOTE_COUNTRY_DEFAULT = "Australia"
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from openrouteservice import Client as ORSClient
@@ -3018,91 +3016,6 @@ def _circle_coordinates(
     return latitudes, longitudes
 
 
-def _geometry_to_coordinates(geometry: Any) -> tuple[list[float], list[float]]:
-    """Extract latitude and longitude sequences from a GeoJSON geometry."""
-
-    if not isinstance(geometry, dict):
-        return [], []
-
-    geom_type = geometry.get("type")
-    coordinates = geometry.get("coordinates")
-    if not coordinates:
-        return [], []
-
-    ring: Optional[Sequence[Sequence[float]]]
-    if geom_type == "Polygon":
-        ring = coordinates[0] if isinstance(coordinates, Sequence) else None
-    elif geom_type == "MultiPolygon":
-        if (
-            isinstance(coordinates, Sequence)
-            and coordinates
-            and isinstance(coordinates[0], Sequence)
-            and coordinates[0]
-            and isinstance(coordinates[0][0], Sequence)
-        ):
-            ring = coordinates[0][0]
-        else:
-            ring = None
-    else:
-        return [], []
-
-    if not ring:
-        return [], []
-
-    latitudes: list[float] = []
-    longitudes: list[float] = []
-    for point in ring:
-        if not isinstance(point, Sequence) or len(point) < 2:
-            continue
-        lon_val, lat_val = point[0], point[1]
-        if not isinstance(lon_val, (int, float)) or not isinstance(lat_val, (int, float)):
-            continue
-        longitudes.append(float(lon_val))
-        latitudes.append(float(lat_val))
-
-    if not latitudes or not longitudes:
-        return [], []
-
-    if latitudes[0] != latitudes[-1] or longitudes[0] != longitudes[-1]:
-        latitudes.append(latitudes[0])
-        longitudes.append(longitudes[0])
-
-    return latitudes, longitudes
-
-
-def _extract_isochrone_coordinates(feature_collection: Any) -> tuple[list[float], list[float]]:
-    """Return the first polygon ring from an ORS isochrone feature collection."""
-
-    if not isinstance(feature_collection, dict):
-        return [], []
-
-    features = feature_collection.get("features")
-    if not isinstance(features, Sequence):
-        return [], []
-
-    sortable: list[tuple[float, Any]] = []
-    for feature in features:
-        if not isinstance(feature, dict):
-            continue
-        properties = feature.get("properties")
-        value = float(properties.get("value")) if isinstance(properties, dict) and "value" in properties else float("inf")
-        sortable.append((value, feature))
-
-    for _, feature in sorted(sortable, key=lambda item: item[0]):
-        latitudes, longitudes = _geometry_to_coordinates(feature.get("geometry"))
-        if latitudes and longitudes:
-            return latitudes, longitudes
-
-    # Fall back to iterating in original order if properties/value metadata is missing.
-    for feature in features:
-        if not isinstance(feature, dict):
-            continue
-        latitudes, longitudes = _geometry_to_coordinates(feature.get("geometry"))
-        if latitudes and longitudes:
-            return latitudes, longitudes
-
-    return [], []
-
 
 def build_isochrone_polygons(
     df: pd.DataFrame,
@@ -3112,6 +3025,7 @@ def build_isochrone_polygons(
     default_speed_kmh: float = 70.0,
     max_routes: int = 50,
     points: int = 60,
+    routing_provider: Optional[RoutingProvider] = None,
     ors_client: Optional[ORSClient] = None,
     ors_profile: str = "driving-hgv",
 ) -> pd.DataFrame:
@@ -3142,11 +3056,15 @@ def build_isochrone_polygons(
         from being overwhelmed by hundreds of polygons.
     points:
         Number of vertices used to approximate each circular polygon.
+    routing_provider:
+        Optional routing provider implementing :class:`RoutingProvider`.
+        When omitted the helper attempts to resolve one via
+        :func:`analytics.routing_provider.get_routing_provider` using the
+        supplied ``ors_client`` (if any) and the ``ROUTING_PROVIDER``
+        environment variable.
     ors_client:
-        Optional OpenRouteService client to use for travel-time isochrones.
-        When ``None`` the helper attempts to create a shared client via
-        :func:`corkysoft.routing.get_ors_client`.  If a client cannot be
-        acquired the function falls back to circular approximations.
+        Backwards-compatible argument for supplying an OpenRouteService client
+        when the default provider requires one.
     ors_profile:
         Routing profile supplied to the OpenRouteService isochrone request.  The
         default of ``"driving-hgv"`` aligns with heavy vehicle routing.
@@ -3225,15 +3143,15 @@ def build_isochrone_polygons(
         None,
     )
 
-    client: Optional[ORSClient] = None
-    if ors_client is not None:
-        client = ors_client
-    elif _get_ors_client is not None:
+    provider: Optional[RoutingProvider]
+    if routing_provider is not None:
+        provider = routing_provider
+    else:
         try:
-            client = _get_ors_client()
+            provider = get_routing_provider(client=ors_client)
         except Exception as exc:  # pragma: no cover - exercised via fallback path
-            logger.debug("Unable to initialise ORS client for isochrones: %s", exc)
-            client = None
+            logger.debug("Unable to initialise routing provider for isochrones: %s", exc)
+            provider = None
 
     range_seconds: list[int] = []
     if horizon_hours > 0 and math.isfinite(horizon_hours):
@@ -3273,30 +3191,29 @@ def build_isochrone_polygons(
 
         latitudes: list[float]
         longitudes: list[float]
-        if client is not None and range_seconds:
+        if provider is not None and range_seconds:
             try:
-                response = client.isochrones(
-                    locations=[[float(lon_value), float(lat_value)]],
+                result = provider.isochrone(
+                    centre=(float(lon_value), float(lat_value)),
                     profile=ors_profile,
-                    range=range_seconds,
+                    range_seconds=range_seconds,
                 )
+            except NotImplementedError:
+                result = None
             except Exception as exc:  # pragma: no cover - network failures are environment-dependent
-                logger.debug("ORS isochrone request failed for %s: %s", label, exc)
+                logger.debug("Routing provider isochrone request failed for %s: %s", label, exc)
+                result = None
+            if result:
+                latitudes, longitudes = result.to_lat_lon_lists()
+            else:
+                latitudes, longitudes = [], []
+            if not latitudes or not longitudes:
                 latitudes, longitudes = _circle_coordinates(
                     lat_value,
                     lon_value,
                     radius_km,
                     points=points,
                 )
-            else:
-                latitudes, longitudes = _extract_isochrone_coordinates(response)
-                if not latitudes or not longitudes:
-                    latitudes, longitudes = _circle_coordinates(
-                        lat_value,
-                        lon_value,
-                        radius_km,
-                        points=points,
-                    )
         else:
             latitudes, longitudes = _circle_coordinates(
                 lat_value,

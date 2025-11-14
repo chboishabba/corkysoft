@@ -2508,7 +2508,7 @@ def render_price_distribution_dashboard():
                                             "Populate route geometry",
                                             key="populate_route_geometry_button",
                                             help=(
-                                                "Fetch OpenRouteService geometry for the filtered routes and store it "
+                                                "Fetch routing-provider geometry for the filtered routes and store it "
                                                 "for future map sessions."
                                             ),
                                         ):
@@ -2888,7 +2888,7 @@ def render_price_distribution_dashboard():
                             "route_geojson" in row.keys() and row["route_geojson"] for row in job_rows
                         )
                         toggle_help = (
-                            "Overlay the stored OpenRouteService geometry instead of straight-line chords."
+                            "Overlay the stored routing-provider geometry instead of straight-line chords."
                         )
                         include_actual_key = "folium_job_routes_overlay"
                         default_toggle = (

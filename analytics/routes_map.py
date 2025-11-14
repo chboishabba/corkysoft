@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import time
 from datetime import datetime, timezone
 from collections.abc import Collection, Iterable, Sequence
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence as SeqType, Tuple
@@ -12,7 +11,7 @@ from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence 
 import logging
 
 
-from corkysoft.routing import ROUTE_BACKOFF, get_ors_client
+from .routing_provider import RoutingProvider, get_routing_provider
 
 logger = logging.getLogger(__name__)
 
@@ -235,36 +234,6 @@ def _extract_coordinates(row: Mapping[str, Any]) -> Optional[Tuple[float, float,
     return origin_lon, origin_lat, dest_lon, dest_lat
 
 
-def _request_route_geojson(
-    client: Any,
-    origin_lon: float,
-    origin_lat: float,
-    dest_lon: float,
-    dest_lat: float,
-) -> Tuple[float, float, str]:
-    """Return ``(distance_km, duration_hr, geojson)`` for the provided coordinates."""
-
-    response = client.directions(
-        coordinates=[[origin_lon, origin_lat], [dest_lon, dest_lat]],
-        profile="driving-car",
-        format="geojson",
-    )
-    features = response.get("features") if isinstance(response, Mapping) else None
-    if not features:
-        raise ValueError("ORS response missing features for route geometry request")
-    first_feature = features[0]
-    properties = first_feature.get("properties") if isinstance(first_feature, Mapping) else {}
-    summary = properties.get("summary") if isinstance(properties, Mapping) else {}
-    if not summary:
-        raise ValueError("ORS response missing summary for route geometry request")
-
-    distance_m = float(summary["distance"])
-    duration_s = float(summary["duration"])
-    geojson = json.dumps(response, separators=(",", ":"))
-    time.sleep(ROUTE_BACKOFF)
-    return distance_m / 1000.0, duration_s / 3600.0, geojson
-
-
 def _store_historical_geometry(
     conn: sqlite3.Connection,
     job_id: int,
@@ -392,6 +361,7 @@ def populate_route_geometry(
     *,
     dataset: str,
     client: Optional[Any] = None,
+    provider: Optional[RoutingProvider] = None,
 ) -> int:
     """Populate ``route_geojson`` for the requested ``job_ids``.
 
@@ -404,7 +374,11 @@ def populate_route_geometry(
     dataset:
         Either ``"historical"`` or ``"live"`` designating the source table.
     client:
-        Optional OpenRouteService client. When omitted ``get_ors_client`` is used.
+        Optional routing client forwarded to the resolved provider.
+    provider:
+        Explicit routing provider implementing :class:`RoutingProvider`.  When
+        omitted the helper resolves one using :func:`get_routing_provider` and
+        the ``ROUTING_PROVIDER`` environment variable.
 
     Returns
     -------
@@ -486,7 +460,7 @@ def populate_route_geometry(
         return 0
 
     updated = 0
-    ors_client = get_ors_client(client)
+    route_provider = get_routing_provider(provider=provider, client=client)
 
     for row in rows:
         job_id = int(row["id"])
@@ -501,13 +475,13 @@ def populate_route_geometry(
 
         origin_lon, origin_lat, dest_lon, dest_lat = coords
         try:
-            distance_km, duration_hr, geojson = _request_route_geojson(
-                ors_client,
-                origin_lon,
-                origin_lat,
-                dest_lon,
-                dest_lat,
+            geometry = route_provider.route_geometry(
+                origin=(origin_lon, origin_lat),
+                destination=(dest_lon, dest_lat),
             )
+            geojson = geometry.dumps()
+            distance_km = float(geometry.distance_km)
+            duration_hr = float(geometry.duration_hr)
         except Exception as exc:  # pragma: no cover - defensive logging only
             logger.warning("Failed to fetch route geometry for job %s: %s", job_id, exc)
             continue

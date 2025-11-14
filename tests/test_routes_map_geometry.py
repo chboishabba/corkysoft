@@ -1,41 +1,76 @@
+import json
 import sqlite3
 
 import pytest
 
 from analytics.db import ensure_dashboard_tables
+from analytics.routing_provider import RouteGeometryResult
 from analytics.routes_map import populate_route_geometry
 
 
-class DummyORSClient:
-    """Minimal OpenRouteService client stub used for tests."""
+ENCODED_ROUTE = "~~umEca|y[kt`f@kyaJ"
 
-    def __init__(self, distance_m: float = 12345.6, duration_s: float = 7890.1):
-        self.distance_m = distance_m
-        self.duration_s = duration_s
-        self.calls = []
 
-    def directions(self, *, coordinates, profile, format):  # type: ignore[override]
-        self.calls.append((coordinates, profile, format))
-        if format != "geojson":
-            raise ValueError("Expected geojson format")
-        return {
-            "type": "FeatureCollection",
-            "features": [
-                {
-                    "type": "Feature",
-                    "properties": {
-                        "summary": {
-                            "distance": self.distance_m,
-                            "duration": self.duration_s,
-                        }
-                    },
-                    "geometry": {
-                        "type": "LineString",
-                        "coordinates": coordinates,
-                    },
-                }
-            ],
-        }
+class DummyRouteProvider:
+    """Route provider stub that can emit GeoJSON or encoded polylines."""
+
+    def __init__(
+        self,
+        *,
+        distance_km: float,
+        duration_hr: float,
+        encoded_polyline: str | None = None,
+    ) -> None:
+        self.distance_km = distance_km
+        self.duration_hr = duration_hr
+        self.encoded_polyline = encoded_polyline
+        self.calls: list[tuple[tuple[float, float], tuple[float, float], str]] = []
+
+    def route_geometry(
+        self,
+        *,
+        origin: tuple[float, float],
+        destination: tuple[float, float],
+        profile: str = "driving-car",
+    ) -> RouteGeometryResult:
+        self.calls.append((origin, destination, profile))
+        if self.encoded_polyline is not None:
+            return RouteGeometryResult(
+                distance_km=self.distance_km,
+                duration_hr=self.duration_hr,
+                encoded_polyline=self.encoded_polyline,
+            )
+
+        return RouteGeometryResult(
+            distance_km=self.distance_km,
+            duration_hr=self.duration_hr,
+            feature_collection={
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {},
+                        "geometry": {
+                            "type": "LineString",
+                            "coordinates": [
+                                [float(origin[0]), float(origin[1])],
+                                [float(destination[0]), float(destination[1])],
+                            ],
+                        },
+                    }
+                ],
+            },
+        )
+
+
+def make_provider(kind: str, *, distance_km: float, duration_hr: float) -> DummyRouteProvider:
+    if kind == "encoded":
+        return DummyRouteProvider(
+            distance_km=distance_km,
+            duration_hr=duration_hr,
+            encoded_polyline=ENCODED_ROUTE,
+        )
+    return DummyRouteProvider(distance_km=distance_km, duration_hr=duration_hr)
 
 
 @pytest.fixture()
@@ -49,11 +84,8 @@ def conn():
         connection.close()
 
 
-def test_populate_route_geometry_historical_inserts_geojson(monkeypatch, conn):
-    from analytics import routes_map
-
-    monkeypatch.setattr(routes_map, "ROUTE_BACKOFF", 0.0)
-
+@pytest.mark.parametrize("provider_kind", ["geojson", "encoded"])
+def test_populate_route_geometry_historical_inserts_geojson(conn, provider_kind):
     origin_address_id = conn.execute(
         """
         INSERT INTO addresses (raw_input, normalized, country, lon, lat)
@@ -91,8 +123,8 @@ def test_populate_route_geometry_historical_inserts_geojson(monkeypatch, conn):
     )
     job_id = conn.execute("SELECT id FROM historical_jobs").fetchone()[0]
 
-    client = DummyORSClient(distance_m=5000.0, duration_s=3600.0)
-    updated = populate_route_geometry(conn, [job_id], dataset="historical", client=client)
+    provider = make_provider(provider_kind, distance_km=5.0, duration_hr=1.0)
+    updated = populate_route_geometry(conn, [job_id], dataset="historical", provider=provider)
 
     assert updated == 1
     stored = conn.execute(
@@ -100,7 +132,12 @@ def test_populate_route_geometry_historical_inserts_geojson(monkeypatch, conn):
         (job_id,),
     ).fetchone()
     assert stored is not None
-    assert "FeatureCollection" in stored["geojson"]
+    parsed = json.loads(stored["geojson"])
+    coords = parsed["features"][0]["geometry"]["coordinates"]
+    assert coords[0][0] == pytest.approx(151.2093)
+    assert coords[0][1] == pytest.approx(-33.8688)
+    assert coords[-1][0] == pytest.approx(153.0260)
+    assert coords[-1][1] == pytest.approx(-27.4705)
 
     job_row = conn.execute(
         "SELECT * FROM historical_jobs WHERE id = ?",
@@ -111,11 +148,8 @@ def test_populate_route_geometry_historical_inserts_geojson(monkeypatch, conn):
         assert pytest.approx(job_row["duration_hr"], rel=1e-3) == 1.0
 
 
-def test_populate_route_geometry_live_updates_job(monkeypatch, conn):
-    from analytics import routes_map
-
-    monkeypatch.setattr(routes_map, "ROUTE_BACKOFF", 0.0)
-
+@pytest.mark.parametrize("provider_kind", ["geojson", "encoded"])
+def test_populate_route_geometry_live_updates_job(conn, provider_kind):
     conn.execute("ALTER TABLE jobs ADD COLUMN duration_hr REAL")
     conn.execute(
         """
@@ -143,8 +177,8 @@ def test_populate_route_geometry_live_updates_job(monkeypatch, conn):
     )
     job_id = conn.execute("SELECT id FROM jobs").fetchone()[0]
 
-    client = DummyORSClient(distance_m=10000.0, duration_s=7200.0)
-    updated = populate_route_geometry(conn, [job_id], dataset="live", client=client)
+    provider = make_provider(provider_kind, distance_km=10.0, duration_hr=2.0)
+    updated = populate_route_geometry(conn, [job_id], dataset="live", provider=provider)
 
     assert updated == 1
     stored = conn.execute(
@@ -152,17 +186,18 @@ def test_populate_route_geometry_live_updates_job(monkeypatch, conn):
         (job_id,),
     ).fetchone()
     assert stored is not None
-    assert "FeatureCollection" in stored["route_geojson"]
+    parsed = json.loads(stored["route_geojson"])
+    coords = parsed["features"][0]["geometry"]["coordinates"]
+    assert coords[0][0] == pytest.approx(151.2093)
+    assert coords[0][1] == pytest.approx(-33.8688)
+    assert coords[-1][0] == pytest.approx(153.0260)
+    assert coords[-1][1] == pytest.approx(-27.4705)
     assert pytest.approx(stored["distance_km"], rel=1e-3) == 10.0
     if "duration_hr" in stored.keys():
         assert pytest.approx(stored["duration_hr"], rel=1e-3) == 2.0
 
 
-def test_populate_route_geometry_historical_uses_inline_coordinates(monkeypatch, conn):
-    from analytics import routes_map
-
-    monkeypatch.setattr(routes_map, "ROUTE_BACKOFF", 0.0)
-
+def test_populate_route_geometry_historical_uses_inline_coordinates(conn):
     for column in ("origin_lon", "origin_lat", "dest_lon", "dest_lat", "duration_hr"):
         conn.execute(f"ALTER TABLE historical_jobs ADD COLUMN {column} REAL")
 
@@ -192,8 +227,8 @@ def test_populate_route_geometry_historical_uses_inline_coordinates(monkeypatch,
     )
     job_id = conn.execute("SELECT id FROM historical_jobs ORDER BY id DESC").fetchone()[0]
 
-    client = DummyORSClient(distance_m=8000.0, duration_s=5400.0)
-    updated = populate_route_geometry(conn, [job_id], dataset="historical", client=client)
+    provider = make_provider("geojson", distance_km=8.0, duration_hr=1.5)
+    updated = populate_route_geometry(conn, [job_id], dataset="historical", provider=provider)
 
     assert updated == 1
     stored = conn.execute(
@@ -201,7 +236,12 @@ def test_populate_route_geometry_historical_uses_inline_coordinates(monkeypatch,
         (job_id,),
     ).fetchone()
     assert stored is not None
-    assert "FeatureCollection" in stored["geojson"]
+    parsed = json.loads(stored["geojson"])
+    coords = parsed["features"][0]["geometry"]["coordinates"]
+    assert coords[0][0] == pytest.approx(150.0)
+    assert coords[0][1] == pytest.approx(-35.0)
+    assert coords[-1][0] == pytest.approx(151.0)
+    assert coords[-1][1] == pytest.approx(-34.0)
 
     job_row = conn.execute(
         "SELECT * FROM historical_jobs WHERE id = ?",
