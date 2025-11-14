@@ -712,7 +712,7 @@ def build_route_map(
                 if lat_values and lon_values:
                     colour = colour_map.get(value, "#636EFA")
                     figure.add_trace(
-                        go.Scattermapbox(
+                        go.Scattermap(
                             lat=lat_values,
                             lon=lon_values,
                             mode="lines",
@@ -773,7 +773,7 @@ def build_route_map(
                 if marker_lat and marker_lon:
                     colour = colour_map.get(value, "#636EFA")
                     figure.add_trace(
-                        go.Scattermapbox(
+                        go.Scattermap(
                             lat=marker_lat,
                             lon=marker_lon,
                             mode="markers",
@@ -865,7 +865,7 @@ def build_route_map(
                         continue
 
                     figure.add_trace(
-                        go.Scattermapbox(
+                        go.Scattermap(
                             lat=lat_values,
                             lon=lon_values,
                             mode="lines",
@@ -932,7 +932,7 @@ def build_route_map(
                     if cmid_value is not None:
                         marker_config["cmid"] = cmid_value
                     figure.add_trace(
-                        go.Scattermapbox(
+                        go.Scattermap(
                             lat=marker_lat,
                             lon=marker_lon,
                             mode="markers",
@@ -964,7 +964,7 @@ def build_route_map(
                         for idx in coords_df.index
                     ]
                     figure.add_trace(
-                        go.Scattermapbox(
+                        go.Scattermap(
                             lat=marker_lat,
                             lon=marker_lon,
                             mode="markers",
@@ -982,7 +982,7 @@ def build_route_map(
     center_lon = float(all_lon.mean()) if not all_lon.empty else 0.0
 
     figure.update_layout(
-        mapbox={
+        map={
             "style": "carto-positron",
             "center": {"lat": center_lat, "lon": center_lon},
             "zoom": 3,
@@ -2748,7 +2748,7 @@ def render_price_distribution_dashboard():
                             "margin_per_m3_pct",
                         }
                         midpoint = 0.0 if weight_column in midpoint_columns else None
-                        heatmap_fig = px.density_mapbox(
+                        heatmap_fig = px.density_map(
                             heatmap_source,
                             lat="lat",
                             lon="lon",
@@ -2775,7 +2775,7 @@ def render_price_distribution_dashboard():
                             trace.hovertemplate = hover_template
 
                         heatmap_fig.update_layout(
-                            mapbox={
+                            map={
                                 "style": "carto-positron",
                                 "center": centre,
                                 "zoom": 4,
@@ -2832,7 +2832,7 @@ def render_price_distribution_dashboard():
                         line_colour = f"rgba({r},{g},{b},0.9)"
 
                         figure.add_trace(
-                            go.Scattermapbox(
+                            go.Scattermap(
                                 lat=row["latitudes"],
                                 lon=row["longitudes"],
                                 mode="lines",
@@ -2845,7 +2845,7 @@ def render_price_distribution_dashboard():
                         )
 
                         figure.add_trace(
-                            go.Scattermapbox(
+                            go.Scattermap(
                                 lat=[row["centre_lat"]],
                                 lon=[row["centre_lon"]],
                                 mode="markers",
@@ -2859,7 +2859,7 @@ def render_price_distribution_dashboard():
                     centre_lon = float(iso_source["centre_lon"].mean())
 
                     figure.update_layout(
-                        mapbox={
+                        map={
                             "style": "carto-positron",
                             "center": {"lat": centre_lat, "lon": centre_lon},
                             "zoom": 4,
