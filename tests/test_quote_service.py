@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 import types
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import pytest
 import streamlit as st
@@ -57,6 +57,7 @@ from corkysoft.repo import (
     persist_quote,
 )
 from corkysoft.routing import route_distance, snap_coordinates_to_road
+from corkysoft.routing.providers import IncompleteRouteError, NoRoutablePointError
 
 
 def _quote_input() -> QuoteInput:
@@ -97,6 +98,25 @@ def _quote_result() -> QuoteResult:
         dest_lon=3.0,
         dest_lat=4.0,
     )
+
+
+def _prepare_geocode_cache(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS geocode_cache (
+            place TEXT PRIMARY KEY,
+            lon REAL NOT NULL,
+            lat REAL NOT NULL,
+            postalcode TEXT,
+            region_code TEXT,
+            region TEXT,
+            locality TEXT,
+            county TEXT,
+            ts TEXT NOT NULL
+        )
+        """
+    )
+    conn.commit()
 
 
 def test_build_summary_includes_corrections() -> None:
@@ -286,26 +306,40 @@ def test_geocode_cached_persists_metadata(monkeypatch: pytest.MonkeyPatch) -> No
 
     captured: list[tuple[str, str]] = []
 
-    def _fake_geocode(place: str, country: str, client=None):  # type: ignore[override]
-        captured.append((place, country))
-        return GeocodeResult(
-            lon=153.02,
-            lat=-27.47,
-            label="Brisbane, QLD",
-            postalcode="4000",
-            region_code="QLD",
-            region="Queensland",
-            locality="Brisbane",
-            county="Brisbane",
-        )
+    class _Provider:
+        def geocode(self, place: str, country: str) -> GeocodeResult:
+            captured.append((place, country))
+            return GeocodeResult(
+                lon=153.02,
+                lat=-27.47,
+                label="Brisbane, QLD",
+                postalcode="4000",
+                region_code="QLD",
+                region="Queensland",
+                locality="Brisbane",
+                county="Brisbane",
+            )
 
-    monkeypatch.setattr(routing, "pelias_geocode", _fake_geocode)
+        def directions(self, *_, **__):  # pragma: no cover - unused in this test
+            raise AssertionError("directions should not be called")
 
-    first = routing.geocode_cached(conn, "Brisbane", "Australia")
+        def snap_to_road(self, *_, **__):  # pragma: no cover - unused in this test
+            return None
+
+        def isochrone(self, *, centre, profile, range_seconds):  # pragma: no cover - unused
+            return None
+
+    provider = _Provider()
+
+    first = routing.geocode_cached(
+        conn, "Brisbane", "Australia", provider=provider
+    )
     assert first.postalcode == "4000"
     assert first.region_code == "QLD"
 
-    second = routing.geocode_cached(conn, "Brisbane", "Australia")
+    second = routing.geocode_cached(
+        conn, "Brisbane", "Australia", provider=provider
+    )
     assert second.postalcode == "4000"
     assert second.region_code == "QLD"
 
@@ -333,22 +367,34 @@ def test_geocode_cached_refreshes_missing_metadata(monkeypatch: pytest.MonkeyPat
 
     calls: list[tuple[str, str]] = []
 
-    def _fake_geocode(place: str, country: str, client=None):  # type: ignore[override]
-        calls.append((place, country))
-        return GeocodeResult(
-            lon=153.02,
-            lat=-27.47,
-            label="Brisbane, QLD",
-            postalcode="4000",
-            region_code="QLD",
-            region="Queensland",
-            locality="Brisbane",
-            county="Brisbane",
-        )
+    class _Provider:
+        def geocode(self, place: str, country: str) -> GeocodeResult:
+            calls.append((place, country))
+            return GeocodeResult(
+                lon=153.02,
+                lat=-27.47,
+                label="Brisbane, QLD",
+                postalcode="4000",
+                region_code="QLD",
+                region="Queensland",
+                locality="Brisbane",
+                county="Brisbane",
+            )
 
-    monkeypatch.setattr(routing, "pelias_geocode", _fake_geocode)
+        def directions(self, *_, **__):  # pragma: no cover - unused in this test
+            raise AssertionError("directions should not be called")
 
-    result = routing.geocode_cached(conn, "Brisbane", "Australia")
+        def snap_to_road(self, *_, **__):  # pragma: no cover - unused in this test
+            return None
+
+        def isochrone(self, *, centre, profile, range_seconds):  # pragma: no cover
+            return None
+
+    provider = _Provider()
+
+    result = routing.geocode_cached(
+        conn, "Brisbane", "Australia", provider=provider
+    )
     assert result.postalcode == "4000"
     assert result.region_code == "QLD"
     assert calls == [("Brisbane", "Australia")]
@@ -579,116 +625,97 @@ def test_is_routable_point_error_handles_string_args(
 
 def test_route_distance_snaps_and_retries(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = sqlite3.connect(":memory:")
+    _prepare_geocode_cache(conn)
 
     origin_geo = GeocodeResult(lon=134.0, lat=-23.9, label="Origin label")
     dest_geo = GeocodeResult(lon=134.5, lat=-24.2, label="Dest label")
+    expected_origin_lon = origin_geo.lon + 0.01
+    expected_origin_lat = origin_geo.lat + 0.02
+    expected_dest_lon = dest_geo.lon + 0.02
+    expected_dest_lat = dest_geo.lat + 0.03
 
-    class _ApiError(Exception):
-        def __init__(self) -> None:
-            super().__init__(
-                {
-                    "error": {
-                        "code": 2010,
-                        "message": "Could not find routable point within a radius",
-                    }
-                }
-            )
-            self.status_code = 404
-
-    class _Client:
+    class _Provider:
         def __init__(self) -> None:
             self.calls: list[list[list[float]]] = []
+            self.snap_invocations = 0
 
-        def directions(self, *, coordinates, profile, format):  # noqa: D401
-            self.calls.append(coordinates)
+        def geocode(self, place: str, _country: str) -> GeocodeResult:
+            if place.strip() == "Origin":
+                return origin_geo
+            return dest_geo
+
+        def directions(self, coordinates, profile="driving-car"):
+            assert profile == "driving-car"
+            coords = [[float(lon), float(lat)] for lon, lat in coordinates]
+            self.calls.append(coords)
             if len(self.calls) == 1:
-                raise _ApiError()
-            return {"routes": [{"summary": {"distance": 1500.0, "duration": 1800.0}}]}
+                raise NoRoutablePointError("no routable point")
+            return types.SimpleNamespace(distance_km=1.5, duration_hr=0.5)
 
-        def nearest(self, *, coordinates, number):  # noqa: D401
-            lon, lat = coordinates[0]
-            return {
-                "features": [
-                    {
-                        "geometry": {
-                            "coordinates": [lon + 0.01, lat + 0.01],
-                        }
-                    }
-                ]
-            }
-
-    def _fake_geocode(
-        _conn: sqlite3.Connection,
-        place: str,
-        _country: str,
-        *,
-        client: object | None = None,
-    ) -> GeocodeResult:
-        if place == "Origin":
-            return GeocodeResult(
-                lon=origin_geo.lon,
-                lat=origin_geo.lat,
-                label=origin_geo.label,
+        def snap_to_road(self, origin, destination, *, profile="driving-car", radii=None):
+            assert profile == "driving-car"
+            assert tuple(radii or []) == routing.SNAP_SEARCH_RADII
+            self.snap_invocations += 1
+            return types.SimpleNamespace(
+                coordinates=[
+                    [origin_geo.lon + 0.01, origin_geo.lat + 0.02],
+                    [dest_geo.lon + 0.02, dest_geo.lat + 0.03],
+                ],
+                notes={
+                    "origin": "Snapped to nearest routable road",
+                    "destination": "Snapped to nearest routable road",
+                },
             )
-        return GeocodeResult(
-            lon=dest_geo.lon,
-            lat=dest_geo.lat,
-            label=dest_geo.label,
-        )
 
-    client_instance = _Client()
-    monkeypatch.setattr(
-        "corkysoft.routing.get_ors_client",
-        lambda client=None: client_instance,
-    )
-    monkeypatch.setattr("corkysoft.routing.geocode_cached", _fake_geocode)
+        def isochrone(self, *, centre, profile, range_seconds):  # pragma: no cover - unused
+            return None
+
+    provider = _Provider()
 
     distance_km, duration_hr, resolved_origin, resolved_dest = route_distance(
         conn,
         "Origin",
         "Destination",
         "Australia",
+        provider=provider,
     )
 
-    assert client_instance.calls and len(client_instance.calls) == 2
+    assert provider.snap_invocations == 1
+    assert len(provider.calls) == 2
     assert pytest.approx(distance_km, rel=1e-6) == 1.5
     assert pytest.approx(duration_hr, rel=1e-6) == 0.5
-    assert resolved_origin.lon == pytest.approx(origin_geo.lon + 0.01)
-    assert resolved_origin.lat == pytest.approx(origin_geo.lat + 0.01)
+    assert resolved_origin.lon == pytest.approx(expected_origin_lon)
+    assert resolved_origin.lat == pytest.approx(expected_origin_lat)
     assert "Snapped to nearest routable road" in resolved_origin.suggestions
-    assert resolved_dest.lon == pytest.approx(dest_geo.lon + 0.01)
-    assert resolved_dest.lat == pytest.approx(dest_geo.lat + 0.01)
+    assert resolved_dest.lon == pytest.approx(expected_dest_lon)
+    assert resolved_dest.lat == pytest.approx(expected_dest_lat)
     assert "Snapped to nearest routable road" in resolved_dest.suggestions
 
 
 def test_route_distance_manual_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = sqlite3.connect(":memory:")
+    _prepare_geocode_cache(conn)
 
-    class _Client:
+    class _Provider:
         def __init__(self) -> None:
             self.last_coordinates: Optional[List[List[float]]] = None
 
-        def directions(self, *, coordinates, profile, format):  # type: ignore[override]
-            self.last_coordinates = coordinates
-            return {"routes": [{"summary": {"distance": 4200.0, "duration": 600.0}}]}
+        def geocode(self, place: str, _country: str) -> GeocodeResult:
+            if place.strip() == "Origin":
+                return GeocodeResult(lon=150.0, lat=-33.0, label="Origin label")
+            return GeocodeResult(lon=151.0, lat=-34.0, label="Destination label")
 
-    def _fake_geocode(
-        _conn: sqlite3.Connection,
-        place: str,
-        _country: str,
-        *,
-        client: object | None = None,
-    ) -> GeocodeResult:
-        if place == "Origin":
-            return GeocodeResult(lon=150.0, lat=-33.0, label="Origin label")
-        return GeocodeResult(lon=151.0, lat=-34.0, label="Destination label")
+        def directions(self, *, coordinates, profile="driving-car"):
+            self.last_coordinates = [[float(lon), float(lat)] for lon, lat in coordinates]
+            return types.SimpleNamespace(distance_km=4.2, duration_hr=0.1666666)
 
-    client_instance = _Client()
-    monkeypatch.setattr(
-        "corkysoft.routing.get_ors_client",
-        lambda client=None: client_instance,
-    )
-    monkeypatch.setattr("corkysoft.routing.geocode_cached", _fake_geocode)
+        def snap_to_road(self, *_, **__):
+            return None
+
+        def isochrone(self, *, centre, profile, range_seconds):  # pragma: no cover - unused
+            return None
+
+    provider = _Provider()
 
     origin_override = (153.02, -27.45)
     destination_override = (153.10, -27.48)
@@ -700,11 +727,12 @@ def test_route_distance_manual_overrides(monkeypatch: pytest.MonkeyPatch) -> Non
         "Australia",
         origin_override=origin_override,
         destination_override=destination_override,
+        provider=provider,
     )
 
     assert distance_km == pytest.approx(4.2)
     assert duration_hr == pytest.approx(0.1666666, rel=1e-6)
-    assert client_instance.last_coordinates == [
+    assert provider.last_coordinates == [
         [origin_override[0], origin_override[1]],
         [destination_override[0], destination_override[1]],
     ]
@@ -718,46 +746,32 @@ def test_route_distance_manual_overrides(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_route_distance_falls_back_to_haversine(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = sqlite3.connect(":memory:")
-
-    class _ApiError(Exception):
-        def __init__(self) -> None:
-            super().__init__(
-                {
-                    "error": {
-                        "code": 2010,
-                        "message": "Could not find routable point within a radius",
-                    }
-                }
-            )
-            self.status_code = 404
-
-    class _Client:
-        def directions(self, *_, **__):
-            raise _ApiError()
-
-        def nearest(self, *_, **__):
-            return {"features": []}
+    _prepare_geocode_cache(conn)
 
     origin = GeocodeResult(lon=133.88, lat=-23.7, label="Origin")
     dest = GeocodeResult(lon=134.01, lat=-24.0, label="Dest")
 
-    def _fake_geocode(
-        _conn: sqlite3.Connection,
-        place: str,
-        _country: str,
-        *,
-        client: object | None = None,
-    ) -> GeocodeResult:
-        return origin if place == "Origin" else dest
+    class _Provider:
+        def geocode(self, place: str, _country: str) -> GeocodeResult:
+            return origin if place.strip() == "Origin" else dest
 
-    monkeypatch.setattr("corkysoft.routing.get_ors_client", lambda client=None: _Client())
-    monkeypatch.setattr("corkysoft.routing.geocode_cached", _fake_geocode)
+        def directions(self, *_, **__):
+            raise NoRoutablePointError("no routable point")
+
+        def snap_to_road(self, *_, **__):
+            return None
+
+        def isochrone(self, *, centre, profile, range_seconds):  # pragma: no cover - unused
+            return None
+
+    provider = _Provider()
 
     distance_km, duration_hr, resolved_origin, resolved_dest = route_distance(
         conn,
         "Origin",
         "Destination",
         "Australia",
+        provider=provider,
     )
 
     expected_distance = routing._haversine_km(
@@ -779,35 +793,32 @@ def test_route_distance_falls_back_to_haversine(monkeypatch: pytest.MonkeyPatch)
 
 def test_route_distance_handles_missing_summary(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = sqlite3.connect(":memory:")
-
-    class _Client:
-        def directions(self, *_, **__):
-            return {"routes": [{"summary": {}, "segments": []}]}
-
-        def nearest(self, *_, **__):
-            return {"features": []}
+    _prepare_geocode_cache(conn)
 
     origin = GeocodeResult(lon=151.2093, lat=-33.8688, label="Sydney")
     dest = GeocodeResult(lon=153.0260, lat=-27.4705, label="Brisbane")
 
-    def _fake_geocode(
-        _conn: sqlite3.Connection,
-        place: str,
-        _country: str,
-        *,
-        client: object | None = None,
-    ) -> GeocodeResult:
-        return origin if place == "Sydney" else dest
+    class _Provider:
+        def geocode(self, place: str, _country: str) -> GeocodeResult:
+            return origin if place.strip() == "Sydney" else dest
 
-    monkeypatch.setattr("corkysoft.routing.get_ors_client", lambda client=None: _Client())
-    monkeypatch.setattr("corkysoft.routing.geocode_cached", _fake_geocode)
-    monkeypatch.setattr("corkysoft.routing._snap_to_road", lambda *_, **__: None)
+        def directions(self, *_, **__):
+            raise IncompleteRouteError("missing summary")
+
+        def snap_to_road(self, *_, **__):
+            return None
+
+        def isochrone(self, *, centre, profile, range_seconds):  # pragma: no cover - unused
+            return None
+
+    provider = _Provider()
 
     distance_km, duration_hr, resolved_origin, resolved_dest = route_distance(
         conn,
         "Sydney",
         "Brisbane",
         "Australia",
+        provider=provider,
     )
 
     expected_distance = routing._haversine_km(
@@ -828,35 +839,44 @@ def test_route_distance_handles_missing_summary(monkeypatch: pytest.MonkeyPatch)
 def test_snap_coordinates_to_road_adjusts_points(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _Client:
+    class _Provider:
         def __init__(self) -> None:
-            self.calls: list[list[list[float]]] = []
-            self.radii: list[int] = []
+            self.calls: list[tuple[tuple[float, float], tuple[float, float]]] = []
+            self.radii: list[tuple[int, ...]] = []
 
-        def snap(self, *, profile, locations, radius, format):  # type: ignore[override]
+        def snap_to_road(
+            self,
+            origin: tuple[float, float],
+            destination: tuple[float, float],
+            *,
+            profile: str = "driving-car",
+            radii: Sequence[int] | None = None,
+        ):
             assert profile == "driving-car"
-            assert format == "json"
-            self.calls.append(locations)
-            self.radii.append(radius)
-            if radius < 300:
-                return {"locations": [None]}
-            lon, lat = locations[0]
-            return {
-                "locations": [
-                    {"location": [lon + 0.01, lat + 0.02]},
-                ]
-            }
+            assert radii is not None
+            self.calls.append((origin, destination))
+            self.radii.append(tuple(radii))
+            return types.SimpleNamespace(
+                coordinates=[
+                    [origin[0] + 0.01, origin[1] + 0.02],
+                    [destination[0] + 0.01, destination[1] + 0.02],
+                ],
+                notes={
+                    "origin": "Snapped to nearest routable road",
+                    "destination": "Snapped to nearest routable road",
+                },
+            )
 
-    client_instance = _Client()
-    monkeypatch.setattr(
-        "corkysoft.routing.get_ors_client",
-        lambda client=None: client_instance,
+    provider = _Provider()
+
+    result = snap_coordinates_to_road(
+        (150.0, -33.0),
+        (151.0, -34.0),
+        provider=provider,
     )
 
-    result = snap_coordinates_to_road((150.0, -33.0), (151.0, -34.0))
-
-    assert client_instance.calls and len(client_instance.calls) == 6
-    assert client_instance.radii == list(routing.SNAP_SEARCH_RADII[:3]) * 2
+    assert provider.calls and len(provider.calls) == 1
+    assert provider.radii == [routing.SNAP_SEARCH_RADII]
     assert result.changed is True
     assert result.notes == {
         "origin": "Snapped to nearest routable road",
@@ -871,24 +891,21 @@ def test_snap_coordinates_to_road_adjusts_points(
 def test_snap_coordinates_to_road_handles_unchanged_points(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _Client:
-        def snap(self, *, profile, locations, radius, format):  # type: ignore[override]
-            assert profile == "driving-car"
-            assert format == "json"
-            lon, lat = locations[0]
-            return {
-                "locations": [
-                    {"location": [lon, lat]},
-                ]
-            }
+    class _Provider:
+        def snap_to_road(self, origin, destination, *, profile="driving-car", radii=None):
+            return types.SimpleNamespace(
+                coordinates=[
+                    [origin[0], origin[1]],
+                    [destination[0], destination[1]],
+                ],
+                notes={},
+            )
 
-    client_instance = _Client()
-    monkeypatch.setattr(
-        "corkysoft.routing.get_ors_client",
-        lambda client=None: client_instance,
+    result = snap_coordinates_to_road(
+        (150.0, -33.0),
+        (151.0, -34.0),
+        provider=_Provider(),
     )
-
-    result = snap_coordinates_to_road((150.0, -33.0), (151.0, -34.0))
 
     assert result.changed is False
     assert result.notes == {}
@@ -901,47 +918,48 @@ def test_snap_coordinates_to_road_handles_unchanged_points(
 def test_snap_coordinates_to_road_requires_nearest_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _Client:
-        pass
+    class _Provider:
+        def snap_to_road(self, *_, **__):
+            return None
 
-    monkeypatch.setattr(
-        "corkysoft.routing.get_ors_client",
-        lambda client=None: _Client(),
+    result = snap_coordinates_to_road(
+        (150.0, -33.0),
+        (151.0, -34.0),
+        provider=_Provider(),
     )
 
-    with pytest.raises(RuntimeError, match="snap" ):
-        snap_coordinates_to_road((150.0, -33.0), (151.0, -34.0))
+    assert result.changed is False
 
 
 def test_snap_coordinates_to_road_falls_back_to_nearest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _Client:
+    class _Provider:
         def __init__(self) -> None:
-            self.calls: list[list[list[float]]] = []
+            self.calls: list[tuple[tuple[float, float], tuple[float, float]]] = []
 
-        def nearest(self, *, coordinates, number):  # type: ignore[override]
-            self.calls.append(coordinates)
-            lon, lat = coordinates[0]
-            return {
-                "features": [
-                    {
-                        "geometry": {
-                            "coordinates": [lon + 0.05, lat + 0.01],
-                        }
-                    }
-                ]
-            }
+        def snap_to_road(self, origin, destination, *, profile="driving-car", radii=None):
+            self.calls.append((origin, destination))
+            return types.SimpleNamespace(
+                coordinates=[
+                    [origin[0] + 0.05, origin[1] + 0.01],
+                    [destination[0] + 0.05, destination[1] + 0.01],
+                ],
+                notes={
+                    "origin": "Snapped to nearest routable road",
+                    "destination": "Snapped to nearest routable road",
+                },
+            )
 
-    client_instance = _Client()
-    monkeypatch.setattr(
-        "corkysoft.routing.get_ors_client",
-        lambda client=None: client_instance,
+    provider = _Provider()
+
+    result = snap_coordinates_to_road(
+        (150.0, -33.0),
+        (151.0, -34.0),
+        provider=provider,
     )
 
-    result = snap_coordinates_to_road((150.0, -33.0), (151.0, -34.0))
-
-    assert client_instance.calls and len(client_instance.calls) == 2
+    assert provider.calls and len(provider.calls) == 1
     assert result.changed is True
     assert result.origin == pytest.approx((150.05, -32.99))
     assert result.destination == pytest.approx((151.05, -33.99))
