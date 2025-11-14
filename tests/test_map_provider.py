@@ -33,6 +33,14 @@ def test_pydeck_map_kwargs_falls_back_without_key(monkeypatch: pytest.MonkeyPatc
     assert kwargs == {"map_style": "mapbox-style"}
 
 
+def test_pydeck_map_kwargs_ignores_key_when_not_google(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "abc123")
+
+    kwargs = map_provider.pydeck_map_kwargs("mapbox-style")
+
+    assert kwargs == {"map_style": "mapbox-style"}
+
+
 def test_plotly_map_layout_uses_google_tiles(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ROUTING_PROVIDER", "google")
     monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "abc123")
@@ -49,6 +57,17 @@ def test_plotly_map_layout_uses_google_tiles(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_plotly_map_layout_defaults_when_not_google(monkeypatch: pytest.MonkeyPatch) -> None:
+    layout = map_provider.plotly_map_layout({"lat": -25.0, "lon": 133.0}, zoom=3, engine="mapbox")
+
+    assert "mapbox" in layout
+    config = layout["mapbox"]
+    assert config["style"] == "carto-positron"
+    assert "layers" not in config
+
+
+def test_plotly_map_layout_ignores_key_when_not_google(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "abc123")
+
     layout = map_provider.plotly_map_layout({"lat": -25.0, "lon": 133.0}, zoom=3, engine="mapbox")
 
     assert "mapbox" in layout
