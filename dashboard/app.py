@@ -6,7 +6,9 @@ import io
 import json
 import math
 import sqlite3
+import sys
 from datetime import date
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
@@ -14,6 +16,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 import pydeck as pdk
 import streamlit as st
+
+if __package__ is None or __package__ == "":  # pragma: no cover - script execution support
+    _MODULE_DIR = Path(__file__).resolve().parent
+    _PROJECT_ROOT = _MODULE_DIR.parent
+    if str(_PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(_PROJECT_ROOT))
 
 try:
     import folium
