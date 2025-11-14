@@ -3001,6 +3001,19 @@ def render_price_distribution_dashboard():
             st.caption(
                 "Generate corridor-level price uplift suggestions using the filtered job set."
             )
+            st.markdown(
+                """
+                **How it works**
+
+                1. Apply any filters on the left to narrow the historic jobs the optimizer analyses.
+                2. Set the target margin buffer, cap on recommended uplifts, and minimum corridor volume.
+                3. Run the optimizer to calculate suggested price uplifts and download the corridor report for follow-up.
+
+                The optimizer compares each corridor's historical median sell price to your target margin, then suggests
+                uplift values that respect the limits you configure. Use the downloadable CSV to share the proposed
+                adjustments with pricing or sales teams.
+                """
+            )
 
             optimizer_state: Dict[str, Any] = st.session_state.setdefault(
                 "optimizer_state", {}
