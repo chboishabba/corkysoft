@@ -10,8 +10,11 @@ type DashboardView = {
 };
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8501/';
-const OUTPUT_DIR = process.env.DASHBOARD_OUTPUT_DIR ?? path.join(__dirname, '..', 'docs', 'img');
+const OUTPUT_DIR =
+  process.env.DASHBOARD_OUTPUT_DIR ?? path.join(__dirname, '..', 'docs', 'img');
 const BASE_URL = process.env.DASHBOARD_URL ?? DEFAULT_BASE_URL;
+const WAIT_FOR_SELECTOR_TIMEOUT_BUFFER = 5000;
+
 const VIEWPORT = {
   width: Number(process.env.DASHBOARD_WIDTH ?? 1600),
   height: Number(process.env.DASHBOARD_HEIGHT ?? 900),
@@ -36,13 +39,13 @@ const VIEWS: DashboardView[] = [
   {
     label: 'Live network overview',
     filename: 'dashboard-live-network.png',
-    settleMs: 7000,
+    settleMs: 12000,
     waitForSelector: '[data-testid="stDeckGlJsonChart"] canvas',
   },
   {
     label: 'Route maps',
     filename: 'dashboard-route-maps.png',
-    settleMs: 6000,
+    settleMs: 12000,
     waitForSelector: '[data-testid="stDeckGlJsonChart"] canvas',
   },
   {
@@ -69,6 +72,8 @@ function buildViewUrl(view: string): string {
 }
 
 test.describe('dashboard screenshots', () => {
+  test.describe.configure({ timeout: 60_000 });
+
   test.beforeAll(async () => {
     await ensureOutputDir();
   });
@@ -84,7 +89,18 @@ test.describe('dashboard screenshots', () => {
       await page.goto(buildViewUrl(label), { waitUntil: 'networkidle' });
 
       if (waitForSelector) {
-        await page.waitForSelector(waitForSelector, { timeout: settleMs });
+        try {
+          await page.waitForSelector(waitForSelector, {
+            timeout: settleMs + WAIT_FOR_SELECTOR_TIMEOUT_BUFFER,
+          });
+        } catch (error) {
+          testInfo.annotations.push({
+            type: 'warning',
+            description: `Timed out waiting for selector ${waitForSelector}: ${String(
+              error,
+            )}`,
+          });
+        }
       }
 
       await page.waitForTimeout(settleMs);

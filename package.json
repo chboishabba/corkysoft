@@ -7,7 +7,9 @@
     "doc": "docs",
     "test": "tests"
   },
-  "scripts": {},
+  "scripts": {
+    "start:dashboard": "PYTHONPATH=. streamlit run dashboard/app.py --server.address 127.0.0.1 --server.port 8501 --server.headless true"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/chboishabba/corkysoft.git"

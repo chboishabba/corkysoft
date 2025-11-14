@@ -203,16 +203,17 @@ def _score_feature_against_targets(
                 best_overlap_score = score
 
     score = best_overlap_score
-    if has_address_layer:
-        score += 0.35
-    if has_housenumber:
-        score += 0.2
+    if best_overlap_score > 0.0:
+        if has_address_layer:
+            score += 0.35
+        if has_housenumber:
+            score += 0.2
 
-    if confidence:
-        if best_overlap_score < 0.5:
-            score += confidence * 0.4
-        else:
-            score += confidence * 0.1
+        if confidence:
+            if best_overlap_score < 0.5:
+                score += confidence * 0.4
+            else:
+                score += confidence * 0.1
 
     return score
 
