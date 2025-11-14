@@ -108,19 +108,52 @@ pip install -r requirements.txt
 
 ## Configuration
 
-Set your OpenRouteService API key so geocoding and routing calls can succeed:
+### Choose a routing provider
+
+The routing stack can call either [OpenRouteService](https://openrouteservice.org) (default) or [Google Maps Platform](https://developers.google.com/maps/documentation/routes). Select a provider via the `ROUTING_PROVIDER` environment variable (`ors` when unset) and provide the corresponding credentials in your shell or `.env` file.
 
 ```bash
-export ORS_API_KEY="your_key_here"
+export ROUTING_PROVIDER="ors"  # or "google"
 ```
 
-Optional environment variables:
+#### OpenRouteService setup
 
-- `ROUTES_DB`: Path to the SQLite database (default `routes.db`).
-- `ORS_COUNTRY`: Default country context for geocoding (default `Australia`).
-- `CORKYSOFT_DB`: Alternate variable for pointing the dashboard at another SQLite database.
+- `ORS_API_KEY` (**required**): authenticate API calls used by the CLI and dashboard helpers.【F:routes_to_sqlite.py†L1-L60】【F:corkysoft/routing.py†L31-L60】
+- `ORS_COUNTRY` (optional): hint Pelias geocoding with a default country (defaults to `Australia`).【F:routes_to_sqlite.py†L9-L13】
 
-Commands that do not hit the OpenRouteService API (`add`, `add-csv`, `list`, `cost`, and `map` when geometry exists) work without the key.
+Usage notes:
+
+- ORS free tiers throttle by request volume—review the [pricing and quota documentation](https://openrouteservice.org/pricing/) before running large batch jobs.
+- CLI commands that avoid external lookups (`add`, `add-csv`, `list`, `cost`, `map` with cached geometry) still work without a key because they only touch the local SQLite database.【F:routes_to_sqlite.py†L714-L963】
+
+#### Google Maps setup
+
+- `GOOGLE_MAPS_API_KEY` (**required when `ROUTING_PROVIDER=google`**): must have the [Directions API](https://developers.google.com/maps/documentation/directions/overview) (Routes API) and [Geocoding API](https://developers.google.com/maps/documentation/geocoding/overview) enabled.
+- `GOOGLE_MAPS_REGION` (optional): two-letter region bias used for geocoding fallbacks.
+
+Usage notes:
+
+- Google bills per request—see the [Routes API usage and billing guide](https://developers.google.com/maps/documentation/routes/usage-and-billing) for live pricing and quota examples.
+- Rate limits are enforced per key. If you expect heavy CLI automation, consider enabling per-request retries with exponential backoff in your wrapper scripts.
+
+#### Shared environment variables
+
+- `ROUTES_DB`: Path to the SQLite database (default `routes.db`).【F:routes_to_sqlite.py†L9-L13】
+- `CORKYSOFT_DB`: Alternate variable for pointing the dashboard at another SQLite database (overrides `ROUTES_DB` for analytics views).【F:analytics/db.py†L9-L15】
+
+Use `.env.example` as a template when sharing configuration between teammates or CI runs.
+
+### Running both providers
+
+`routes_to_sqlite.py` and the dashboard reuse the same SQLite schema regardless of provider. Job rows and the `geocode_cache` table are populated from whichever routing service answered the request.【F:routes_to_sqlite.py†L32-L139】【F:routes_to_sqlite.py†L635-L711】【F:corkysoft/routing.py†L83-L146】 When you toggle providers:
+
+1. Decide whether to share or separate caches.
+   - Shared cache: keep `ROUTES_DB` pointing at the same file. The most recent provider wins if coordinates differ because cache entries are keyed by the normalised address and country only.【F:corkysoft/routing.py†L83-L140】
+   - Separate caches: export/import the database or point `ROUTES_DB` (and `CORKYSOFT_DB` for the dashboard) at provider-specific files before running batch jobs.
+2. Re-run `routes_to_sqlite.py run` for any pending jobs so the new provider can populate `distance_km`, `duration_hr`, and `route_geojson` fields using its own routing engine.【F:routes_to_sqlite.py†L635-L711】【F:routes_to_sqlite.py†L856-L963】【F:corkysoft/routing.py†L412-L507】
+3. Review downstream dashboards: all analytics charts read the same tables, so switching providers updates KPIs automatically once the CLI refreshes cached distances.【F:analytics/db.py†L9-L75】
+
+For operators alternating between providers, consider scripting dedicated CLI entry points (e.g., `routes_to_sqlite.py run --provider google`) that export the correct environment variables and database paths to avoid accidental cross-pollination.
 
 ## Usage
 
