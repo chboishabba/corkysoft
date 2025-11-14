@@ -5,6 +5,7 @@ import inspect
 import io
 import json
 import math
+import os
 import sqlite3
 import sys
 from datetime import date
@@ -100,7 +101,11 @@ from corkysoft.repo import (
 )
 from corkysoft.routing import snap_coordinates_to_road
 from corkysoft.schema import ensure_schema as ensure_core_schema
-from dashboard.map_provider import plotly_map_layout, pydeck_map_kwargs
+from dashboard.map_provider import (
+    google_maps_api_key,
+    plotly_map_layout,
+    pydeck_map_kwargs,
+)
 
 
 DEFAULT_TARGET_MARGIN_PERCENT = 20.0
@@ -1632,6 +1637,35 @@ def render_price_distribution_dashboard():
                 key="dashboard_dataset_selector",
             )
             dataset_key, dataset_loader = dataset_options[dataset_label]
+
+            provider_options = {
+                "OpenRouteService": "ors",
+                "Google Maps": "google",
+            }
+            provider_labels = list(provider_options.keys())
+            current_provider_env = os.environ.get("ROUTING_PROVIDER", "ors").strip().lower()
+            default_provider_label = next(
+                (label for label, value in provider_options.items() if value == current_provider_env),
+                provider_labels[0],
+            )
+            provider_choice_label = st.radio(
+                "Routing provider",
+                options=provider_labels,
+                index=provider_labels.index(default_provider_label),
+                key="dashboard_routing_provider_selector",
+                help=(
+                    "Select which routing provider to use for map tiles and route geometry."
+                ),
+            )
+            resolved_provider = provider_options[provider_choice_label]
+            if resolved_provider != current_provider_env:
+                os.environ["ROUTING_PROVIDER"] = resolved_provider
+                _rerun_app()
+
+            if resolved_provider == "google" and not google_maps_api_key():
+                st.warning(
+                    "Google Maps selected but GOOGLE_MAPS_API_KEY is not configured."
+                )
 
             import_feedback: Optional[tuple[str, str]] = None
             if dataset_key == "historical":
