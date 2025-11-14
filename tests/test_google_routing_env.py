@@ -47,8 +47,8 @@ def test_google_routes_provider_invokes_directions(monkeypatch: pytest.MonkeyPat
         def __init__(self) -> None:
             self.calls: list[tuple[Any, Any, str]] = []
 
-        def directions(self, *, origin, destination, profile):
-            self.calls.append((origin, destination, profile))
+        def directions(self, *, origin, destination, mode):
+            self.calls.append((origin, destination, mode))
             return {
                 "routes": [
                     {
@@ -72,10 +72,38 @@ def test_google_routes_provider_invokes_directions(monkeypatch: pytest.MonkeyPat
         profile="driving-car",
     )
 
-    assert client.calls == [((153.0, -27.5), (151.0, -33.0), "driving-car")]
+    assert client.calls == [((-27.5, 153.0), (-33.0, 151.0), "driving")]
     assert result.distance_km == pytest.approx(2.4)
     assert result.duration_hr == pytest.approx(0.25)
     assert result.encoded_polyline == "encoded-polyline"
+
+
+def test_google_routes_provider_accepts_sequence_payload() -> None:
+    class ListClient:
+        def directions(self, *, origin, destination, mode):
+            return [
+                {
+                    "legs": [
+                        {
+                            "distance": {"value": 3100},
+                            "duration": {"value": 700},
+                        }
+                    ],
+                    "overview_polyline": {"points": "sequence-polyline"},
+                }
+            ]
+
+    provider = analytics_rp.GoogleRoutesProvider(ListClient())
+
+    result = provider.route_geometry(
+        origin=(153.0, -27.5),
+        destination=(151.0, -33.0),
+        profile="driving-car",
+    )
+
+    assert result.distance_km == pytest.approx(3.1)
+    assert result.duration_hr == pytest.approx(700 / 3600.0)
+    assert result.encoded_polyline == "sequence-polyline"
 
 
 def test_google_routes_provider_falls_back_to_compute_routes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -104,7 +132,7 @@ def test_google_routes_provider_falls_back_to_compute_routes(monkeypatch: pytest
         profile="driving-car",
     )
 
-    assert client.calls == [((150.0, -33.0), (151.0, -34.0), "driving-car")]
+    assert client.calls == [((-33.0, 150.0), (-34.0, 151.0), "driving-car")]
     assert result.distance_km == pytest.approx(5.0)
     assert result.duration_hr == pytest.approx(1200 / 3600.0)
     assert result.encoded_polyline == "from-compute"
@@ -157,3 +185,26 @@ def test_snap_coordinates_to_road_respects_routing_provider(monkeypatch: pytest.
         "origin": "Snapped to nearest routable road",
         "destination": "Snapped to nearest routable road",
     }
+
+
+def test_google_routing_request_denied_error_is_human_readable(monkeypatch: pytest.MonkeyPatch) -> None:
+    class DummyApiError(Exception):
+        def __init__(self, status: str, message: str) -> None:
+            super().__init__(message)
+            self.status = status
+            self.message = message
+
+    class FailingClient:
+        def geocode(self, *args, **kwargs):
+            raise DummyApiError("REQUEST_DENIED", "Not authorized for this API")
+
+    monkeypatch.setattr(provider_module, "_GoogleMapsApiError", DummyApiError, raising=False)
+
+    provider = provider_module.GoogleMapsRoutingProvider(client=FailingClient())
+
+    with pytest.raises(provider_module.RoutingError) as excinfo:
+        provider.geocode("Origin", "Australia")
+
+    message = str(excinfo.value)
+    assert "request denied" in message.lower().replace("_", " ")
+    assert "ROUTING_PROVIDER=ors" in message

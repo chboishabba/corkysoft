@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Optional, Protocol, Sequence
 
-from corkysoft.routing import ROUTE_BACKOFF, get_ors_client
+from corkysoft.routing import ROUTE_BACKOFF, get_ors_client, get_google_maps_client
 
 CoordinatePair = tuple[float, float]
 
@@ -254,19 +254,45 @@ class GoogleRoutesProvider:
         destination: CoordinatePair,
         profile: str,
     ) -> Any:
+        origin_latlng = _to_google_lat_lng(origin)
+        destination_latlng = _to_google_lat_lng(destination)
+
         if hasattr(self._client, "directions"):
-            return self._client.directions(
-                origin=origin,
-                destination=destination,
-                profile=profile,
-            )
+            kwargs: dict[str, Any] = {
+                "origin": origin_latlng,
+                "destination": destination_latlng,
+            }
+            mode = _profile_to_google_mode(profile)
+            if mode is not None:
+                kwargs["mode"] = mode
+            return self._client.directions(**kwargs)
         if hasattr(self._client, "compute_routes"):
             return self._client.compute_routes(
-                origin=origin,
-                destination=destination,
+                origin=origin_latlng,
+                destination=destination_latlng,
                 profile=profile,
             )
         raise RuntimeError("Google routing client does not provide a directions method")
+
+
+def _to_google_lat_lng(coord: CoordinatePair) -> tuple[float, float]:
+    """Return ``(lat, lon)`` tuple for Google Maps consumers."""
+
+    lon, lat = coord
+    return float(lat), float(lon)
+
+
+def _profile_to_google_mode(profile: str) -> str:
+    """Map ORS-style profile names to Google routing travel modes."""
+
+    normalized = (profile or "").strip().lower()
+    if normalized in {"cycling-regular", "cycling", "bicycle"}:
+        return "bicycling"
+    if normalized in {"foot-walking", "foot", "walking"}:
+        return "walking"
+    if normalized in {"transit", "driving-transit"}:
+        return "transit"
+    return "driving"
 
 
 def decode_polyline(polyline: str) -> list[CoordinatePair]:
@@ -384,7 +410,8 @@ def get_routing_provider(
 
     provider_name = os.environ.get("ROUTING_PROVIDER", "ors").strip().lower()
     if provider_name == "google":
-        return GoogleRoutesProvider(client)
+        resolved_client = get_google_maps_client(client)
+        return GoogleRoutesProvider(resolved_client)
 
     return OpenRouteServiceProvider(client)
 
@@ -442,23 +469,38 @@ def _coordinates_to_lists(coordinates: Sequence[CoordinatePair]) -> tuple[list[f
 def _parse_google_route(payload: Any) -> tuple[float, float, Optional[str], Optional[Sequence[CoordinatePair]]]:
     """Extract distance, duration and path information from Google responses."""
 
-    if not isinstance(payload, Mapping):
-        raise ValueError("Google directions response must be a mapping")
+    route: Optional[Mapping[str, Any]] = None
 
-    route: Mapping[str, Any]
-    routes = payload.get("routes")
-    if isinstance(routes, Sequence) and routes:
-        first = routes[0]
-        if not isinstance(first, Mapping):
-            raise ValueError("Google routes entry must be a mapping")
-        route = first
+    if isinstance(payload, Mapping):
+        routes = payload.get("routes")
+        if isinstance(routes, Sequence) and routes:
+            for candidate in routes:
+                if isinstance(candidate, Mapping):
+                    route = candidate
+                    break
+            if route is None:
+                raise ValueError("Google routes entry must be a mapping")
+        else:
+            route = payload
+    elif isinstance(payload, Sequence) and not isinstance(payload, (str, bytes, bytearray)):
+        for candidate in payload:
+            if isinstance(candidate, Mapping):
+                route = candidate
+                break
+        if route is None:
+            raise ValueError("Google directions sequence must include a mapping entry")
     else:
-        route = payload
+        raise ValueError("Google directions response must be a mapping or sequence of mappings")
 
-    distance_m = _extract_google_distance(route)
-    duration_s = _extract_google_duration(route)
-    encoded = _extract_google_polyline(route)
-    coordinates = _extract_google_coordinates(route)
+    if route is None:
+        raise ValueError("Google directions response missing route entries")
+
+    route_mapping: Mapping[str, Any] = route
+
+    distance_m = _extract_google_distance(route_mapping)
+    duration_s = _extract_google_duration(route_mapping)
+    encoded = _extract_google_polyline(route_mapping)
+    coordinates = _extract_google_coordinates(route_mapping)
     return distance_m, duration_s, encoded, coordinates
 
 

@@ -124,6 +124,8 @@ class _FakeGoogleClient:
 
     def directions(self, *, origin, destination, mode):
         assert mode == "driving"
+        assert origin == (-27.5, 153.0)
+        assert destination == (-27.6, 153.1)
         return [
             {
                 "legs": [
@@ -139,8 +141,8 @@ class _FakeGoogleClient:
     def snap_to_roads(self, *, path, interpolate):
         self.snap_calls.append(path)
         return [
-            {"location": {"longitude": path[0][0] + 0.01, "latitude": path[0][1] + 0.01}},
-            {"location": {"longitude": path[1][0] + 0.01, "latitude": path[1][1] + 0.01}},
+            {"location": {"longitude": path[0][1] + 0.01, "latitude": path[0][0] + 0.01}},
+            {"location": {"longitude": path[1][1] + 0.01, "latitude": path[1][0] + 0.01}},
         ]
 
 
@@ -161,6 +163,7 @@ def test_google_maps_provider_normalises_payloads(monkeypatch: pytest.MonkeyPatc
     snap = provider.snap_to_road((153.0, -27.5), (153.1, -27.6))
     assert snap is not None
     assert provider._client.snap_calls
+    assert provider._client.snap_calls[0] == [(-27.5, 153.0), (-27.6, 153.1)]
 
     with pytest.raises(NotImplementedError):
         provider.isochrone(centre=(153.0, -27.5), profile="driving-car", range_seconds=[300])

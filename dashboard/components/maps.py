@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import math
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
 import plotly.express as px
@@ -101,30 +101,43 @@ def build_route_map(
 ) -> go.Figure:
     """Construct a Plotly map figure showing coloured routes and points."""
 
+    def _coerce_geojson(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            try:
+                decoded = value.decode("utf-8")
+            except Exception:
+                return None
+            stripped = decoded.strip()
+            return stripped or None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        if isinstance(value, Mapping):
+            try:
+                return json.dumps(value)
+            except (TypeError, ValueError):
+                return None
+        return None
+
     def _row_route_points(row: pd.Series) -> List[Tuple[float, float]]:
         """Return the ordered ``(lat, lon)`` points for ``row`` when available."""
 
         if not use_route_geometry:
             return []
 
-        geojson_value = row.get("route_geojson")
-        if isinstance(geojson_value, (bytes, bytearray, memoryview)):
+        geojson_value: Optional[str] = None
+        for column in ("route_geojson", "route_geometry", "geojson"):
+            candidate = _coerce_geojson(row.get(column))
+            if candidate:
+                geojson_value = candidate
+                break
+        if geojson_value:
             try:
-                geojson_value = geojson_value.decode("utf-8")
+                return extract_route_path(geojson_value)
             except Exception:
-                geojson_value = None
-        if isinstance(geojson_value, dict):
-            try:
-                geojson_value = json.dumps(geojson_value)
-            except (TypeError, ValueError):
-                geojson_value = None
-        if isinstance(geojson_value, str):
-            geojson_str = geojson_value.strip()
-            if geojson_str:
-                try:
-                    return extract_route_path(geojson_str)
-                except Exception:
-                    pass
+                pass
 
         path_value = row.get("route_path")
         if isinstance(path_value, str):

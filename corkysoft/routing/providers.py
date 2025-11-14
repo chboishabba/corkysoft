@@ -17,13 +17,19 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in tests via monkeyp
 
 try:  # pragma: no cover - optional dependency
     import googlemaps as _googlemaps
+    from googlemaps.exceptions import ApiError as _GoogleMapsApiError
 except ModuleNotFoundError:  # pragma: no cover - exercised in tests via monkeypatching
     _googlemaps = None
+    _GoogleMapsApiError = None
+except Exception:  # pragma: no cover - defensive guard when partial installs exist
+    _googlemaps = None
+    _GoogleMapsApiError = None
 
 if TYPE_CHECKING:  # pragma: no cover - hints for type-checkers only
     import openrouteservice as ors
     from openrouteservice import exceptions as ors_exceptions
     import googlemaps
+    from googlemaps.exceptions import ApiError as GoogleMapsApiError
 else:
     ors = _ors  # type: ignore[assignment]
     ors_exceptions = _ors_exceptions  # type: ignore[assignment]
@@ -154,6 +160,29 @@ def get_google_maps_client(client: Optional[Any] = None) -> Any:
             )
         _GOOGLE_CLIENT = googlemaps.Client(key=api_key)
     return _GOOGLE_CLIENT
+
+
+def _raise_google_maps_error(operation: str, exc: Exception) -> None:
+    """Convert Google client exceptions into RoutingError with guidance."""
+
+    status = getattr(exc, "status", None)
+    message = getattr(exc, "message", None)
+    detail = message or " ".join(str(arg) for arg in getattr(exc, "args", []) if arg) or str(exc)
+
+    if status:
+        summary = f"{status}: {detail}" if detail else str(status)
+    else:
+        summary = detail
+
+    if isinstance(status, str) and status.upper() == "REQUEST_DENIED":
+        guidance = (
+            "Ensure the Google Maps API key has the Geocoding and Routes APIs enabled "
+            "or set ROUTING_PROVIDER=ors to fall back to OpenRouteService."
+        )
+    else:
+        guidance = "Verify your Google Maps API quota and enabled services or switch to the ORS provider."
+
+    raise RoutingError(f"Google Maps {operation} failed ({summary}). {guidance}") from exc
 
 
 def _extract_route_metrics(route_payload: Mapping[str, Any]) -> Optional[Tuple[float, float]]:
@@ -406,8 +435,23 @@ class GoogleMapsRoutingProvider:
     def __init__(self, client: Optional[Any] = None):
         self._client = get_google_maps_client(client)
 
+    @staticmethod
+    def _to_google_lat_lng(coord: Sequence[float]) -> Tuple[float, float]:
+        """Return ``(lat, lon)`` tuple for Google Maps consumers."""
+
+        try:
+            lon, lat = coord[0], coord[1]
+        except (IndexError, TypeError) as exc:
+            raise RoutingError("Google routing requires longitude/latitude pairs") from exc
+        return float(lat), float(lon)
+
     def geocode(self, place: str, country: str) -> GeocodeResult:
-        response = self._client.geocode(place, components={"country": country})
+        try:
+            response = self._client.geocode(place, components={"country": country})
+        except Exception as exc:  # pragma: no cover - exercised via tests with dummy client
+            if _GoogleMapsApiError is not None and isinstance(exc, _GoogleMapsApiError):
+                _raise_google_maps_error("geocoding", exc)
+            raise RoutingError(f"Google Maps geocoding failed: {exc}") from exc
         if not response:
             raise RoutingError("Google geocode returned no results")
         first = response[0]
@@ -454,19 +498,24 @@ class GoogleMapsRoutingProvider:
     ) -> RouteResult:
         if len(coordinates) < 2:
             raise RoutingError("Google directions requires origin and destination")
-        origin = coordinates[0]
-        destination = coordinates[-1]
+        origin = self._to_google_lat_lng(coordinates[0])
+        destination = self._to_google_lat_lng(coordinates[-1])
         mode = "driving"
         if profile == "cycling-regular":
             mode = "bicycling"
         elif profile == "foot-walking":
             mode = "walking"
 
-        payload = self._client.directions(
-            origin=origin,
-            destination=destination,
-            mode=mode,
-        )
+        try:
+            payload = self._client.directions(
+                origin=origin,
+                destination=destination,
+                mode=mode,
+            )
+        except Exception as exc:  # pragma: no cover - exercised via tests
+            if _GoogleMapsApiError is not None and isinstance(exc, _GoogleMapsApiError):
+                _raise_google_maps_error("routing", exc)
+            raise RoutingError(f"Google Maps routing failed: {exc}") from exc
         if not payload:
             raise RoutingError("Google directions returned no routes")
         first_route = payload[0]
@@ -507,8 +556,16 @@ class GoogleMapsRoutingProvider:
     ) -> Optional[SnapResult]:
         if not hasattr(self._client, "snap_to_roads"):
             return None
-        path = [origin, destination]
-        response = self._client.snap_to_roads(path=path, interpolate=False)
+        path = [
+            self._to_google_lat_lng(origin),
+            self._to_google_lat_lng(destination),
+        ]
+        try:
+            response = self._client.snap_to_roads(path=path, interpolate=False)
+        except Exception as exc:  # pragma: no cover
+            if _GoogleMapsApiError is not None and isinstance(exc, _GoogleMapsApiError):
+                _raise_google_maps_error("snap-to-road", exc)
+            raise RoutingError(f"Google Maps snap_to_roads failed: {exc}") from exc
         if not response:
             return None
         coords: list[list[float]] = []
@@ -538,11 +595,16 @@ class GoogleMapsRoutingProvider:
     ) -> Optional[IsochroneResult]:
         if not hasattr(self._client, "isochrones"):
             raise NotImplementedError("Google provider does not expose isochrones")
-        response = self._client.isochrones(
-            centre=centre,
-            profile=profile,
-            range_seconds=list(range_seconds),
-        )
+        try:
+            response = self._client.isochrones(
+                centre=centre,
+                profile=profile,
+                range_seconds=list(range_seconds),
+            )
+        except Exception as exc:  # pragma: no cover
+            if _GoogleMapsApiError is not None and isinstance(exc, _GoogleMapsApiError):
+                _raise_google_maps_error("isochrones", exc)
+            raise RoutingError(f"Google Maps isochrone failed: {exc}") from exc
         if not isinstance(response, Mapping):
             raise RoutingError("Google isochrone response must be a mapping")
         return IsochroneResult(raw=response)
