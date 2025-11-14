@@ -411,6 +411,17 @@ def geocode_with_normalization(
     layers = _coerce_pelias_param(strict_layers)
     sources = _coerce_pelias_param(strict_sources)
 
+    if sources is not None:
+        # When restricting sources ensure Australian lookups retain G-NAF coverage
+        # via the PSMA dataset so precise addresses remain available. Without this
+        # augmentation queries often fall back to locality centroids which causes
+        # the quote builder map pins to land in the middle of a city instead of at
+        # the requested street address. Preserve caller ordering while appending
+        # the additional source only when necessary.
+        country_normalized = country.strip().lower()
+        if country_normalized in {"australia", "au"} and "psma" not in sources:
+            sources = [*sources, "psma"]
+
     for candidate in candidates:
         query = f"{candidate}, {country}".strip()
         res = client.pelias_search(

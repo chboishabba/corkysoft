@@ -79,7 +79,7 @@ def test_geocode_with_normalization_normalises_string_parameters() -> None:
     assert fake_client.calls, "Expected the Pelias client to be called"
     first_call = fake_client.calls[0]
     assert first_call["layers"] == ["address", "street", "locality"]
-    assert first_call["sources"] == ["osm", "wof"]
+    assert first_call["sources"] == ["osm", "wof", "psma"]
 
 
 def test_geocode_prefers_feature_matching_input_tokens() -> None:
