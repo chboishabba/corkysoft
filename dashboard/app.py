@@ -1613,12 +1613,7 @@ def render_price_distribution_dashboard():
                                         show_points=show_points,
                                         use_route_geometry=use_route_geometry,
                                     )
-                                    st.write(">>> rendering ROUTE MAP")
-                                    st.plotly_chart(
-                                        route_map,
-                                        width="stretch",
-                                        key="route_map_main",
-                                    )
+                                    st.plotly_chart(route_map, width="stretch")
                         else:
                             metric_colour_options = {
                                 "Margin $/m³": {
@@ -1732,8 +1727,7 @@ def render_price_distribution_dashboard():
                                         colorbar_tickformat=metric_spec.get("tickformat"),
                                         use_route_geometry=use_route_geometry,
                                     )
-                                    # Diagnostic guard: disable continuous metric map render during flicker investigation.
-                                    # st.plotly_chart(route_map, width="stretch", key="route_map_metric")
+                                    st.plotly_chart(route_map, width="stretch")
             elif map_mode == "Heatmap":
                 weight_options = available_heatmap_weightings(filtered_df)
                 weight_label = st.selectbox(
@@ -1813,8 +1807,7 @@ def render_price_distribution_dashboard():
                             margin={"l": 0, "r": 0, "t": 0, "b": 0},
                             coloraxis_colorbar={"title": weight_label},
                         )
-                        # Diagnostic guard: disable heatmap render during flicker investigation.
-                        # st.plotly_chart(heatmap_fig, width="stretch")
+                        st.plotly_chart(heatmap_fig, width="stretch")
             else:
                 centre_label = st.radio(
                     "Isochrone centre",
@@ -1898,8 +1891,7 @@ def render_price_distribution_dashboard():
                         margin={"l": 0, "r": 0, "t": 0, "b": 0},
                         legend={"orientation": "h", "yanchor": "bottom", "y": 0.01},
                     )
-                    # Diagnostic guard: disable isochrone render during flicker investigation.
-                    # st.plotly_chart(figure, width="stretch")
+                    st.plotly_chart(figure, width="stretch")
 
             st.divider()
             st.markdown("#### Saved job routes (Folium)")
