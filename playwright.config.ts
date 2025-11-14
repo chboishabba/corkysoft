@@ -43,15 +43,18 @@ export default defineConfig({
         ...devices['Desktop Chrome'],
 
         /*
-         * Use **system browser** on Arch Linux.
-         * Uncomment ONE of the following:
+         * Use system browser on Arch; Playwright's own in CI.
          */
+        ...(isCI
+        ? {}
+        : {
+          // 1) System Chromium (recommended, fewer crashes)
+          executablePath: '/usr/bin/chromium',
+          // 2) OR system Google Chrome Stable:
+          // executablePath: '/usr/bin/google-chrome-stable',
+        }),
 
-        // 1) System Chromium (recommended, fewer crashes)
-        executablePath: '/usr/bin/chromium',
-
-        // 2) OR system Google Chrome Stable:
-        // executablePath: '/usr/bin/google-chrome-stable',
+        viewport: { width: 2160, height: 3840 },
       },
     },
 
@@ -59,26 +62,38 @@ export default defineConfig({
       name: 'firefox',
       use: {
         ...devices['Desktop Firefox'],
-        executablePath: '/usr/bin/firefox',
+
+        ...(isCI ? {} : { executablePath: '/usr/bin/firefox' }),
+
+                            viewport: { width: 2160, height: 3840 },
       },
     },
 
-    // WebKit fails on Arch (missing libicudata.so.66 etc.)
-    // Enable only in CI environments where Playwright deps can be satisfied.
+    // WebKit fails on Arch; enable only in CI.
     ...(isCI
-      ? [
-          {
-            name: 'webkit',
-            use: { ...devices['Desktop Safari'] },
-          },
-        ]
-      : []),
+    ? [
+      {
+        name: 'webkit',
+        use: { ...devices['Desktop Safari'] },
+      },
+    ]
+    : []),
   ],
+
+  webServer: {
+    // Use python -m so it works both locally and on CI
+    command:
+    'python -m streamlit run dashboard/app.py --server.port=8501 --server.headless=true',
+    url: 'http://127.0.0.1:8501/',
+    reuseExistingServer: !process.env.CI,
+    timeout: 120_000,
+  },
+
 
   webServer: {
     // adjust path if your venv is elsewhere
     command:
-      'venv/bin/streamlit run dashboard/app.py --server.port=8501 --server.headless=true',
+            'python -m streamlit run dashboard/app.py --server.port=8501 --server.headless=true',
     url: 'http://127.0.0.1:8501/',
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

@@ -16,8 +16,8 @@ const BASE_URL = process.env.DASHBOARD_URL ?? DEFAULT_BASE_URL;
 const WAIT_FOR_SELECTOR_TIMEOUT_BUFFER = 5000;
 
 const VIEWPORT = {
-  width: Number(process.env.DASHBOARD_WIDTH ?? 1600),
-  height: Number(process.env.DASHBOARD_HEIGHT ?? 900),
+  width: Number(process.env.DASHBOARD_WIDTH ?? 2160),
+  height: Number(process.env.DASHBOARD_HEIGHT ?? 3840),
 };
 
 const VIEWS: DashboardView[] = [
