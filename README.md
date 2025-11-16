@@ -18,6 +18,7 @@ Explore the main dashboard workflows currently deployable locally.
 
 ## Table of Contents
 - [Overview](#overview)
+- [Project Layout](#project-layout)
 - [Key Components](#key-components)
 - [Features](#features)
   - [CLI Toolkit](#cli-toolkit)
@@ -29,6 +30,7 @@ Explore the main dashboard workflows currently deployable locally.
   - [Command-Line Commands](#command-line-commands)
   - [Dashboard Workflows](#dashboard-workflows)
   - [Telemetry & Live Data](#telemetry--live-data)
+- [Development Workflow](#development-workflow)
 - [Data Model & Storage](#data-model--storage)
 - [Testing](#testing)
 - [Documentation](#documentation)
@@ -40,6 +42,35 @@ Explore the main dashboard workflows currently deployable locally.
 - Routing via [OpenRouteService](https://openrouteservice.org) with caching, address normalisation, and SQLite persistence.
 - A Streamlit dashboard for exploring $/m³ distribution, lane margins, profitability overlays, and historical trends.
 - Batch import/export helpers, mock telemetry ingestion, and a simplex-based profit optimiser to support planning exercises.
+
+## Project Layout
+
+The repository is intentionally flat so that CLI helpers, data assets, and dashboard code can evolve together. The following
+tree highlights the directories you will touch most often:
+
+```
+.
+├── analytics/              # Data access, pricing insights, telemetry ingestion
+│   ├── db.py               # SQLite helpers and schema bootstrap
+│   ├── ingest_live_data.py # Mock truck/route streamer backing the dashboard map
+│   └── price_distribution/ # Corridor rollups, exports, and optimiser prep
+├── dashboard/              # Streamlit entry point and reusable widgets
+│   ├── app.py              # Main Streamlit application
+│   └── components/         # Leafy widgets shared across tabs
+├── docs/                   # Feature specs, workflow guides, imagery used in the README
+├── tests/                  # Pytest suites mirroring analytics and UI helpers
+├── e2e/                    # Playwright flows and fixtures for UI smoke tests
+├── map_jobs.py             # Utility for generating HTML route maps
+├── profit_optimizer.py     # Simplex solver for corridor profitability adjustments
+├── quick_quote.py          # Minimal CLI surface for single quotes
+├── routes_to_sqlite.py     # Primary CLI for geocoding, routing, and cost capture
+├── start_app.sh            # Convenience script for bootstrapping a venv and launching Streamlit
+└── routes.db               # Default SQLite datastore (created locally, never commit secrets)
+```
+
+Supplementary notebooks, reference data, and migration helpers live alongside these directories (for example, `docs/img/` for
+dashboard screenshots and `MIGRATE_AWAY_FROM_streamlit_price_distribution.py` for legacy entry points). Refer to
+`ROADMAP.md` for an at-a-glance status of ongoing initiatives spanning each area.
 
 ## Key Components
 
@@ -214,6 +245,19 @@ Flags:
 - `--trucks`: Override the seeded truck identifiers.
 
 Historical jobs with geocoded origins/destinations backfill the mock data so the map always has active corridors.
+
+## Development Workflow
+
+- **Bootstrap the environment**: Run `python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt`
+  (or execute `./start_app.sh` to combine setup with a `streamlit run dashboard/app.py`).
+- **Iterate on analytics**: Modify modules inside `analytics/` and run targeted tests via `pytest tests/test_<area>.py` to
+  validate corridor aggregations, optimiser helpers, and export routines before wiring them into Streamlit.
+- **Exercise the CLI**: Use `routes_to_sqlite.py` to seed `routes.db`, export CSVs, and sanity-check new schema changes before
+  exposing them through the dashboard sidebar uploads.
+- **Preview UI updates**: Launch the dashboard with `streamlit run dashboard/app.py`, switch datasets in the sidebar, and keep
+  an eye on the terminal logs for warnings emitted by `analytics/db.py` when migrations are required.
+- **Keep docs current**: When behaviour or workflows change, update `README.md`, `docs/*.md`, and `ROADMAP.md` so new
+  contributors can follow the intended flows without spelunking through code.
 
 ## Data Model & Storage
 
