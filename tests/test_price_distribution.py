@@ -42,7 +42,7 @@ from analytics.price_distribution import (
     summarise_last_year_distributions,
     summarise_profitability,
 )
-from analytics.routing_provider import IsochroneResult
+from analytics.routing_provider import GoogleRoutesProvider, IsochroneResult
 from dashboard.components.maps import build_route_map
 
 
@@ -1712,6 +1712,33 @@ def test_build_isochrone_polygons_decodes_encoded_isochrones():
     assert record["latitudes"][0] == pytest.approx(record["latitudes"][-1])
     assert record["longitudes"][0] == pytest.approx(record["longitudes"][-1])
     assert record["tooltip"] == "Brisbane → Sydney — 2.0 hr reach ≈ 184 km (avg 92 km/h)"
+
+
+def test_google_isochrone_paths_are_normalised():
+    class GoogleIsoClient:
+        def isochrones(self, *, centre, profile, range_seconds):
+            assert profile == "driving-car"
+            assert range_seconds == [600]
+            assert centre == (153.0, -27.5)
+            return {
+                "paths": [
+                    [
+                        {"lat": centre[1] + 0.05, "lng": centre[0] + 0.05},
+                        {"lat": centre[1] + 0.1, "lng": centre[0] + 0.05},
+                        {"lat": centre[1] + 0.05, "lng": centre[0] + 0.1},
+                    ]
+                ]
+            }
+
+    provider = GoogleRoutesProvider(client=GoogleIsoClient())
+    result = provider.isochrone(
+        centre=(153.0, -27.5), profile="driving-car", range_seconds=[600]
+    )
+    assert result is not None
+    latitudes, longitudes = result.to_lat_lon_lists()
+
+    assert latitudes == pytest.approx([-27.45, -27.4, -27.45, -27.45])
+    assert longitudes == pytest.approx([153.05, 153.05, 153.1, 153.05])
 
 
 def test_build_isochrone_polygons_handles_missing_inputs():

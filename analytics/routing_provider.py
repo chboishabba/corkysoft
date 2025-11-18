@@ -218,33 +218,46 @@ class GoogleRoutesProvider:
         profile: str,
         range_seconds: Sequence[int],
     ) -> Optional[IsochroneResult]:
-        if not hasattr(self._client, "isochrones"):
+        isochrone_method = _get_isochrone_method(self._client)
+        if isochrone_method is None:
             raise NotImplementedError("Google provider does not expose isochrones")
 
-        response = self._client.isochrones(
+        response = isochrone_method(
             centre=centre,
             profile=profile,
             range_seconds=list(range_seconds),
         )
         feature_collection: Optional[Mapping[str, Any]] = None
         encoded: list[str] = []
+        coordinates: Optional[Sequence[CoordinatePair]] = None
 
         if isinstance(response, Mapping):
             if response.get("type") == "FeatureCollection":
                 feature_collection = _ensure_feature_collection(response)
             else:
-                for key in ("encoded_polylines", "polylines", "paths"):
+                for key in ("encoded_polylines", "polylines"):
                     value = response.get(key)
                     if isinstance(value, Sequence):
                         encoded.extend(str(item) for item in value if item is not None)
                         break
+                if not encoded:
+                    coordinates = _extract_path_coordinates(
+                        response.get("paths")
+                        or response.get("path")
+                        or response.get("coordinates")
+                        or response.get("boundary")
+                        or response.get("polygon")
+                    )
         elif isinstance(response, Sequence):
             encoded.extend(str(item) for item in response if item is not None)
+            if not encoded:
+                coordinates = _extract_path_coordinates(response)
 
-        if feature_collection is None and not encoded:
+        if feature_collection is None and not encoded and not coordinates:
             return None
         return IsochroneResult(
             feature_collection=feature_collection,
+            coordinates=coordinates,
             encoded_polylines=encoded or None,
         )
 
@@ -293,6 +306,69 @@ def _profile_to_google_mode(profile: str) -> str:
     if normalized in {"transit", "driving-transit"}:
         return "transit"
     return "driving"
+
+
+def _get_isochrone_method(client: Any) -> Optional[Any]:
+    """Return a callable capable of producing isochrones for the Google client."""
+
+    for candidate in ("isochrones", "isochrone", "travel_boundary", "compute_isochrones"):
+        method = getattr(client, candidate, None)
+        if callable(method):
+            return method
+    return None
+
+
+def _extract_path_coordinates(payload: Any) -> Optional[Sequence[CoordinatePair]]:
+    """Normalise path-like payloads into coordinate pairs.
+
+    Google Maps connectors do not yet expose a stable isochrone API, so we accept
+    a variety of shapes (lists of ``{"lat": .., "lng": ..}`` mappings,
+    ``[[lat, lon], ...]`` sequences, or nested lists where the first entry
+    contains the polygon ring) and convert them into ``(lat, lon)`` tuples.
+    """
+
+    def _to_pair(entry: Any) -> Optional[CoordinatePair]:
+        if isinstance(entry, Mapping):
+            lat = entry.get("lat") or entry.get("latitude")
+            lon = entry.get("lng") or entry.get("lon") or entry.get("longitude")
+        elif isinstance(entry, Sequence) and not isinstance(entry, (str, bytes, bytearray)):
+            try:
+                lat, lon = entry[0], entry[1]
+            except (IndexError, TypeError):
+                return None
+        else:
+            return None
+
+        try:
+            return float(lat), float(lon)
+        except (TypeError, ValueError):
+            return None
+
+    def _from_sequence(seq: Sequence[Any]) -> Sequence[CoordinatePair]:
+        coordinates: list[CoordinatePair] = []
+        for entry in seq:
+            pair = _to_pair(entry)
+            if pair is not None:
+                coordinates.append(pair)
+        return coordinates
+
+    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes, bytearray)):
+        if payload and isinstance(payload[0], Sequence) and not isinstance(payload[0], (str, bytes, bytearray)):
+            nested = _from_sequence(payload[0])
+            if nested:
+                return nested
+        coords = _from_sequence(payload)
+        if coords:
+            return coords
+
+    if isinstance(payload, Mapping):
+        path = payload.get("path") or payload.get("coordinates")
+        if isinstance(path, Sequence):
+            coords = _from_sequence(path)
+            if coords:
+                return coords
+
+    return None
 
 
 def decode_polyline(polyline: str) -> list[CoordinatePair]:
