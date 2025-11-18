@@ -246,6 +246,18 @@ Flags:
 - `--iterations`: Number of cycles (omit for continuous streaming).
 - `--trucks`: Override the seeded truck identifiers.
 
+To ingest real GPS snapshots from a file or stdin (newline-delimited JSON or CSV), stream them into the telemetry harness:
+
+```bash
+python -m analytics.ingest_real_gps snapshots.ndjson --batch-size 250 --iterations 1
+```
+
+Flags:
+- `--db-path`: Target database (defaults to `routes.db` resolution).
+- `--iterations`: Number of batches to process before exiting.
+- `--batch-size`: Number of snapshots per commit.
+- `--format`: Force CSV or JSON when auto-detection is ambiguous.
+
 Historical jobs with geocoded origins/destinations backfill the mock data so the map always has active corridors.
 
 ## Development Workflow
