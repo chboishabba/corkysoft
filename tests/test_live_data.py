@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -17,7 +17,8 @@ from analytics.live_data import (
     load_active_routes,
     load_truck_positions,
 )
-from analytics.live_data import _apply_duty_cycle, _position_along_route  # type: ignore[attr-defined]
+from analytics.live_data import _pick_candidate_routes, _position_along_route, _apply_duty_cycle,  # type: ignore[attr-defined]
+
 from analytics.price_distribution import (
     PROFITABILITY_COLOURS,
     classify_profit_band,
@@ -168,6 +169,9 @@ def test_mock_ingestor_populates_live_tables():
         assert pytest.approx(float(truck_row["lat"]), rel=1e-4) == pytest.approx(expected_lat, rel=1e-4)
         assert pytest.approx(float(truck_row["lon"]), rel=1e-4) == pytest.approx(expected_lon, rel=1e-4)
 
+        started_at = datetime.fromisoformat(routes_df.iloc[0]["started_at"])
+        assert started_at == datetime(2024, 1, 1, 8, 0, tzinfo=UTC)
+
         base_df = routes_df.copy()
         base_df["id"] = base_df["job_id"]
         base_df["price_per_m3"] = 300.0
@@ -267,6 +271,19 @@ def test_harness_projects_real_gps_updates():
 
         trucks_df = load_truck_positions(conn)
         assert trucks_df.loc[trucks_df["truck_id"] == "LIVE-1", "lat"].notna().all()
+    finally:
+        conn.close()
+
+
+def test_pick_candidate_routes_respects_date_window():
+    conn = _build_conn()
+    try:
+        candidates = _pick_candidate_routes(
+            conn, start_date=date(2025, 1, 1), end_date=date(2025, 1, 31)
+        )
+
+        assert candidates
+        assert all(candidate.get("id") is None for candidate in candidates)
     finally:
         conn.close()
 

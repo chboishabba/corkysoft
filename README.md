@@ -246,7 +246,11 @@ Flags:
 - `--interval`: Seconds between updates.
 - `--iterations`: Number of cycles (omit for continuous streaming).
 - `--trucks`: Override the seeded truck identifiers.
+- `--start-date` / `--end-date`: Restrict historical jobs to a specific date window (YYYY-MM-DD).
 
+Historical jobs with geocoded origins/destinations backfill the mock data so the map always has active corridors. If no jobs
+match the window, the ingestor chains depot-to-depot routes so trucks still depart from a depot before heading toward
+customer origins.
 To ingest real GPS snapshots from a file or stdin (newline-delimited JSON or CSV), stream them into the telemetry harness:
 
 ```bash

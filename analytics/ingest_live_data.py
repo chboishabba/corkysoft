@@ -44,6 +44,16 @@ def parse_args() -> argparse.Namespace:
         help="Optional list of truck IDs to simulate.",
     )
     parser.add_argument(
+        "--start-date",
+        dest="start_date",
+        default=None,
+        help="Earliest historical job date (YYYY-MM-DD) to include.",
+    )
+    parser.add_argument(
+        "--end-date",
+        dest="end_date",
+        default=None,
+        help="Latest historical job date (YYYY-MM-DD) to include.",
         "--route-speed",
         dest="route_speeds",
         action="append",
@@ -91,6 +101,8 @@ def main() -> None:
         truck_ids=args.trucks,
         interval_seconds=args.interval,
         iterations=args.iterations,
+        start_date=args.start_date,
+        end_date=args.end_date,
         route_speeds=route_speed_map,
         metro_speed_kph=args.metro_speed,
         highway_speed_kph=args.highway_speed,
