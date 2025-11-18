@@ -17,7 +17,7 @@ from analytics.live_data import (
     load_active_routes,
     load_truck_positions,
 )
-from analytics.live_data import _position_along_route  # type: ignore[attr-defined]
+from analytics.live_data import _apply_duty_cycle, _position_along_route  # type: ignore[attr-defined]
 from analytics.price_distribution import (
     PROFITABILITY_COLOURS,
     classify_profit_band,
@@ -137,7 +137,10 @@ def test_mock_ingestor_populates_live_tables():
         route_row = routes_df.iloc[0]
         progress_value = float(route_row["progress"])
         travel_seconds = float(route_row["travel_seconds"])
-        expected_progress = min(1.0, (midpoint - start).total_seconds() / travel_seconds)
+        driving_time, _, _, _ = _apply_duty_cycle(
+            (midpoint - start).total_seconds(), 4.0 * 3600.0, 30.0 * 60.0
+        )
+        expected_progress = min(1.0, driving_time / travel_seconds)
         assert pytest.approx(progress_value, rel=1e-3) == pytest.approx(expected_progress, rel=1e-3)
 
         route_geometry = route_row["route_geometry"]
@@ -159,6 +162,34 @@ def test_mock_ingestor_populates_live_tables():
         assert all(isinstance(colour, list) for colour in mapped["colour"])
         assert "profitability_status" in mapped.columns
         assert set(mapped["profitability_status"]) <= {"Profitable", "Break-even"}
+    finally:
+        conn.close()
+
+
+def test_mock_ingestor_applies_route_speed_overrides():
+    conn = _build_conn()
+    try:
+        conn.execute("UPDATE historical_jobs SET duration_hr = NULL WHERE id = 1")
+        conn.commit()
+
+        ingestor = MockTelemetryIngestor(conn, truck_ids=("TRK-1",))
+        ingestor.run_cycle(now=datetime(2024, 1, 1, 9, 0, tzinfo=UTC), jitter=0.0, route_speeds={1: 75.0})
+
+        route_row = conn.execute(
+            "SELECT job_id, travel_seconds, eta FROM active_routes WHERE truck_id=?", ("TRK-1",)
+        ).fetchone()
+        assert route_row is not None
+
+        expected_travel_seconds = (900.0 / 75.0) * 3600.0
+        assert route_row["travel_seconds"] == pytest.approx(expected_travel_seconds, rel=1e-3)
+        assert route_row["eta"] is not None
+
+        truck_row = conn.execute(
+            "SELECT speed_kph, notes FROM truck_positions WHERE truck_id=?", ("TRK-1",)
+        ).fetchone()
+        assert truck_row is not None
+        assert truck_row["speed_kph"] == pytest.approx(75.0, rel=1e-3)
+        assert "Progress" in truck_row["notes"]
     finally:
         conn.close()
 
