@@ -80,6 +80,55 @@ CREATE TABLE IF NOT EXISTS jobs (
     internal_cost_updated_at TEXT,
     updated_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS inventory_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    quantity INTEGER NOT NULL DEFAULT 0,
+    unit TEXT DEFAULT 'unit',
+    updated_at TEXT,
+    UNIQUE(name)
+);
+
+CREATE TABLE IF NOT EXISTS workers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    role TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    hired_at TEXT,
+    updated_at TEXT,
+    UNIQUE(name)
+);
+
+CREATE TABLE IF NOT EXISTS trucks (
+    truck_id TEXT PRIMARY KEY,
+    name TEXT,
+    capacity_m3 REAL,
+    active INTEGER NOT NULL DEFAULT 1,
+    notes TEXT,
+    updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS shipments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER,
+    historical_job_id INTEGER,
+    inventory_item_id INTEGER,
+    truck_id TEXT,
+    worker_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'planned',
+    scheduled_date TEXT,
+    delivered_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT,
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL,
+    FOREIGN KEY(historical_job_id) REFERENCES historical_jobs(id) ON DELETE SET NULL,
+    FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE SET NULL,
+    FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL,
+    FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
+);
 """
 
 
@@ -190,6 +239,12 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
     ensure_historical_job_routes_table(conn)
     conn.commit()
 
+    for table_name in ("inventory_items", "workers", "trucks", "shipments"):
+        if not _table_exists(conn, table_name):
+            conn.execute(
+                f"SELECT RAISE(FAIL, 'Failed to create {table_name} during bootstrap')"
+            )
+
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> Sequence[str]:
     """Return the column names for *table* in the current connection."""
@@ -256,3 +311,180 @@ def migrate_geojson_to_routes(conn: sqlite3.Connection) -> None:
     conn.execute(insert_sql)
     conn.execute(f"ALTER TABLE historical_jobs DROP COLUMN {geojson_column}")
     conn.commit()
+
+
+def upsert_inventory_item(
+    conn: sqlite3.Connection,
+    *,
+    name: str,
+    description: str = "",
+    quantity: int = 0,
+    unit: str = "unit",
+) -> sqlite3.Row:
+    """Create or update an inventory item and return the stored row."""
+
+    timestamp = datetime.now(UTC).isoformat()
+    conn.execute(
+        """
+        INSERT INTO inventory_items (name, description, quantity, unit, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            description = excluded.description,
+            quantity = excluded.quantity,
+            unit = excluded.unit,
+            updated_at = excluded.updated_at
+        """,
+        (name, description, int(quantity), unit, timestamp),
+    )
+    conn.commit()
+    return conn.execute(
+        "SELECT * FROM inventory_items WHERE name = ?", (name,)
+    ).fetchone()
+
+
+def list_inventory(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Return all inventory items ordered by name."""
+
+    return list(conn.execute("SELECT * FROM inventory_items ORDER BY name"))
+
+
+def upsert_truck(
+    conn: sqlite3.Connection,
+    *,
+    truck_id: str,
+    name: str | None = None,
+    capacity_m3: float | None = None,
+    active: bool = True,
+    notes: str | None = None,
+) -> sqlite3.Row:
+    """Create or update a truck record."""
+
+    timestamp = datetime.now(UTC).isoformat()
+    conn.execute(
+        """
+        INSERT INTO trucks (truck_id, name, capacity_m3, active, notes, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(truck_id) DO UPDATE SET
+            name = excluded.name,
+            capacity_m3 = excluded.capacity_m3,
+            active = excluded.active,
+            notes = excluded.notes,
+            updated_at = excluded.updated_at
+        """,
+        (truck_id, name, capacity_m3, int(active), notes, timestamp),
+    )
+    conn.commit()
+    return conn.execute(
+        "SELECT * FROM trucks WHERE truck_id = ?", (truck_id,)
+    ).fetchone()
+
+
+def upsert_worker(
+    conn: sqlite3.Connection,
+    *,
+    name: str,
+    role: str = "",
+    phone: str = "",
+    active: bool = True,
+) -> sqlite3.Row:
+    """Create or update a worker record based on the unique name."""
+
+    timestamp = datetime.now(UTC).isoformat()
+    conn.execute(
+        """
+        INSERT INTO workers (name, role, phone, active, hired_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            role = excluded.role,
+            phone = excluded.phone,
+            active = excluded.active,
+            updated_at = excluded.updated_at
+        """,
+        (name, role, phone, int(active), timestamp, timestamp),
+    )
+    conn.commit()
+    return conn.execute("SELECT * FROM workers WHERE name = ?", (name,)).fetchone()
+
+
+def create_shipment(
+    conn: sqlite3.Connection,
+    *,
+    job_id: int | None = None,
+    historical_job_id: int | None = None,
+    inventory_item_id: int | None = None,
+    truck_id: str | None = None,
+    worker_id: int | None = None,
+    status: str = "planned",
+    scheduled_date: str | None = None,
+    delivered_at: str | None = None,
+) -> sqlite3.Row:
+    """Insert a shipment linked to a job or historical job."""
+
+    if job_id is None and historical_job_id is None:
+        raise ValueError("Shipments must reference a job or historical job")
+
+    timestamp = datetime.now(UTC).isoformat()
+    conn.execute(
+        """
+        INSERT INTO shipments (
+            job_id,
+            historical_job_id,
+            inventory_item_id,
+            truck_id,
+            worker_id,
+            status,
+            scheduled_date,
+            delivered_at,
+            created_at,
+            updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            job_id,
+            historical_job_id,
+            inventory_item_id,
+            truck_id,
+            worker_id,
+            status,
+            scheduled_date,
+            delivered_at,
+            timestamp,
+            timestamp,
+        ),
+    )
+    conn.commit()
+    return conn.execute(
+        "SELECT * FROM shipments WHERE id = last_insert_rowid()"
+    ).fetchone()
+
+
+def fetch_shipments_with_context(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Return shipments joined with job, inventory, and assignment context."""
+
+    query = """
+        SELECT
+            s.id,
+            s.status,
+            s.scheduled_date,
+            s.delivered_at,
+            s.job_id,
+            s.historical_job_id,
+            j.origin AS job_origin,
+            j.destination AS job_destination,
+            h.origin AS historical_origin,
+            h.destination AS historical_destination,
+            i.name AS inventory_name,
+            i.quantity AS inventory_quantity,
+            t.truck_id,
+            t.name AS truck_name,
+            w.name AS worker_name,
+            w.role AS worker_role
+        FROM shipments AS s
+        LEFT JOIN jobs AS j ON s.job_id = j.id
+        LEFT JOIN historical_jobs AS h ON s.historical_job_id = h.id
+        LEFT JOIN inventory_items AS i ON s.inventory_item_id = i.id
+        LEFT JOIN trucks AS t ON s.truck_id = t.truck_id
+        LEFT JOIN workers AS w ON s.worker_id = w.id
+        ORDER BY s.id
+    """
+    return list(conn.execute(query))

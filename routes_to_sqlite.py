@@ -140,6 +140,55 @@ CREATE TABLE IF NOT EXISTS historical_jobs (
   updated_at TEXT,
   UNIQUE(job_date, origin, destination, client, quoted_price)
 );
+
+CREATE TABLE IF NOT EXISTS inventory_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  description TEXT DEFAULT '',
+  quantity INTEGER NOT NULL DEFAULT 0,
+  unit TEXT DEFAULT 'unit',
+  updated_at TEXT,
+  UNIQUE(name)
+);
+
+CREATE TABLE IF NOT EXISTS workers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  role TEXT DEFAULT '',
+  phone TEXT DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1,
+  hired_at TEXT,
+  updated_at TEXT,
+  UNIQUE(name)
+);
+
+CREATE TABLE IF NOT EXISTS trucks (
+  truck_id TEXT PRIMARY KEY,
+  name TEXT,
+  capacity_m3 REAL,
+  active INTEGER NOT NULL DEFAULT 1,
+  notes TEXT,
+  updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS shipments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER,
+  historical_job_id INTEGER,
+  inventory_item_id INTEGER,
+  truck_id TEXT,
+  worker_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'planned',
+  scheduled_date TEXT,
+  delivered_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT,
+  FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL,
+  FOREIGN KEY(historical_job_id) REFERENCES historical_jobs(id) ON DELETE SET NULL,
+  FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE SET NULL,
+  FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL,
+  FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
+);
 """
 
 def ensure_schema(conn: sqlite3.Connection):
@@ -192,6 +241,108 @@ def migrate_schema(conn: sqlite3.Connection):
         """
     )
     conn.execute("UPDATE jobs SET provider = COALESCE(provider, 'ors')")
+
+    def table_exists(name: str) -> bool:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+        ).fetchone()
+        return row is not None
+
+    def ensure_table(name: str, create_sql: str) -> None:
+        if not table_exists(name):
+            conn.execute(create_sql)
+
+    ensure_table(
+        "inventory_items",
+        """
+        CREATE TABLE IF NOT EXISTS inventory_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            quantity INTEGER NOT NULL DEFAULT 0,
+            unit TEXT DEFAULT 'unit',
+            updated_at TEXT,
+            UNIQUE(name)
+        )
+        """,
+    )
+    ensure_table(
+        "workers",
+        """
+        CREATE TABLE IF NOT EXISTS workers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            role TEXT DEFAULT '',
+            phone TEXT DEFAULT '',
+            active INTEGER NOT NULL DEFAULT 1,
+            hired_at TEXT,
+            updated_at TEXT,
+            UNIQUE(name)
+        )
+        """,
+    )
+    ensure_table(
+        "trucks",
+        """
+        CREATE TABLE IF NOT EXISTS trucks (
+            truck_id TEXT PRIMARY KEY,
+            name TEXT,
+            capacity_m3 REAL,
+            active INTEGER NOT NULL DEFAULT 1,
+            notes TEXT,
+            updated_at TEXT
+        )
+        """,
+    )
+    ensure_table(
+        "shipments",
+        """
+        CREATE TABLE IF NOT EXISTS shipments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER,
+            historical_job_id INTEGER,
+            inventory_item_id INTEGER,
+            truck_id TEXT,
+            worker_id INTEGER,
+            status TEXT NOT NULL DEFAULT 'planned',
+            scheduled_date TEXT,
+            delivered_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL,
+            FOREIGN KEY(historical_job_id) REFERENCES historical_jobs(id) ON DELETE SET NULL,
+            FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE SET NULL,
+            FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL,
+            FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
+        )
+        """,
+    )
+
+    def backfill_shipments() -> None:
+        existing_shipments = conn.execute("SELECT COUNT(1) FROM shipments").fetchone()[0]
+        if existing_shipments:
+            return
+
+        now = dt.datetime.now(dt.timezone.utc).isoformat()
+        for (job_id,) in conn.execute("SELECT id FROM jobs"):
+            conn.execute(
+                "INSERT INTO shipments (job_id, status, created_at) VALUES (?, 'planned', ?)",
+                (job_id, now),
+            )
+
+        if table_exists("historical_jobs"):
+            for job_id, job_date in conn.execute(
+                "SELECT id, job_date FROM historical_jobs"
+            ):
+                conn.execute(
+                    """
+                    INSERT INTO shipments (historical_job_id, status, scheduled_date, created_at)
+                    VALUES (?, 'delivered', ?, ?)
+                    """,
+                    (job_id, job_date, now),
+                )
+
+    backfill_shipments()
     conn.commit()
 
 # ---------- Address normalization (AU-focused) ----------
