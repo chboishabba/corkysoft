@@ -33,6 +33,18 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional list of truck IDs to simulate.",
     )
+    parser.add_argument(
+        "--start-date",
+        dest="start_date",
+        default=None,
+        help="Earliest historical job date (YYYY-MM-DD) to include.",
+    )
+    parser.add_argument(
+        "--end-date",
+        dest="end_date",
+        default=None,
+        help="Latest historical job date (YYYY-MM-DD) to include.",
+    )
     return parser.parse_args()
 
 
@@ -43,6 +55,8 @@ def main() -> None:
         truck_ids=args.trucks,
         interval_seconds=args.interval,
         iterations=args.iterations,
+        start_date=args.start_date,
+        end_date=args.end_date,
     )
 
 

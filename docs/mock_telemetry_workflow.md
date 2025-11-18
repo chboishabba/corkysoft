@@ -4,8 +4,8 @@
 The simulated GPS pipeline mirrors the same structure the real harness expects: a generator feeds truck positions into SQLite, the ingest harness applies metadata and timing logic, and the dashboard layers those tables onto the map. The sections below summarise the key responsibilities.
 
 ## 1. Route selection & telemetry synthesis
-1. **Seed candidate routes** – `_pick_candidate_routes` queries `historical_jobs` joined to geocoded addresses so only routes with coordinates are eligible. When historical data is absent it falls back to depot waypoints to keep the simulation running.【F:analytics/live_data.py†L205-L268】
-2. **Cycle through trucks** – `MockTelemetryIngestor.run_cycle` assigns each configured truck to a route, reuses prior assignments when possible, and introduces jitter so trucks are staggered in time.【F:analytics/live_data.py†L480-L556】
+1. **Seed candidate routes** – `_pick_candidate_routes` queries `historical_jobs` joined to geocoded addresses so only routes with coordinates are eligible. When historical data is absent it falls back to depot waypoints to keep the simulation running.【F:analytics/live_data.py†L205-L280】
+2. **Cycle through trucks** – `MockTelemetryIngestor.run_cycle` assigns each configured truck to a route, reuses prior assignments when possible, and anchors timelines to each job's scheduled date (falling back to jitter only when synthetic depot routes are used).【F:analytics/live_data.py†L494-L620】
 3. **Derive positions** – For routes with stored polylines, `_route_points_from_geojson` and `_position_along_route` interpolate the latitude/longitude and heading. Otherwise the code linearly interpolates between origin and destination while also synthesising reasonable speed and ETA values.【F:analytics/live_data.py†L305-L341】【F:analytics/live_data.py†L566-L595】
 4. **Persist mock rows** – The ingestor writes to `truck_positions` and `active_routes`, keeping previous geometry when new runs lack it and cleaning up completed routes for reassignment on the next iteration.【F:analytics/live_data.py†L597-L685】
 

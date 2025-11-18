@@ -7,7 +7,7 @@ import random
 import sqlite3
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Iterable, Optional, Sequence
 
 import pandas as pd
@@ -202,13 +202,55 @@ def build_live_heatmap_source(
     return pd.concat(frames, ignore_index=True)[columns]
 
 
-def _pick_candidate_routes(conn: sqlite3.Connection) -> list[dict[str, float]]:
+def _coerce_date(date_value: Optional[date | datetime | str]) -> Optional[date]:
+    """Return a ``date`` parsed from ``date_value`` if possible."""
+
+    if date_value is None:
+        return None
+    if isinstance(date_value, datetime):
+        return date_value.date()
+    if isinstance(date_value, date):
+        return date_value
+    if isinstance(date_value, str):
+        try:
+            return date.fromisoformat(date_value)
+        except ValueError:
+            return datetime.fromisoformat(date_value).date()
+    raise TypeError(f"Unsupported date type: {type(date_value)!r}")
+
+
+def _pick_candidate_routes(
+    conn: sqlite3.Connection,
+    *,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+) -> list[dict[str, float]]:
     """Return historical jobs with geocoded endpoints suitable for routing."""
 
+    date_filters: list[str] = []
+    params: list[str] = []
+    if start_date:
+        date_filters.append("hj.job_date >= ?")
+        params.append(start_date.isoformat())
+    if end_date:
+        date_filters.append("hj.job_date <= ?")
+        params.append(end_date.isoformat())
+
+    where_clause = "\n          AND ".join(
+        [
+            "o.lat IS NOT NULL",
+            "o.lon IS NOT NULL",
+            "d.lat IS NOT NULL",
+            "d.lon IS NOT NULL",
+            *date_filters,
+        ]
+    )
+
     rows = conn.execute(
-        """
+        f"""
         SELECT
             hj.id,
+            hj.job_date,
             o.lat AS origin_lat,
             o.lon AS origin_lon,
             d.lat AS dest_lat,
@@ -220,11 +262,9 @@ def _pick_candidate_routes(conn: sqlite3.Connection) -> list[dict[str, float]]:
         JOIN addresses AS o ON hj.origin_address_id = o.id
         JOIN addresses AS d ON hj.destination_address_id = d.id
         LEFT JOIN historical_job_routes AS hr ON hr.historical_job_id = hj.id
-        WHERE o.lat IS NOT NULL
-          AND o.lon IS NOT NULL
-          AND d.lat IS NOT NULL
-          AND d.lon IS NOT NULL
-    """
+        WHERE {where_clause}
+    """,
+        params,
     ).fetchall()
     if rows:
         candidates: list[dict[str, float]] = []
@@ -458,10 +498,16 @@ class MockTelemetryIngestor:
     conn: sqlite3.Connection
     truck_ids: Sequence[str]
     status_cycle: Sequence[Status] = ("loading", "en_route", "en_route", "en_route", "arrived")
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    job_start_hour: int = 8
 
     def __post_init__(self) -> None:
         _ensure_live_tables(self.conn)
         self.conn.row_factory = sqlite3.Row
+        self.start_date = _coerce_date(self.start_date)
+        self.end_date = _coerce_date(self.end_date)
+        self.job_start_hour = max(0, min(23, int(self.job_start_hour)))
 
     def _load_existing_progress(self) -> dict[str, dict[str, Optional[float]]]:
         rows = self.conn.execute(
@@ -480,7 +526,9 @@ class MockTelemetryIngestor:
     def run_cycle(self, *, jitter: float = 0.1, now: Optional[datetime] = None) -> None:
         """Create or update telemetry records for each configured truck."""
 
-        candidates = _pick_candidate_routes(self.conn)
+        candidates = _pick_candidate_routes(
+            self.conn, start_date=self.start_date, end_date=self.end_date
+        )
         if not candidates:
             return
 
@@ -546,13 +594,23 @@ class MockTelemetryIngestor:
                 except ValueError:
                     started_at = current_time
             else:
-                jitter_ratio = max(0.0, float(jitter))
-                jitter_seconds = (
-                    random.uniform(0.0, jitter_ratio * travel_seconds)
-                    if travel_seconds and jitter_ratio > 0
-                    else 0.0
-                )
-                started_at = current_time - timedelta(seconds=jitter_seconds)
+                job_date = _coerce_date(route.get("job_date"))
+                if job_date:
+                    started_at = datetime(
+                        job_date.year,
+                        job_date.month,
+                        job_date.day,
+                        self.job_start_hour,
+                        tzinfo=UTC,
+                    )
+                else:
+                    jitter_ratio = max(0.0, float(jitter))
+                    jitter_seconds = (
+                        random.uniform(0.0, jitter_ratio * travel_seconds)
+                        if travel_seconds and jitter_ratio > 0
+                        else 0.0
+                    )
+                    started_at = current_time - timedelta(seconds=jitter_seconds)
 
             elapsed = max(0.0, (current_time - started_at).total_seconds())
             progress = min(1.0, elapsed / travel_seconds) if travel_seconds else 1.0
@@ -927,13 +985,24 @@ def run_mock_ingestor(
     truck_ids: Optional[Sequence[str]] = None,
     interval_seconds: float = 5.0,
     iterations: Optional[int] = None,
+    start_date: Optional[date | str] = None,
+    end_date: Optional[date | str] = None,
+    job_start_hour: int = 8,
 ) -> None:
     """Run the mock telemetry ingestion loop."""
 
     trucks = truck_ids or ("BNE-01", "BNE-02", "BNE-03", "BNE-04")
+    start = _coerce_date(start_date)
+    end = _coerce_date(end_date)
 
     with connection_scope(db_path) as conn:
-        ingestor = MockTelemetryIngestor(conn, truck_ids=trucks)
+        ingestor = MockTelemetryIngestor(
+            conn,
+            truck_ids=trucks,
+            start_date=start,
+            end_date=end,
+            job_start_hour=job_start_hour,
+        )
         count = 0
         while True:
             ingestor.run_cycle()
