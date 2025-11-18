@@ -118,6 +118,22 @@ def _build_conn() -> sqlite3.Connection:
     return conn
 
 
+def test_mock_ingestor_handles_missing_schema_with_fallback():
+    conn = sqlite3.connect(":memory:")
+    try:
+        ingestor = MockTelemetryIngestor(conn, truck_ids=("EMPTY-1",))
+        ingestor.run_cycle(now=datetime(2024, 1, 1, tzinfo=UTC), jitter=0.0)
+
+        routes_df = load_active_routes(conn)
+
+        assert not routes_df.empty
+        assert set(routes_df["truck_id"]) == {"EMPTY-1"}
+        assert routes_df["origin_lat"].notna().all()
+        assert routes_df["dest_lat"].notna().all()
+    finally:
+        conn.close()
+
+
 def test_mock_ingestor_populates_live_tables():
     conn = _build_conn()
     try:
