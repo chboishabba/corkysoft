@@ -84,6 +84,7 @@ This merges everything from:
 | Deliverable                            | Status | Description                             |
 | -------------------------------------- | :----: | --------------------------------------- |
 | **Technical architecture spec**        |    ✅   | Complete multi-layer doc.               |
+| **Media ingest doc (PEC/bodycam)**     |    ✅   | Capture→upload pipeline documented.     |
 | **Data-model integration (PEC/media)** |   🧩   | Fields drafted; implementation pending. |
 | **Pre-Existing-Condition capture**     |   🔜   | Two-photo workflow + customer sign-off. |
 | **Event-based bodycam clips**          |   🔜   | Short triggered recordings.             |
