@@ -141,6 +141,8 @@ The routing stack can call either [OpenRouteService](https://openrouteservice.or
 export ROUTING_PROVIDER="ors"  # or "google"
 ```
 
+Isochrones are requested from the active provider when available. Google connectors that expose an `isochrones`/`isochrone` method feed travel-boundary polygons directly into the dashboard, producing detailed shapes instead of the circular fallbacks. The OpenRouteService provider continues to use its native isochrone endpoint (returning GeoJSON polygons when accessible), and the UI falls back to evenly spaced circles only when neither provider returns geometry.
+
 #### OpenRouteService setup
 
 - `ORS_API_KEY` (**required**): authenticate API calls used by the CLI and dashboard helpers.【F:routes_to_sqlite.py†L1-L60】【F:corkysoft/routing.py†L31-L60】

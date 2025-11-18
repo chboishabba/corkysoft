@@ -185,6 +185,16 @@ def _raise_google_maps_error(operation: str, exc: Exception) -> None:
     raise RoutingError(f"Google Maps {operation} failed ({summary}). {guidance}") from exc
 
 
+def _get_google_isochrone_method(client: Any) -> Optional[Any]:
+    """Return the first available isochrone-capable method on ``client``."""
+
+    for candidate in ("isochrones", "isochrone", "travel_boundary", "compute_isochrones"):
+        method = getattr(client, candidate, None)
+        if callable(method):
+            return method
+    return None
+
+
 def _extract_route_metrics(route_payload: Mapping[str, Any]) -> Optional[Tuple[float, float]]:
     """Extract distance (meters) and duration (seconds) from a routing response."""
 
@@ -593,10 +603,11 @@ class GoogleMapsRoutingProvider:
         profile: str,
         range_seconds: Sequence[int],
     ) -> Optional[IsochroneResult]:
-        if not hasattr(self._client, "isochrones"):
+        isochrone_method = _get_google_isochrone_method(self._client)
+        if isochrone_method is None:
             raise NotImplementedError("Google provider does not expose isochrones")
         try:
-            response = self._client.isochrones(
+            response = isochrone_method(
                 centre=centre,
                 profile=profile,
                 range_seconds=list(range_seconds),
@@ -605,6 +616,8 @@ class GoogleMapsRoutingProvider:
             if _GoogleMapsApiError is not None and isinstance(exc, _GoogleMapsApiError):
                 _raise_google_maps_error("isochrones", exc)
             raise RoutingError(f"Google Maps isochrone failed: {exc}") from exc
-        if not isinstance(response, Mapping):
-            raise RoutingError("Google isochrone response must be a mapping")
-        return IsochroneResult(raw=response)
+        if isinstance(response, Mapping):
+            return IsochroneResult(raw=response)
+        if isinstance(response, Sequence):
+            return IsochroneResult(raw={"paths": response})
+        raise RoutingError("Google isochrone response must be a mapping or sequence")
