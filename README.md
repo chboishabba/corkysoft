@@ -34,6 +34,7 @@ Explore the main dashboard workflows currently deployable locally.
 - [Data Model & Storage](#data-model--storage)
 - [Testing](#testing)
 - [Documentation](#documentation)
+  - [Media ingest workflow](docs/media_ingest.md)
 - [Roadmap](#roadmap)
 
 ## Overview
@@ -250,6 +251,19 @@ Flags:
 Historical jobs with geocoded origins/destinations backfill the mock data so the map always has active corridors. If no jobs
 match the window, the ingestor chains depot-to-depot routes so trucks still depart from a depot before heading toward
 customer origins.
+To ingest real GPS snapshots from a file or stdin (newline-delimited JSON or CSV), stream them into the telemetry harness:
+
+```bash
+python -m analytics.ingest_real_gps snapshots.ndjson --batch-size 250 --iterations 1
+```
+
+Flags:
+- `--db-path`: Target database (defaults to `routes.db` resolution).
+- `--iterations`: Number of batches to process before exiting.
+- `--batch-size`: Number of snapshots per commit.
+- `--format`: Force CSV or JSON when auto-detection is ambiguous.
+
+Historical jobs with geocoded origins/destinations backfill the mock data so the map always has active corridors.
 
 ## Development Workflow
 
@@ -284,11 +298,14 @@ Target a specific area via `pytest tests/test_price_distribution.py` or similar 
 
 ## Documentation
 
+- `docs/media_ingest.md`: Capture→upload workflow for PEC stills and bodycam clips, including triggers, required metadata, hashing, storage layout, and linkage to `movement_events`/items.
 - `docs/live_network_overview.md`: Functional spec for the profitability-focused network map.
 - `docs/price_history.md`: Reference for the price history analytics and lane comparisons.
 - `docs/mock_telemetry_workflow.md`: Details of the telemetry ingestion harness.
 - `docs/architecture.md`: High-level architecture outline covering how the Streamlit shell composes analytics modules and supporting services.
 - `ROADMAP.md`: Active deliverables, progress snapshot, and upcoming work.
+
+PEC photos and bodycam clips follow a capture → queue → upload → storage pipeline with on-device hashing, server-side verification, and foreign-key links back to movement events and tagged items for auditability.
 
 ## Roadmap
 

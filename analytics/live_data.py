@@ -8,7 +8,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import Iterable, Optional, Sequence
+from typing import Iterable, Mapping, Optional, Sequence
 
 import pandas as pd
 
@@ -266,6 +266,30 @@ def _pick_candidate_routes(
     """,
         params,
     ).fetchall()
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                hj.id,
+                o.lat AS origin_lat,
+                o.lon AS origin_lon,
+                d.lat AS dest_lat,
+                d.lon AS dest_lon,
+                hj.distance_km,
+                hj.duration_hr,
+                hr.geojson AS route_geometry
+            FROM historical_jobs AS hj
+            JOIN addresses AS o ON hj.origin_address_id = o.id
+            JOIN addresses AS d ON hj.destination_address_id = d.id
+            LEFT JOIN historical_job_routes AS hr ON hr.historical_job_id = hj.id
+            WHERE o.lat IS NOT NULL
+              AND o.lon IS NOT NULL
+              AND d.lat IS NOT NULL
+              AND d.lon IS NOT NULL
+        """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
     if rows:
         candidates: list[dict[str, float]] = []
         for row in rows:
@@ -491,6 +515,40 @@ def _ensure_utc(dt: datetime) -> datetime:
     return dt.astimezone(UTC)
 
 
+def _apply_duty_cycle(
+    elapsed_seconds: float, drive_limit_seconds: float, rest_seconds: float
+) -> tuple[float, float, bool, float]:
+    """Split *elapsed_seconds* into driving and resting components.
+
+    Returns a tuple of ``(driving_time, rest_time, in_rest, remaining_rest)``
+    where times are expressed in seconds. Duty cycles are disabled when either
+    threshold is zero or negative.
+    """
+
+    if elapsed_seconds <= 0:
+        return 0.0, 0.0, False, 0.0
+
+    if drive_limit_seconds <= 0 or rest_seconds <= 0:
+        return elapsed_seconds, 0.0, False, 0.0
+
+    cycle_seconds = drive_limit_seconds + rest_seconds
+    full_cycles = int(elapsed_seconds // cycle_seconds)
+
+    driving_time = full_cycles * drive_limit_seconds
+    rest_time = full_cycles * rest_seconds
+
+    remainder = elapsed_seconds - (full_cycles * cycle_seconds)
+    driving_time += min(remainder, drive_limit_seconds)
+
+    extra_rest = max(0.0, min(rest_seconds, remainder - drive_limit_seconds))
+    rest_time += extra_rest
+
+    in_rest = drive_limit_seconds < remainder < cycle_seconds
+    remaining_rest = rest_seconds - extra_rest if in_rest else 0.0
+
+    return driving_time, rest_time, in_rest, remaining_rest
+
+
 @dataclass
 class MockTelemetryIngestor:
     """Generate and persist mock telemetry data for the dashboard map."""
@@ -523,8 +581,29 @@ class MockTelemetryIngestor:
             }
         return state
 
-    def run_cycle(self, *, jitter: float = 0.1, now: Optional[datetime] = None) -> None:
-        """Create or update telemetry records for each configured truck."""
+    def run_cycle(
+        self,
+        *,
+        jitter: float = 0.1,
+        now: Optional[datetime] = None,
+        route_speeds: Optional[Mapping[int, float]] = None,
+        metro_speed_kph: float = 50.0,
+        highway_speed_kph: float = 90.0,
+        metro_distance_km: float = 100.0,
+        drive_hours: float = 4.0,
+        rest_minutes: float = 30.0,
+    ) -> None:
+        """Create or update telemetry records for each configured truck.
+
+        :param route_speeds: Optional mapping of historical job IDs to average
+            speed in km/h used to backfill travel time when duration is missing
+            or to override the default heuristics.
+        :param metro_speed_kph: Default speed applied to metro-length routes.
+        :param highway_speed_kph: Default speed applied to long-haul routes.
+        :param metro_distance_km: Distance threshold for the metro defaults.
+        :param drive_hours: Continuous driving window before a rest is required.
+        :param rest_minutes: Length of each mandatory rest period.
+        """
 
         candidates = _pick_candidate_routes(
             self.conn, start_date=self.start_date, end_date=self.end_date
@@ -540,6 +619,18 @@ class MockTelemetryIngestor:
         }
         assigned_job_ids: set[int] = set()
         current_time = now or datetime.now(UTC)
+
+        route_speed_lookup: dict[int, float] = {}
+        if route_speeds:
+            for job_id, speed in route_speeds.items():
+                try:
+                    route_speed_lookup[int(job_id)] = float(speed)
+                except (TypeError, ValueError):
+                    continue
+
+        drive_limit_seconds = max(0.0, float(drive_hours) * 3600.0)
+        rest_seconds = max(0.0, float(rest_minutes) * 60.0)
+        metro_threshold_km = max(0.0, float(metro_distance_km))
 
         active_payload: list[tuple] = []
         truck_payload: list[tuple] = []
@@ -578,15 +669,35 @@ class MockTelemetryIngestor:
                 except Exception:
                     geometry_points = None
 
+            distance_km = route.get("distance_km")
+            try:
+                distance_km = float(distance_km) if distance_km is not None else None
+            except (TypeError, ValueError):
+                distance_km = None
+
             travel_seconds = route.get("travel_seconds")
             if travel_seconds is None and prev_travel_seconds:
                 travel_seconds = prev_travel_seconds
+
+            default_speed_kph = float(
+                metro_speed_kph
+                if distance_km is not None and distance_km <= metro_threshold_km
+                else highway_speed_kph
+            )
+
+            route_speed_kph: Optional[float] = None
+            if route_speed_lookup and route.get("id") is not None:
+                try:
+                    route_speed_kph = route_speed_lookup.get(int(route["id"]))
+                except (TypeError, ValueError):
+                    route_speed_kph = None
+
+            if distance_km is not None and route_speed_kph:
+                travel_seconds = (distance_km / route_speed_kph) * 3600.0
+            elif not travel_seconds and distance_km is not None:
+                travel_seconds = (distance_km / default_speed_kph) * 3600.0
             if not travel_seconds:
-                distance_km = route.get("distance_km")
-                if distance_km:
-                    travel_seconds = float(distance_km) / 70.0 * 3600.0
-                else:
-                    travel_seconds = 3_600.0
+                travel_seconds = 3_600.0
 
             if prev_started:
                 try:
@@ -613,7 +724,10 @@ class MockTelemetryIngestor:
                     started_at = current_time - timedelta(seconds=jitter_seconds)
 
             elapsed = max(0.0, (current_time - started_at).total_seconds())
-            progress = min(1.0, elapsed / travel_seconds) if travel_seconds else 1.0
+            driving_time, rest_time, in_rest, remaining_rest = _apply_duty_cycle(
+                elapsed, drive_limit_seconds, rest_seconds
+            )
+            progress = min(1.0, driving_time / travel_seconds) if travel_seconds else 1.0
 
             if prev_progress is not None and progress < prev_progress:
                 progress = prev_progress
@@ -645,12 +759,32 @@ class MockTelemetryIngestor:
                     route["dest_lon"],
                 )
 
-            distance_km = route.get("distance_km")
-            if distance_km and travel_seconds:
-                speed = (distance_km / (travel_seconds / 3600.0))
-            else:
-                speed = random.uniform(30, 90)
-            eta = started_at + timedelta(seconds=travel_seconds) if travel_seconds else None
+            total_required_rest_blocks = (
+                max(0, math.ceil(travel_seconds / drive_limit_seconds) - 1)
+                if travel_seconds and drive_limit_seconds > 0 and rest_seconds > 0
+                else 0
+            )
+            total_required_rest_time = total_required_rest_blocks * rest_seconds
+            rest_time = min(rest_time, total_required_rest_time)
+            remaining_rest_time = max(0.0, total_required_rest_time - rest_time)
+
+            eta = (
+                started_at + timedelta(seconds=travel_seconds + total_required_rest_time)
+                if travel_seconds
+                else None
+            )
+
+            speed = route_speed_kph
+            if speed is None and distance_km and travel_seconds:
+                speed = distance_km / (travel_seconds / 3600.0)
+            if speed is None:
+                speed = default_speed_kph if distance_km is not None else random.uniform(30, 90)
+            if in_rest:
+                speed = 0.0
+
+            notes = f"Progress {progress:.0%}"
+            if in_rest and remaining_rest_time > 0:
+                notes = f"{notes} (resting {remaining_rest_time / 60.0:.0f}m left)"
 
             truck_payload.append(
                 (
@@ -661,7 +795,7 @@ class MockTelemetryIngestor:
                     current_time.isoformat(),
                     bearing,
                     speed,
-                    f"Progress {progress:.0%}",
+                    notes,
                 )
             )
 
@@ -988,6 +1122,12 @@ def run_mock_ingestor(
     start_date: Optional[date | str] = None,
     end_date: Optional[date | str] = None,
     job_start_hour: int = 8,
+    route_speeds: Optional[Mapping[int, float]] = None,
+    metro_speed_kph: float = 50.0,
+    highway_speed_kph: float = 90.0,
+    metro_distance_km: float = 100.0,
+    drive_hours: float = 4.0,
+    rest_minutes: float = 30.0,
 ) -> None:
     """Run the mock telemetry ingestion loop."""
 
@@ -1005,7 +1145,14 @@ def run_mock_ingestor(
         )
         count = 0
         while True:
-            ingestor.run_cycle()
+            ingestor.run_cycle(
+                route_speeds=route_speeds,
+                metro_speed_kph=metro_speed_kph,
+                highway_speed_kph=highway_speed_kph,
+                metro_distance_km=metro_distance_km,
+                drive_hours=drive_hours,
+                rest_minutes=rest_minutes,
+            )
             count += 1
             if iterations is not None and count >= iterations:
                 break
