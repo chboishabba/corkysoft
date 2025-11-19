@@ -13,7 +13,7 @@ This note documents how operational data flows into Corkysoft, how inventory and
 
 - **Item identity**: Every item on a job carries an `item_id` (UUID) plus optional `asset_tag`/`barcode`. The ingest layer enforces uniqueness per job and rejects unknown tags unless a `create_missing=true` flag is present for supervised runs.
 - **State model**: Inventory lines progress through `created` → `staged` → `loaded` → `in_transit` → `delivered` → `exception`. Each transition is a movement event that can be replayed to rebuild history.
-- **Location hints**: Scans capture `lat`, `lon`, and `geofence_id` (depot/warehouse) so dashboards can reason about dwell time and custody. When GPS is absent, the depot geofence becomes the fallback.
+- **Location hints**: Scans capture `lat`, `lon`, and `geofence_id` (depot/warehouse) so dashboards can reason about dwell time and custody. When GPS is absent, we need to decide how we handle this. Maybe store as null, or would there be any reason to store anything?
 - **Reconciliation jobs**: Nightly workers compare expected inventory states against the latest movement events. Drifts (items still `staged` after a route departure) are written to an `inventory_exceptions` table for dashboard surfacing.
 - **Audit trail**: Each update stores `captured_by`, `role`, device metadata, and a monotonic `sequence_no` so out-of-order uploads can be reassembled.
 
