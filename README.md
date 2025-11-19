@@ -35,6 +35,7 @@ Explore the main dashboard workflows currently deployable locally.
 - [Testing](#testing)
 - [Documentation](#documentation)
   - [Media ingest workflow](docs/media_ingest.md)
+  - [Ingest, inventory, and logistics](docs/ingest_inventory_logistics.md)
 - [Roadmap](#roadmap)
 
 ## Overview
@@ -299,6 +300,7 @@ Target a specific area via `pytest tests/test_price_distribution.py` or similar 
 ## Documentation
 
 - `docs/media_ingest.md`: Capture→upload workflow for PEC stills and bodycam clips, including triggers, required metadata, hashing, storage layout, and linkage to `movement_events`/items.
+- `docs/ingest_inventory_logistics.md`: Contracts for ingest payloads, inventory reconciliation, and logistics movement events plus their linkage to jobs, telemetry, and dashboard overlays.
 - `docs/live_network_overview.md`: Functional spec for the profitability-focused network map.
 - `docs/price_history.md`: Reference for the price history analytics and lane comparisons.
 - `docs/mock_telemetry_workflow.md`: Details of the telemetry ingestion harness.
