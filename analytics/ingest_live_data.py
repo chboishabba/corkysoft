@@ -54,6 +54,8 @@ def parse_args() -> argparse.Namespace:
         dest="end_date",
         default=None,
         help="Latest historical job date (YYYY-MM-DD) to include.",
+    )
+    parser.add_argument(
         "--route-speed",
         dest="route_speeds",
         action="append",

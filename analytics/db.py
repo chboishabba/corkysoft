@@ -173,6 +173,26 @@ CREATE TABLE IF NOT EXISTS shipments (
     FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL,
     FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS driver_shifts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shift_date TEXT NOT NULL,
+    truck_id TEXT,
+    worker_id INTEGER,
+    ticket_numbers TEXT,
+    shift_start TEXT,
+    shift_end TEXT,
+    hours REAL,
+    hourly_rate REAL,
+    cost_total REAL,
+    notes TEXT,
+    source TEXT,
+    imported_at TEXT NOT NULL,
+    UNIQUE(shift_date, truck_id, worker_id, shift_start, shift_end, ticket_numbers),
+    FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL,
+    FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_driver_shifts_date ON driver_shifts(shift_date);
 """
 
 
@@ -310,6 +330,22 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> Sequence[str]:
     """Return the column names for *table* in the current connection."""
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return [row[1] for row in rows]
+
+
+def _ensure_driver_shift_columns(conn: sqlite3.Connection) -> None:
+    columns = _table_columns(conn, "driver_shifts") if _table_exists(conn, "driver_shifts") else []
+    declarations = {
+        "ticket_numbers": "TEXT",
+        "shift_start": "TEXT",
+        "shift_end": "TEXT",
+        "notes": "TEXT",
+        "source": "TEXT",
+        "imported_at": "TEXT NOT NULL DEFAULT ''",
+    }
+    for column, declaration in declarations.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE driver_shifts ADD COLUMN {column} {declaration}")
+
 
 
 def ensure_historical_job_routes_table(conn: sqlite3.Connection) -> None:
@@ -747,6 +783,45 @@ def create_shipment(
     return conn.execute(
         "SELECT * FROM shipments WHERE id = last_insert_rowid()"
     ).fetchone()
+
+
+def fetch_driver_shifts(
+    conn: sqlite3.Connection,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    worker_names: Sequence[str] | None = None,
+    truck_ids: Sequence[str] | None = None,
+) -> list[sqlite3.Row]:
+    """Return driver shifts matching the provided filters."""
+
+    filters: list[str] = []
+    params: list[object] = []
+
+    if start_date:
+        filters.append("ds.shift_date >= ?")
+        params.append(start_date)
+    if end_date:
+        filters.append("ds.shift_date <= ?")
+        params.append(end_date)
+    if worker_names:
+        filters.append("w.name IN (" + ",".join(["?"] * len(worker_names)) + ")")
+        params.extend(worker_names)
+    if truck_ids:
+        filters.append("ds.truck_id IN (" + ",".join(["?"] * len(truck_ids)) + ")")
+        params.extend(truck_ids)
+
+    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+    query = f"""
+        SELECT
+            ds.*, w.name AS worker_name, t.name AS truck_name
+        FROM driver_shifts ds
+        LEFT JOIN workers w ON ds.worker_id = w.id
+        LEFT JOIN trucks t ON ds.truck_id = t.truck_id
+        {where_clause}
+        ORDER BY ds.shift_date DESC, ds.shift_start
+    """
+    return list(conn.execute(query, params))
 
 
 def fetch_shipments_with_context(conn: sqlite3.Connection) -> list[sqlite3.Row]:
