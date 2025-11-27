@@ -141,14 +141,28 @@ CREATE TABLE IF NOT EXISTS historical_jobs (
   UNIQUE(job_date, origin, destination, client, quoted_price)
 );
 
+CREATE TABLE IF NOT EXISTS suppliers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  company_name TEXT NOT NULL,
+  contact_name TEXT,
+  contact_number TEXT,
+  email TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(company_name)
+);
+
 CREATE TABLE IF NOT EXISTS inventory_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   description TEXT DEFAULT '',
   quantity INTEGER NOT NULL DEFAULT 0,
   unit TEXT DEFAULT 'unit',
+  supplier_id INTEGER,
   updated_at TEXT,
-  UNIQUE(name)
+  UNIQUE(name),
+  FOREIGN KEY(supplier_id) REFERENCES suppliers(id)
 );
 
 CREATE TABLE IF NOT EXISTS workers (
@@ -297,6 +311,22 @@ def migrate_schema(conn: sqlite3.Connection):
             conn.execute(create_sql)
 
     ensure_table(
+        "suppliers",
+        """
+        CREATE TABLE IF NOT EXISTS suppliers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_name TEXT NOT NULL,
+            contact_name TEXT,
+            contact_number TEXT,
+            email TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(company_name)
+        )
+        """,
+    )
+    ensure_table(
         "inventory_items",
         """
         CREATE TABLE IF NOT EXISTS inventory_items (
@@ -305,11 +335,18 @@ def migrate_schema(conn: sqlite3.Connection):
             description TEXT DEFAULT '',
             quantity INTEGER NOT NULL DEFAULT 0,
             unit TEXT DEFAULT 'unit',
+            supplier_id INTEGER,
             updated_at TEXT,
-            UNIQUE(name)
+            UNIQUE(name),
+            FOREIGN KEY(supplier_id) REFERENCES suppliers(id)
         )
         """,
     )
+    inv_columns = {r[1] for r in conn.execute("PRAGMA table_info(inventory_items)")}
+    if "supplier_id" not in inv_columns:
+        conn.execute(
+            "ALTER TABLE inventory_items ADD COLUMN supplier_id INTEGER REFERENCES suppliers(id)"
+        )
     ensure_table(
         "workers",
         """

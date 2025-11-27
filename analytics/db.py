@@ -5,6 +5,7 @@ import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from urllib.parse import quote_plus
 from typing import IO, Iterable, Optional, Sequence
 
 import pandas as pd
@@ -83,14 +84,28 @@ CREATE TABLE IF NOT EXISTS jobs (
     updated_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS suppliers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_name TEXT NOT NULL,
+    contact_name TEXT,
+    contact_number TEXT,
+    email TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(company_name)
+);
+
 CREATE TABLE IF NOT EXISTS inventory_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     description TEXT DEFAULT '',
     quantity INTEGER NOT NULL DEFAULT 0,
     unit TEXT DEFAULT 'unit',
+    supplier_id INTEGER,
     updated_at TEXT,
-    UNIQUE(name)
+    UNIQUE(name),
+    FOREIGN KEY(supplier_id) REFERENCES suppliers(id)
 );
 
 CREATE TABLE IF NOT EXISTS workers (
@@ -283,6 +298,8 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
     """Create empty dashboard tables so the UI can load before data imports."""
 
     conn.executescript(_DASHBOARD_SCHEMA_SQL)
+    ensure_suppliers_table(conn)
+
     hist_columns = _table_columns(conn, "historical_jobs")
     if "client_id" not in hist_columns:
         conn.execute("ALTER TABLE historical_jobs ADD COLUMN client_id INTEGER")
@@ -472,21 +489,23 @@ def upsert_inventory_item(
     description: str = "",
     quantity: int = 0,
     unit: str = "unit",
+    supplier_id: int | None = None,
 ) -> sqlite3.Row:
     """Create or update an inventory item and return the stored row."""
 
     timestamp = datetime.now(UTC).isoformat()
     conn.execute(
         """
-        INSERT INTO inventory_items (name, description, quantity, unit, updated_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO inventory_items (name, description, quantity, unit, supplier_id, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(name) DO UPDATE SET
             description = excluded.description,
             quantity = excluded.quantity,
             unit = excluded.unit,
+            supplier_id = excluded.supplier_id,
             updated_at = excluded.updated_at
         """,
-        (name, description, int(quantity), unit, timestamp),
+        (name, description, int(quantity), unit, supplier_id, timestamp),
     )
     conn.commit()
     return conn.execute(
@@ -497,7 +516,159 @@ def upsert_inventory_item(
 def list_inventory(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Return all inventory items ordered by name."""
 
-    return list(conn.execute("SELECT * FROM inventory_items ORDER BY name"))
+    return list(
+        conn.execute(
+            """
+            SELECT
+                i.*, 
+                s.company_name AS supplier_company_name,
+                s.contact_name AS supplier_contact_name,
+                s.contact_number AS supplier_contact_number,
+                s.email AS supplier_email,
+                s.notes AS supplier_notes
+            FROM inventory_items AS i
+            LEFT JOIN suppliers AS s ON i.supplier_id = s.id
+            ORDER BY i.name
+            """
+        )
+    )
+
+
+def upsert_supplier(
+    conn: sqlite3.Connection,
+    *,
+    company_name: str,
+    contact_name: str | None = None,
+    contact_number: str | None = None,
+    email: str | None = None,
+    notes: str | None = None,
+) -> sqlite3.Row:
+    """Create or update a supplier record by company name."""
+
+    if not company_name.strip():
+        raise ValueError("Supplier company name is required")
+
+    timestamp = datetime.now(UTC).isoformat()
+    conn.execute(
+        """
+        INSERT INTO suppliers (
+            company_name, contact_name, contact_number, email, notes, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(company_name) DO UPDATE SET
+            contact_name = excluded.contact_name,
+            contact_number = excluded.contact_number,
+            email = excluded.email,
+            notes = excluded.notes,
+            updated_at = excluded.updated_at
+        """,
+        (
+            company_name.strip(),
+            _clean_optional_str(contact_name),
+            _clean_optional_str(contact_number),
+            _clean_optional_str(email),
+            _clean_optional_str(notes),
+            timestamp,
+            timestamp,
+        ),
+    )
+    conn.commit()
+    return conn.execute(
+        "SELECT * FROM suppliers WHERE company_name = ?", (company_name.strip(),)
+    ).fetchone()
+
+
+def list_suppliers(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Return suppliers ordered by company name."""
+
+    return list(
+        conn.execute(
+            "SELECT * FROM suppliers ORDER BY LOWER(company_name), company_name"
+        )
+    )
+
+
+def import_suppliers_from_google_sheet(
+    conn: sqlite3.Connection,
+    *,
+    sheet_id: str | None = None,
+    sheet_name: str = "SUPPLIERS",
+    csv_url: str | None = None,
+    dataframe: pd.DataFrame | None = None,
+) -> int:
+    """Import suppliers from a Google Sheet export or DataFrame.
+
+    Returns the number of supplier rows inserted or updated.
+    """
+
+    ensure_suppliers_table(conn)
+
+    df = dataframe
+    if df is None:
+        resolved_url = csv_url or _build_suppliers_sheet_url(sheet_id, sheet_name)
+        if resolved_url is None:
+            raise ValueError("Provide a dataframe, csv_url, or sheet_id for import")
+        df = pd.read_csv(resolved_url)
+
+    if df.empty:
+        return 0
+
+    normalized = df.rename(columns=_normalize_supplier_column)
+    required_field = "company_name"
+    if required_field not in normalized.columns:
+        raise ValueError("Suppliers sheet must include a company name column")
+
+    imported = 0
+    for _, row in normalized.iterrows():
+        company = _clean_optional_str(row.get("company_name"))
+        if not company:
+            continue
+        contact_name = _clean_optional_str(row.get("contact_name"))
+        contact_number = _clean_optional_str(row.get("contact_number"))
+        email = _clean_optional_str(row.get("email"))
+        notes = _clean_optional_str(row.get("notes"))
+        upsert_supplier(
+            conn,
+            company_name=company,
+            contact_name=contact_name,
+            contact_number=contact_number,
+            email=email,
+            notes=notes,
+        )
+        imported += 1
+    return imported
+
+
+def _clean_optional_str(value: object | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, float) and pd.isna(value):
+        return None
+    value_str = str(value).strip()
+    return value_str or None
+
+
+def _normalize_supplier_column(column_name: str) -> str:
+    normalized = column_name.strip().lower().replace(" ", "_")
+    if normalized in {"company", "supplier"}:
+        return "company_name"
+    if normalized in {"contact", "contact_person"}:
+        return "contact_name"
+    if normalized in {"phone", "phone_number"}:
+        return "contact_number"
+    return normalized
+
+
+def _build_suppliers_sheet_url(
+    sheet_id: str | None, sheet_name: str, *, env_var: str = "SUPPLIERS_SHEET_ID"
+) -> str | None:
+    resolved_id = sheet_id or os.environ.get(env_var)
+    if not resolved_id:
+        explicit_url = os.environ.get("SUPPLIERS_SHEET_URL")
+        return explicit_url
+    return (
+        f"https://docs.google.com/spreadsheets/d/{resolved_id}/gviz/tq?tqx=out:csv"
+        f"&sheet={quote_plus(sheet_name)}"
+    )
 
 
 def upsert_truck(
@@ -841,6 +1012,10 @@ def fetch_shipments_with_context(conn: sqlite3.Connection) -> list[sqlite3.Row]:
             h.destination AS historical_destination,
             i.name AS inventory_name,
             i.quantity AS inventory_quantity,
+            sup.company_name AS supplier_company_name,
+            sup.contact_name AS supplier_contact_name,
+            sup.contact_number AS supplier_contact_number,
+            sup.email AS supplier_email,
             t.truck_id,
             t.name AS truck_name,
             w.name AS worker_name,
@@ -851,6 +1026,7 @@ def fetch_shipments_with_context(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         LEFT JOIN jobs AS j ON s.job_id = j.id
         LEFT JOIN historical_jobs AS h ON s.historical_job_id = h.id
         LEFT JOIN inventory_items AS i ON s.inventory_item_id = i.id
+        LEFT JOIN suppliers AS sup ON i.supplier_id = sup.id
         LEFT JOIN trucks AS t ON s.truck_id = t.truck_id
         LEFT JOIN workers AS w ON s.worker_id = w.id
         ORDER BY s.id
