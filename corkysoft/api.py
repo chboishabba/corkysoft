@@ -144,6 +144,13 @@ class DriverShiftResponse(BaseModel):
     shiftEnd: Optional[str] = Field(
         default=None, description="Recorded finish time for the shift"
     )
+    shiftWindowStart: Optional[str] = Field(
+        default=None, description="Planned or rostered window start"
+    )
+    shiftWindowEnd: Optional[str] = Field(
+        default=None, description="Planned or rostered window end"
+    )
+    role: Optional[str] = Field(default=None, description="Role assigned for the shift")
     hours: Optional[float] = Field(
         default=None, description="Duration of the shift in hours"
     )
@@ -152,6 +159,18 @@ class DriverShiftResponse(BaseModel):
     )
     costTotal: Optional[float] = Field(
         default=None, description="Total cost recorded for the shift"
+    )
+    jobId: Optional[int] = Field(
+        default=None, description="Job identifier the shift is linked to"
+    )
+    shipmentId: Optional[int] = Field(
+        default=None, description="Shipment identifier the shift is linked to"
+    )
+    jobOrigin: Optional[str] = Field(
+        default=None, description="Origin of the linked job if available"
+    )
+    jobDestination: Optional[str] = Field(
+        default=None, description="Destination of the linked job if available"
     )
     source: Optional[str] = Field(
         default=None, description="Origin of the shift record (e.g. sheet tab)"
@@ -332,9 +351,16 @@ def list_driver_shifts(
                 ticketNumbers=row["ticket_numbers"],
                 shiftStart=row["shift_start"],
                 shiftEnd=row["shift_end"],
+                shiftWindowStart=_optional_column(row, "shift_window_start"),
+                shiftWindowEnd=_optional_column(row, "shift_window_end"),
+                role=_optional_column(row, "role"),
                 hours=row["hours"],
                 hourlyRate=row["hourly_rate"],
                 costTotal=row["cost_total"],
+                jobId=_optional_column(row, "linked_job_id"),
+                shipmentId=_optional_column(row, "shipment_id"),
+                jobOrigin=_optional_column(row, "job_origin"),
+                jobDestination=_optional_column(row, "job_destination"),
                 source=row["source"],
                 importedAt=row["imported_at"],
             )

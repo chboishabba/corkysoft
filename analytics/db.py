@@ -194,9 +194,14 @@ CREATE TABLE IF NOT EXISTS driver_shifts (
     shift_date TEXT NOT NULL,
     truck_id TEXT,
     worker_id INTEGER,
+    job_id INTEGER,
+    shipment_id INTEGER,
     ticket_numbers TEXT,
     shift_start TEXT,
     shift_end TEXT,
+    shift_window_start TEXT,
+    shift_window_end TEXT,
+    role TEXT,
     hours REAL,
     hourly_rate REAL,
     cost_total REAL,
@@ -205,9 +210,13 @@ CREATE TABLE IF NOT EXISTS driver_shifts (
     imported_at TEXT NOT NULL,
     UNIQUE(shift_date, truck_id, worker_id, shift_start, shift_end, ticket_numbers),
     FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL,
-    FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
+    FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL,
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL,
+    FOREIGN KEY(shipment_id) REFERENCES shipments(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_driver_shifts_date ON driver_shifts(shift_date);
+CREATE INDEX IF NOT EXISTS idx_driver_shifts_job ON driver_shifts(job_id);
+CREATE INDEX IF NOT EXISTS idx_driver_shifts_shipment ON driver_shifts(shipment_id);
 """
 
 
@@ -294,6 +303,27 @@ def bootstrap_parameters(
             set_parameter_value(conn, key, value, description)
 
 
+def ensure_suppliers_table(conn: sqlite3.Connection) -> None:
+    """Ensure the suppliers table exists for downstream imports."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS suppliers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_name TEXT NOT NULL,
+            contact_name TEXT,
+            contact_number TEXT,
+            email TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(company_name)
+        )
+        """
+    )
+    conn.commit()
+
+
 def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
     """Create empty dashboard tables so the UI can load before data imports."""
 
@@ -328,6 +358,13 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
 
     ensure_historical_job_routes_table(conn)
     _ensure_vehicle_details_table(conn)
+    _ensure_driver_shift_columns(conn)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_driver_shifts_job ON driver_shifts(job_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_driver_shifts_shipment ON driver_shifts(shipment_id)"
+    )
     conn.commit()
 
     for table_name in (
@@ -352,9 +389,14 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> Sequence[str]:
 def _ensure_driver_shift_columns(conn: sqlite3.Connection) -> None:
     columns = _table_columns(conn, "driver_shifts") if _table_exists(conn, "driver_shifts") else []
     declarations = {
+        "job_id": "INTEGER REFERENCES jobs(id) ON DELETE SET NULL",
+        "shipment_id": "INTEGER REFERENCES shipments(id) ON DELETE SET NULL",
         "ticket_numbers": "TEXT",
         "shift_start": "TEXT",
         "shift_end": "TEXT",
+        "shift_window_start": "TEXT",
+        "shift_window_end": "TEXT",
+        "role": "TEXT",
         "notes": "TEXT",
         "source": "TEXT",
         "imported_at": "TEXT NOT NULL DEFAULT ''",
@@ -837,6 +879,140 @@ def upsert_worker(
     return conn.execute("SELECT * FROM workers WHERE name = ?", (name,)).fetchone()
 
 
+def _resolve_shift_job_id(
+    conn: sqlite3.Connection, job_id: int | None, shipment_id: int | None
+) -> int | None:
+    """Validate and resolve the job linked to a driver shift."""
+
+    resolved_job_id = job_id
+    shipment_row = None
+
+    if shipment_id is not None:
+        shipment_row = conn.execute(
+            "SELECT id, job_id FROM shipments WHERE id = ?", (shipment_id,)
+        ).fetchone()
+        if shipment_row is None:
+            raise ValueError(f"Shipment {shipment_id} does not exist")
+        shipment_job_id = shipment_row[1]
+        if resolved_job_id is None:
+            resolved_job_id = shipment_job_id
+        elif shipment_job_id is not None and shipment_job_id != resolved_job_id:
+            raise ValueError(
+                "Shipment is linked to a different job than the shift specifies"
+            )
+
+    if resolved_job_id is not None:
+        job_row = conn.execute("SELECT 1 FROM jobs WHERE id = ?", (resolved_job_id,)).fetchone()
+        if job_row is None:
+            raise ValueError(f"Job {resolved_job_id} does not exist")
+
+    return resolved_job_id
+
+
+def upsert_driver_shift(
+    conn: sqlite3.Connection,
+    *,
+    shift_date: str,
+    truck_id: str | None = None,
+    worker_name: str | None = None,
+    ticket_numbers: str | None = None,
+    shift_start: str | None = None,
+    shift_end: str | None = None,
+    shift_window_start: str | None = None,
+    shift_window_end: str | None = None,
+    role: str | None = None,
+    hours: float | None = None,
+    hourly_rate: float | None = None,
+    cost_total: float | None = None,
+    job_id: int | None = None,
+    shipment_id: int | None = None,
+    notes: str | None = None,
+    source: str | None = None,
+    imported_at: str | None = None,
+) -> tuple[sqlite3.Row, bool]:
+    """Insert or update a driver shift entry keyed by date/vehicle/worker/time."""
+
+    _ensure_driver_shift_columns(conn)
+
+    worker_id: int | None = None
+    if worker_name:
+        worker = upsert_worker(conn, name=worker_name)
+        worker_id = int(worker["id"])
+
+    resolved_job_id = _resolve_shift_job_id(conn, job_id, shipment_id)
+
+    calculated_cost = cost_total
+    if calculated_cost is None and hours is not None and hourly_rate is not None:
+        calculated_cost = float(hours) * float(hourly_rate)
+
+    timestamp = imported_at or datetime.now(UTC).isoformat()
+    previous_row = conn.execute(
+        """
+        SELECT * FROM driver_shifts
+        WHERE shift_date = ? AND truck_id IS ? AND worker_id IS ?
+          AND shift_start IS ? AND shift_end IS ? AND ticket_numbers IS ?
+        """,
+        (shift_date, truck_id, worker_id, shift_start, shift_end, ticket_numbers),
+    ).fetchone()
+
+    conn.execute(
+        """
+        INSERT INTO driver_shifts (
+            shift_date, truck_id, worker_id, job_id, shipment_id, ticket_numbers,
+            shift_start, shift_end, shift_window_start, shift_window_end, role,
+            hours, hourly_rate, cost_total, notes, source, imported_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(shift_date, truck_id, worker_id, shift_start, shift_end, ticket_numbers)
+        DO UPDATE SET
+            job_id = excluded.job_id,
+            shipment_id = excluded.shipment_id,
+            shift_start = excluded.shift_start,
+            shift_end = excluded.shift_end,
+            shift_window_start = excluded.shift_window_start,
+            shift_window_end = excluded.shift_window_end,
+            role = excluded.role,
+            hours = excluded.hours,
+            hourly_rate = excluded.hourly_rate,
+            cost_total = excluded.cost_total,
+            notes = excluded.notes,
+            source = excluded.source,
+            imported_at = excluded.imported_at,
+            truck_id = excluded.truck_id,
+            worker_id = excluded.worker_id,
+            ticket_numbers = excluded.ticket_numbers
+        """,
+        (
+            shift_date,
+            truck_id,
+            worker_id,
+            resolved_job_id,
+            shipment_id,
+            ticket_numbers,
+            shift_start,
+            shift_end,
+            shift_window_start,
+            shift_window_end,
+            role,
+            hours,
+            hourly_rate,
+            calculated_cost,
+            notes,
+            source,
+            timestamp,
+        ),
+    )
+    conn.commit()
+    row = conn.execute(
+        """
+        SELECT * FROM driver_shifts
+        WHERE shift_date = ? AND truck_id IS ? AND worker_id IS ?
+          AND shift_start IS ? AND shift_end IS ? AND ticket_numbers IS ?
+        """,
+        (shift_date, truck_id, worker_id, shift_start, shift_end, ticket_numbers),
+    ).fetchone()
+    return row, previous_row is None
+
+
 def _coalesce_name(first_name: str | float | None, last_name: str | float | None) -> str:
     parts = [
         str(first_name).strip() if first_name is not None and not pd.isna(first_name) else "",
@@ -985,12 +1161,52 @@ def fetch_driver_shifts(
     where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
     query = f"""
         SELECT
-            ds.*, w.name AS worker_name, t.name AS truck_name
+            ds.*, w.name AS worker_name, t.name AS truck_name,
+            COALESCE(ds.job_id, s.job_id) AS linked_job_id,
+            s.job_id AS shipment_job_id,
+            j.origin AS job_origin,
+            j.destination AS job_destination
         FROM driver_shifts ds
         LEFT JOIN workers w ON ds.worker_id = w.id
         LEFT JOIN trucks t ON ds.truck_id = t.truck_id
+        LEFT JOIN shipments s ON ds.shipment_id = s.id
+        LEFT JOIN jobs j ON COALESCE(ds.job_id, s.job_id) = j.id
         {where_clause}
         ORDER BY ds.shift_date DESC, ds.shift_start
+    """
+    return list(conn.execute(query, params))
+
+
+def rollup_driver_shift_costs_by_job(
+    conn: sqlite3.Connection,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[sqlite3.Row]:
+    """Aggregate driver shift hours and costs grouped by job."""
+
+    filters: list[str] = ["COALESCE(ds.job_id, s.job_id) IS NOT NULL"]
+    params: list[object] = []
+
+    if start_date:
+        filters.append("ds.shift_date >= ?")
+        params.append(start_date)
+    if end_date:
+        filters.append("ds.shift_date <= ?")
+        params.append(end_date)
+
+    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+    query = f"""
+        SELECT
+            COALESCE(ds.job_id, s.job_id) AS job_id,
+            COUNT(*) AS shift_count,
+            SUM(ds.hours) AS total_hours,
+            SUM(ds.cost_total) AS total_cost
+        FROM driver_shifts ds
+        LEFT JOIN shipments s ON ds.shipment_id = s.id
+        {where_clause}
+        GROUP BY COALESCE(ds.job_id, s.job_id)
+        ORDER BY job_id
     """
     return list(conn.execute(query, params))
 

@@ -233,9 +233,14 @@ CREATE TABLE IF NOT EXISTS driver_shifts (
   shift_date TEXT NOT NULL,
   truck_id TEXT,
   worker_id INTEGER,
+  job_id INTEGER,
+  shipment_id INTEGER,
   ticket_numbers TEXT,
   shift_start TEXT,
   shift_end TEXT,
+  shift_window_start TEXT,
+  shift_window_end TEXT,
+  role TEXT,
   hours REAL,
   hourly_rate REAL,
   cost_total REAL,
@@ -244,9 +249,13 @@ CREATE TABLE IF NOT EXISTS driver_shifts (
   imported_at TEXT NOT NULL,
   UNIQUE(shift_date, truck_id, worker_id, shift_start, shift_end, ticket_numbers),
   FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL,
-  FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
+  FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL,
+  FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL,
+  FOREIGN KEY(shipment_id) REFERENCES shipments(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_driver_shifts_date ON driver_shifts(shift_date);
+CREATE INDEX IF NOT EXISTS idx_driver_shifts_job ON driver_shifts(job_id);
+CREATE INDEX IF NOT EXISTS idx_driver_shifts_shipment ON driver_shifts(shipment_id);
 """
 
 def ensure_schema(conn: sqlite3.Connection):
@@ -403,6 +412,27 @@ def migrate_schema(conn: sqlite3.Connection):
             FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
         )
         """,
+    )
+
+    shift_columns = {r[1] for r in conn.execute("PRAGMA table_info(driver_shifts)")}
+
+    def add_shift_column(col: str, decl: str) -> None:
+        if col not in shift_columns:
+            conn.execute(f"ALTER TABLE driver_shifts ADD COLUMN {col} {decl}")
+
+    add_shift_column("job_id", "INTEGER REFERENCES jobs(id) ON DELETE SET NULL")
+    add_shift_column(
+        "shipment_id", "INTEGER REFERENCES shipments(id) ON DELETE SET NULL"
+    )
+    add_shift_column("shift_window_start", "TEXT")
+    add_shift_column("shift_window_end", "TEXT")
+    add_shift_column("role", "TEXT")
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_driver_shifts_job ON driver_shifts(job_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_driver_shifts_shipment ON driver_shifts(shipment_id)"
     )
 
     def backfill_shipments() -> None:
