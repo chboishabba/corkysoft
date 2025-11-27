@@ -156,6 +156,8 @@ CREATE TABLE IF NOT EXISTS workers (
   name TEXT NOT NULL,
   role TEXT DEFAULT '',
   phone TEXT DEFAULT '',
+  rate REAL,
+  tickets INTEGER,
   active INTEGER NOT NULL DEFAULT 1,
   hired_at TEXT,
   updated_at TEXT,
@@ -296,6 +298,8 @@ def migrate_schema(conn: sqlite3.Connection):
             name TEXT NOT NULL,
             role TEXT DEFAULT '',
             phone TEXT DEFAULT '',
+            rate REAL,
+            tickets INTEGER,
             active INTEGER NOT NULL DEFAULT 1,
             hired_at TEXT,
             updated_at TEXT,
@@ -303,6 +307,10 @@ def migrate_schema(conn: sqlite3.Connection):
         )
         """,
     )
+    worker_columns = {r[1] for r in conn.execute("PRAGMA table_info(workers)")}
+    for column, declaration in {"rate": "REAL", "tickets": "INTEGER"}.items():
+        if column not in worker_columns:
+            conn.execute(f"ALTER TABLE workers ADD COLUMN {column} {declaration}")
     ensure_table(
         "trucks",
         """
