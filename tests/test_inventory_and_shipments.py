@@ -26,10 +26,24 @@ def test_schema_includes_logistics_tables(tmp_path):
             )
         }
 
-        assert {"inventory_items", "inventory_movements", "workers", "trucks", "shipments"}.issubset(tables)
+        assert {
+            "inventory_items",
+            "inventory_movements",
+            "workers",
+            "trucks",
+            "shipments",
+            "job_segments",
+            "job_segment_workers",
+            "job_segment_vehicles",
+            "worker_roles",
+            "worker_compliances",
+        }.issubset(tables)
 
         worker_columns = {row[1] for row in conn.execute("PRAGMA table_info(workers)")}
         assert {"rate", "tickets"}.issubset(worker_columns)
+
+        shipment_columns = {row[1] for row in conn.execute("PRAGMA table_info(shipments)")}
+        assert "segment_id" in shipment_columns
     finally:
         conn.close()
 
@@ -52,7 +66,7 @@ def test_shipments_backfilled_for_jobs(tmp_path):
 
         shipments = conn.execute(
             """
-            SELECT job_id, historical_job_id, status, quantity, from_location, to_location
+            SELECT job_id, historical_job_id, status, quantity, from_location, to_location, segment_id
             FROM shipments
             ORDER BY id
             """
@@ -60,15 +74,22 @@ def test_shipments_backfilled_for_jobs(tmp_path):
 
         assert len(shipments) == 2
         assert shipments[0]["job_id"] is not None
+        segment = conn.execute(
+            "SELECT id, job_id, segment_sequence FROM job_segments WHERE job_id = ?",
+            (shipments[0]["job_id"],),
+        ).fetchone()
+        assert segment is not None
         assert shipments[0]["status"] == "planned"
         assert shipments[0]["quantity"] == 1
         assert shipments[0]["from_location"] == "A"
         assert shipments[0]["to_location"] == "B"
+        assert shipments[0]["segment_id"] == segment["id"]
         assert shipments[1]["historical_job_id"] is not None
         assert shipments[1]["status"] == "delivered"
         assert shipments[1]["quantity"] == 1
         assert shipments[1]["from_location"] == "C"
         assert shipments[1]["to_location"] == "D"
+        assert shipments[1]["segment_id"] is None
     finally:
         conn.close()
 
@@ -99,6 +120,19 @@ def test_crud_helpers_and_views():
         )
 
         assert shipment["job_id"] == job_id
+        assert shipment["segment_id"] is not None
+
+        segment_vehicle = conn.execute(
+            "SELECT * FROM job_segment_vehicles WHERE segment_id = ?",
+            (shipment["segment_id"],),
+        ).fetchone()
+        segment_worker = conn.execute(
+            "SELECT * FROM job_segment_workers WHERE segment_id = ?",
+            (shipment["segment_id"],),
+        ).fetchone()
+
+        assert segment_vehicle["truck_id"] == truck["truck_id"]
+        assert segment_worker["worker_id"] == worker["id"]
 
         rows = db.fetch_shipments_with_context(conn)
         assert len(rows) == 1
@@ -107,6 +141,8 @@ def test_crud_helpers_and_views():
         assert row["inventory_name"] == "Boxes"
         assert row["truck_name"] == "Prime Mover"
         assert row["worker_name"] == "Alex Driver"
+        assert row["segment_worker_names"] == "Alex Driver"
+        assert row["segment_truck_names"] == "Prime Mover"
         assert row["worker_rate"] == 42.5
         assert row["worker_tickets"] == 3
     finally:
@@ -211,11 +247,13 @@ def test_partial_shipments_track_quantity_and_locations():
         assert by_id[first["id"]]["quantity"] == 5
         assert by_id[first["id"]]["from_location"] == "Warehouse"
         assert by_id[first["id"]]["to_location"] == "Staging"
+        assert by_id[first["id"]]["segment_id"] is not None
 
         assert by_id[second["id"]]["quantity"] == 7.5
         assert by_id[second["id"]]["from_location"] == "Warehouse"
         assert by_id[second["id"]]["to_location"] == "Site Alpha"
         assert by_id[second["id"]]["status"] == "in_transit"
+        assert by_id[second["id"]]["segment_id"] is not None
     finally:
         conn.close()
 
@@ -236,5 +274,6 @@ def test_shipments_capture_historical_locations_by_default(tmp_path):
         assert shipment["quantity"] == 1
         assert shipment["from_location"] == "Depot"
         assert shipment["to_location"] == "Client Site"
+        assert shipment["segment_id"] is None
     finally:
         conn.close()
