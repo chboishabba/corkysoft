@@ -115,6 +115,28 @@ CREATE TABLE IF NOT EXISTS trucks (
     updated_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS vehicle_details (
+    truck_id TEXT PRIMARY KEY,
+    state TEXT,
+    rego TEXT,
+    rego_expiry TEXT,
+    make TEXT,
+    model TEXT,
+    year INTEGER,
+    body_type TEXT,
+    description TEXT,
+    nhv_code TEXT,
+    insurance TEXT,
+    odometer INTEGER,
+    last_service TEXT,
+    next_service TEXT,
+    coi_number TEXT,
+    coi_due TEXT,
+    present_driver TEXT,
+    daily_check_complete INTEGER,
+    FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS vehicle_repairs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     truck_id TEXT NOT NULL,
@@ -268,6 +290,7 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE workers ADD COLUMN {column} {declaration}")
 
     ensure_historical_job_routes_table(conn)
+    _ensure_vehicle_details_table(conn)
     conn.commit()
 
     for table_name in (
@@ -302,6 +325,62 @@ def ensure_historical_job_routes_table(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.commit()
+
+
+def _ensure_vehicle_details_table(conn: sqlite3.Connection) -> None:
+    """Create or migrate the vehicle details table used for fleet metadata."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vehicle_details (
+            truck_id TEXT PRIMARY KEY,
+            state TEXT,
+            rego TEXT,
+            rego_expiry TEXT,
+            make TEXT,
+            model TEXT,
+            year INTEGER,
+            body_type TEXT,
+            description TEXT,
+            nhv_code TEXT,
+            insurance TEXT,
+            odometer INTEGER,
+            last_service TEXT,
+            next_service TEXT,
+            coi_number TEXT,
+            coi_due TEXT,
+            present_driver TEXT,
+            daily_check_complete INTEGER,
+            FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    columns = set(_table_columns(conn, "vehicle_details"))
+    column_types = {
+        "state": "TEXT",
+        "rego": "TEXT",
+        "rego_expiry": "TEXT",
+        "make": "TEXT",
+        "model": "TEXT",
+        "year": "INTEGER",
+        "body_type": "TEXT",
+        "description": "TEXT",
+        "nhv_code": "TEXT",
+        "insurance": "TEXT",
+        "odometer": "INTEGER",
+        "last_service": "TEXT",
+        "next_service": "TEXT",
+        "coi_number": "TEXT",
+        "coi_due": "TEXT",
+        "present_driver": "TEXT",
+        "daily_check_complete": "INTEGER",
+    }
+    for column, declaration in column_types.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE vehicle_details ADD COLUMN {column} {declaration}")
+
     conn.commit()
 
 
@@ -413,6 +492,99 @@ def upsert_truck(
     conn.commit()
     return conn.execute(
         "SELECT * FROM trucks WHERE truck_id = ?", (truck_id,)
+    ).fetchone()
+
+
+def upsert_vehicle_details(
+    conn: sqlite3.Connection,
+    *,
+    truck_id: str,
+    state: str | None = None,
+    rego: str | None = None,
+    rego_expiry: str | None = None,
+    make: str | None = None,
+    model: str | None = None,
+    year: int | None = None,
+    body_type: str | None = None,
+    description: str | None = None,
+    nhv_code: str | None = None,
+    insurance: str | None = None,
+    odometer: int | None = None,
+    last_service: str | None = None,
+    next_service: str | None = None,
+    coi_number: str | None = None,
+    coi_due: str | None = None,
+    present_driver: str | None = None,
+    daily_check_complete: bool | None = None,
+) -> sqlite3.Row:
+    """Create or update vehicle metadata for the given ``truck_id``."""
+
+    _ensure_vehicle_details_table(conn)
+    conn.execute(
+        """
+        INSERT INTO vehicle_details (
+            truck_id,
+            state,
+            rego,
+            rego_expiry,
+            make,
+            model,
+            year,
+            body_type,
+            description,
+            nhv_code,
+            insurance,
+            odometer,
+            last_service,
+            next_service,
+            coi_number,
+            coi_due,
+            present_driver,
+            daily_check_complete
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(truck_id) DO UPDATE SET
+            state = excluded.state,
+            rego = excluded.rego,
+            rego_expiry = excluded.rego_expiry,
+            make = excluded.make,
+            model = excluded.model,
+            year = excluded.year,
+            body_type = excluded.body_type,
+            description = excluded.description,
+            nhv_code = excluded.nhv_code,
+            insurance = excluded.insurance,
+            odometer = excluded.odometer,
+            last_service = excluded.last_service,
+            next_service = excluded.next_service,
+            coi_number = excluded.coi_number,
+            coi_due = excluded.coi_due,
+            present_driver = excluded.present_driver,
+            daily_check_complete = excluded.daily_check_complete
+        """,
+        (
+            truck_id,
+            state,
+            rego,
+            rego_expiry,
+            make,
+            model,
+            year,
+            body_type,
+            description,
+            nhv_code,
+            insurance,
+            odometer,
+            last_service,
+            next_service,
+            coi_number,
+            coi_due,
+            present_driver,
+            None if daily_check_complete is None else int(bool(daily_check_complete)),
+        ),
+    )
+    conn.commit()
+    return conn.execute(
+        "SELECT * FROM vehicle_details WHERE truck_id = ?", (truck_id,)
     ).fetchone()
 
 

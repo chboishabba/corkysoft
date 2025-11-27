@@ -173,6 +173,28 @@ CREATE TABLE IF NOT EXISTS trucks (
   updated_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS vehicle_details (
+  truck_id TEXT PRIMARY KEY,
+  state TEXT,
+  rego TEXT,
+  rego_expiry TEXT,
+  make TEXT,
+  model TEXT,
+  year INTEGER,
+  body_type TEXT,
+  description TEXT,
+  nhv_code TEXT,
+  insurance TEXT,
+  odometer INTEGER,
+  last_service TEXT,
+  next_service TEXT,
+  coi_number TEXT,
+  coi_due TEXT,
+  present_driver TEXT,
+  daily_check_complete INTEGER,
+  FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS shipments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   job_id INTEGER,
