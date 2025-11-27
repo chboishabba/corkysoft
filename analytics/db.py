@@ -298,7 +298,7 @@ def bootstrap_parameters(
 
 
 def ensure_suppliers_table(conn: sqlite3.Connection) -> None:
-    """Create the suppliers table if it does not already exist."""
+    """Create or migrate the suppliers table used by inventory features."""
 
     conn.execute(
         """
@@ -315,6 +315,21 @@ def ensure_suppliers_table(conn: sqlite3.Connection) -> None:
         )
         """
     )
+
+    column_declarations = {
+        "contact_name": "TEXT",
+        "contact_number": "TEXT",
+        "email": "TEXT",
+        "notes": "TEXT",
+        "created_at": "TEXT",
+        "updated_at": "TEXT",
+    }
+
+    for column, declaration in column_declarations.items():
+        if column not in _table_columns(conn, "suppliers"):
+            conn.execute(f"ALTER TABLE suppliers ADD COLUMN {column} {declaration}")
+
+    conn.commit()
 
 
 def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
