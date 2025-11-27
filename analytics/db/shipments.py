@@ -1,29 +1,4 @@
-<<<<<<< HEAD
-"""Shipment creation and container helpers."""
-from __future__ import annotations
-
-from .legacy import (
-    create_shipment,
-    fetch_shipments_with_context,
-    upsert_container,
-    upsert_container_booking,
-    upsert_job_by_number,
-    upsert_job_container_allocation,
-    upsert_job_segment,
-)
-
-__all__ = [
-    "create_shipment",
-    "fetch_shipments_with_context",
-    "upsert_container",
-    "upsert_container_booking",
-    "upsert_job_container_allocation",
-    "upsert_job_by_number",
-    "upsert_job_segment",
-]
-=======
 """Shipment and driver shift-related database functions."""
-from __future__ import annotations
 from __future__ import annotations
 
 import sqlite3
@@ -402,4 +377,3 @@ def fetch_shipments_with_context(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         ORDER BY s.id
     """
     return list(conn.execute(query))
->>>>>>> c3ed293 (Remove tracked pycache)
