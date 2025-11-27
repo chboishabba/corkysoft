@@ -1,4 +1,4 @@
-**/__pycache__/
+**/__pycache__/**
 *.db
 
 # Playwright
@@ -8,3 +8,5 @@ node_modules/
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+__pycache__/
+*.pyc

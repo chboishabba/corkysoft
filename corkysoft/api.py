@@ -5,10 +5,10 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Path
+from fastapi import FastAPI, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 
-from analytics.db import connection_scope
+from analytics.db import connection_scope, fetch_driver_shifts
 
 
 def _current_db_path() -> str:
@@ -115,6 +115,49 @@ class JobResponse(BaseModel):
     finalCost: Optional[float] = Field(
         default=None,
         description="Final cost assigned to the job",
+    )
+
+
+class DriverShiftResponse(BaseModel):
+    """Representation of a driver shift entry."""
+
+    id: int = Field(..., description="Primary identifier for the shift")
+    shiftDate: str = Field(..., description="Shift date in ISO format")
+    truckId: Optional[str] = Field(
+        default=None, description="Truck identifier attached to the shift"
+    )
+    truckName: Optional[str] = Field(
+        default=None, description="Friendly truck name if available"
+    )
+    workerId: Optional[int] = Field(
+        default=None, description="Worker identifier attached to the shift"
+    )
+    workerName: Optional[str] = Field(
+        default=None, description="Driver or worker name for the shift"
+    )
+    ticketNumbers: Optional[str] = Field(
+        default=None, description="Ticket numbers or references logged"
+    )
+    shiftStart: Optional[str] = Field(
+        default=None, description="Recorded start time for the shift"
+    )
+    shiftEnd: Optional[str] = Field(
+        default=None, description="Recorded finish time for the shift"
+    )
+    hours: Optional[float] = Field(
+        default=None, description="Duration of the shift in hours"
+    )
+    hourlyRate: Optional[float] = Field(
+        default=None, description="Rate applied to the shift"
+    )
+    costTotal: Optional[float] = Field(
+        default=None, description="Total cost recorded for the shift"
+    )
+    source: Optional[str] = Field(
+        default=None, description="Origin of the shift record (e.g. sheet tab)"
+    )
+    importedAt: Optional[str] = Field(
+        default=None, description="Timestamp when the shift was last imported"
     )
 
 
@@ -246,9 +289,63 @@ def get_job(jobId: str = Path(..., description="Unique job identifier")) -> JobR
     return _build_job_response(row)
 
 
+@app.get(
+    "/driver-shifts",
+    response_model=List[DriverShiftResponse],
+    summary="List driver shifts with optional filters",
+)
+def list_driver_shifts(
+    start_date: Optional[str] = Query(
+        default=None, description="Earliest shift date (YYYY-MM-DD)"
+    ),
+    end_date: Optional[str] = Query(
+        default=None, description="Latest shift date (YYYY-MM-DD)"
+    ),
+    workers: Optional[List[str]] = Query(
+        default=None, description="Filter results to specific worker names"
+    ),
+    trucks: Optional[List[str]] = Query(
+        default=None, description="Filter results to specific truck identifiers"
+    ),
+) -> List[DriverShiftResponse]:
+    """Return driver shifts stored in the ``driver_shifts`` table."""
+
+    with connection_scope(_current_db_path()) as conn:
+        rows = fetch_driver_shifts(
+            conn,
+            start_date=start_date,
+            end_date=end_date,
+            worker_names=workers,
+            truck_ids=trucks,
+        )
+
+    responses: List[DriverShiftResponse] = []
+    for row in rows:
+        responses.append(
+            DriverShiftResponse(
+                id=int(row["id"]),
+                shiftDate=row["shift_date"],
+                truckId=row["truck_id"],
+                truckName=row["truck_name"],
+                workerId=row["worker_id"],
+                workerName=row["worker_name"],
+                ticketNumbers=row["ticket_numbers"],
+                shiftStart=row["shift_start"],
+                shiftEnd=row["shift_end"],
+                hours=row["hours"],
+                hourlyRate=row["hourly_rate"],
+                costTotal=row["cost_total"],
+                source=row["source"],
+                importedAt=row["imported_at"],
+            )
+        )
+    return responses
+
+
 __all__ = [
     "app",
     "JobResponse",
+    "DriverShiftResponse",
     "MovewareImportRequest",
     "ImportSummary",
 ]

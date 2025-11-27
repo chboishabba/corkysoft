@@ -5,8 +5,8 @@ import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import Iterable, Optional, Sequence
 from urllib.parse import quote_plus
+from typing import IO, Iterable, Optional, Sequence
 
 import pandas as pd
 
@@ -113,6 +113,8 @@ CREATE TABLE IF NOT EXISTS workers (
     name TEXT NOT NULL,
     role TEXT DEFAULT '',
     phone TEXT DEFAULT '',
+    rate REAL,
+    tickets INTEGER,
     active INTEGER NOT NULL DEFAULT 1,
     hired_at TEXT,
     updated_at TEXT,
@@ -127,6 +129,46 @@ CREATE TABLE IF NOT EXISTS trucks (
     notes TEXT,
     updated_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS vehicle_details (
+    truck_id TEXT PRIMARY KEY,
+    state TEXT,
+    rego TEXT,
+    rego_expiry TEXT,
+    make TEXT,
+    model TEXT,
+    year INTEGER,
+    body_type TEXT,
+    description TEXT,
+    nhv_code TEXT,
+    insurance TEXT,
+    odometer INTEGER,
+    last_service TEXT,
+    next_service TEXT,
+    coi_number TEXT,
+    coi_due TEXT,
+    present_driver TEXT,
+    daily_check_complete INTEGER,
+    FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS vehicle_repairs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    truck_id TEXT NOT NULL,
+    job_item TEXT NOT NULL,
+    description TEXT,
+    price REAL,
+    supplier TEXT,
+    service_date TEXT,
+    next_service_date TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT,
+    FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_vehicle_repairs_truck_date
+    ON vehicle_repairs(truck_id, service_date);
 
 CREATE TABLE IF NOT EXISTS shipments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,6 +188,26 @@ CREATE TABLE IF NOT EXISTS shipments (
     FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL,
     FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS driver_shifts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shift_date TEXT NOT NULL,
+    truck_id TEXT,
+    worker_id INTEGER,
+    ticket_numbers TEXT,
+    shift_start TEXT,
+    shift_end TEXT,
+    hours REAL,
+    hourly_rate REAL,
+    cost_total REAL,
+    notes TEXT,
+    source TEXT,
+    imported_at TEXT NOT NULL,
+    UNIQUE(shift_date, truck_id, worker_id, shift_start, shift_end, ticket_numbers),
+    FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL,
+    FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_driver_shifts_date ON driver_shifts(shift_date);
 """
 
 
@@ -255,11 +317,26 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
         if column not in job_columns:
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} {declaration}")
 
-    ensure_inventory_supplier_column(conn)
+    worker_columns = _table_columns(conn, "workers")
+    worker_declarations = {
+        "rate": "REAL",
+        "tickets": "INTEGER",
+    }
+    for column, declaration in worker_declarations.items():
+        if column not in worker_columns:
+            conn.execute(f"ALTER TABLE workers ADD COLUMN {column} {declaration}")
+
     ensure_historical_job_routes_table(conn)
+    _ensure_vehicle_details_table(conn)
     conn.commit()
 
-    for table_name in ("inventory_items", "workers", "trucks", "shipments"):
+    for table_name in (
+        "inventory_items",
+        "workers",
+        "trucks",
+        "vehicle_repairs",
+        "shipments",
+    ):
         if not _table_exists(conn, table_name):
             conn.execute(
                 f"SELECT RAISE(FAIL, 'Failed to create {table_name} during bootstrap')"
@@ -270,6 +347,22 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> Sequence[str]:
     """Return the column names for *table* in the current connection."""
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return [row[1] for row in rows]
+
+
+def _ensure_driver_shift_columns(conn: sqlite3.Connection) -> None:
+    columns = _table_columns(conn, "driver_shifts") if _table_exists(conn, "driver_shifts") else []
+    declarations = {
+        "ticket_numbers": "TEXT",
+        "shift_start": "TEXT",
+        "shift_end": "TEXT",
+        "notes": "TEXT",
+        "source": "TEXT",
+        "imported_at": "TEXT NOT NULL DEFAULT ''",
+    }
+    for column, declaration in declarations.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE driver_shifts ADD COLUMN {column} {declaration}")
+
 
 
 def ensure_historical_job_routes_table(conn: sqlite3.Connection) -> None:
@@ -288,50 +381,59 @@ def ensure_historical_job_routes_table(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def ensure_suppliers_table(conn: sqlite3.Connection) -> None:
-    """Ensure the suppliers table exists and includes optional contact fields."""
+def _ensure_vehicle_details_table(conn: sqlite3.Connection) -> None:
+    """Create or migrate the vehicle details table used for fleet metadata."""
 
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS suppliers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            company_name TEXT NOT NULL,
-            contact_name TEXT,
-            contact_number TEXT,
-            email TEXT,
-            notes TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(company_name)
+        CREATE TABLE IF NOT EXISTS vehicle_details (
+            truck_id TEXT PRIMARY KEY,
+            state TEXT,
+            rego TEXT,
+            rego_expiry TEXT,
+            make TEXT,
+            model TEXT,
+            year INTEGER,
+            body_type TEXT,
+            description TEXT,
+            nhv_code TEXT,
+            insurance TEXT,
+            odometer INTEGER,
+            last_service TEXT,
+            next_service TEXT,
+            coi_number TEXT,
+            coi_due TEXT,
+            present_driver TEXT,
+            daily_check_complete INTEGER,
+            FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE CASCADE
         )
         """
     )
-    columns = _table_columns(conn, "suppliers")
-    optional_columns = {
-        "contact_name": "TEXT",
-        "contact_number": "TEXT",
-        "email": "TEXT",
-        "notes": "TEXT",
-        "created_at": "TEXT",
-        "updated_at": "TEXT",
+
+    columns = set(_table_columns(conn, "vehicle_details"))
+    column_types = {
+        "state": "TEXT",
+        "rego": "TEXT",
+        "rego_expiry": "TEXT",
+        "make": "TEXT",
+        "model": "TEXT",
+        "year": "INTEGER",
+        "body_type": "TEXT",
+        "description": "TEXT",
+        "nhv_code": "TEXT",
+        "insurance": "TEXT",
+        "odometer": "INTEGER",
+        "last_service": "TEXT",
+        "next_service": "TEXT",
+        "coi_number": "TEXT",
+        "coi_due": "TEXT",
+        "present_driver": "TEXT",
+        "daily_check_complete": "INTEGER",
     }
-    for column, declaration in optional_columns.items():
+    for column, declaration in column_types.items():
         if column not in columns:
-            conn.execute(f"ALTER TABLE suppliers ADD COLUMN {column} {declaration}")
-    conn.commit()
+            conn.execute(f"ALTER TABLE vehicle_details ADD COLUMN {column} {declaration}")
 
-
-def ensure_inventory_supplier_column(conn: sqlite3.Connection) -> None:
-    """Ensure inventory items can be linked to suppliers."""
-
-    if not _table_exists(conn, "inventory_items"):
-        return
-
-    columns = _table_columns(conn, "inventory_items")
-    if "supplier_id" not in columns:
-        conn.execute(
-            "ALTER TABLE inventory_items ADD COLUMN supplier_id INTEGER REFERENCES suppliers(id)"
-        )
     conn.commit()
 
 
@@ -600,31 +702,206 @@ def upsert_truck(
     ).fetchone()
 
 
+def upsert_vehicle_details(
+    conn: sqlite3.Connection,
+    *,
+    truck_id: str,
+    state: str | None = None,
+    rego: str | None = None,
+    rego_expiry: str | None = None,
+    make: str | None = None,
+    model: str | None = None,
+    year: int | None = None,
+    body_type: str | None = None,
+    description: str | None = None,
+    nhv_code: str | None = None,
+    insurance: str | None = None,
+    odometer: int | None = None,
+    last_service: str | None = None,
+    next_service: str | None = None,
+    coi_number: str | None = None,
+    coi_due: str | None = None,
+    present_driver: str | None = None,
+    daily_check_complete: bool | None = None,
+) -> sqlite3.Row:
+    """Create or update vehicle metadata for the given ``truck_id``."""
+
+    _ensure_vehicle_details_table(conn)
+    conn.execute(
+        """
+        INSERT INTO vehicle_details (
+            truck_id,
+            state,
+            rego,
+            rego_expiry,
+            make,
+            model,
+            year,
+            body_type,
+            description,
+            nhv_code,
+            insurance,
+            odometer,
+            last_service,
+            next_service,
+            coi_number,
+            coi_due,
+            present_driver,
+            daily_check_complete
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(truck_id) DO UPDATE SET
+            state = excluded.state,
+            rego = excluded.rego,
+            rego_expiry = excluded.rego_expiry,
+            make = excluded.make,
+            model = excluded.model,
+            year = excluded.year,
+            body_type = excluded.body_type,
+            description = excluded.description,
+            nhv_code = excluded.nhv_code,
+            insurance = excluded.insurance,
+            odometer = excluded.odometer,
+            last_service = excluded.last_service,
+            next_service = excluded.next_service,
+            coi_number = excluded.coi_number,
+            coi_due = excluded.coi_due,
+            present_driver = excluded.present_driver,
+            daily_check_complete = excluded.daily_check_complete
+        """,
+        (
+            truck_id,
+            state,
+            rego,
+            rego_expiry,
+            make,
+            model,
+            year,
+            body_type,
+            description,
+            nhv_code,
+            insurance,
+            odometer,
+            last_service,
+            next_service,
+            coi_number,
+            coi_due,
+            present_driver,
+            None if daily_check_complete is None else int(bool(daily_check_complete)),
+        ),
+    )
+    conn.commit()
+    return conn.execute(
+        "SELECT * FROM vehicle_details WHERE truck_id = ?", (truck_id,)
+    ).fetchone()
+
+
 def upsert_worker(
     conn: sqlite3.Connection,
     *,
     name: str,
     role: str = "",
     phone: str = "",
+    rate: float | None = None,
+    tickets: int | None = None,
     active: bool = True,
 ) -> sqlite3.Row:
     """Create or update a worker record based on the unique name."""
 
     timestamp = datetime.now(UTC).isoformat()
+    rate_value = float(rate) if rate is not None else None
+    tickets_value = int(tickets) if tickets is not None else None
     conn.execute(
         """
-        INSERT INTO workers (name, role, phone, active, hired_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO workers (name, role, phone, rate, tickets, active, hired_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(name) DO UPDATE SET
             role = excluded.role,
             phone = excluded.phone,
+            rate = excluded.rate,
+            tickets = excluded.tickets,
             active = excluded.active,
             updated_at = excluded.updated_at
         """,
-        (name, role, phone, int(active), timestamp, timestamp),
+        (
+            name,
+            role,
+            phone,
+            rate_value,
+            tickets_value,
+            int(active),
+            timestamp,
+            timestamp,
+        ),
     )
     conn.commit()
     return conn.execute("SELECT * FROM workers WHERE name = ?", (name,)).fetchone()
+
+
+def _coalesce_name(first_name: str | float | None, last_name: str | float | None) -> str:
+    parts = [
+        str(first_name).strip() if first_name is not None and not pd.isna(first_name) else "",
+        str(last_name).strip() if last_name is not None and not pd.isna(last_name) else "",
+    ]
+    return " ".join(part for part in parts if part)
+
+
+def import_workers_from_staff_sheet(
+    conn: sqlite3.Connection,
+    workbook: os.PathLike[str] | str | bytes | IO[bytes],
+    *,
+    sheet_name: str = "STAFF",
+) -> tuple[int, int]:
+    """Import or update worker records from a STAFF worksheet.
+
+    Returns a ``(inserted, updated)`` tuple.
+    """
+
+    if hasattr(workbook, "seek"):
+        try:
+            workbook.seek(0)
+        except Exception:
+            pass
+
+    df = pd.read_excel(workbook, sheet_name=sheet_name)
+    inserted = 0
+    updated = 0
+
+    for _, row in df.iterrows():
+        name = _coalesce_name(row.get("FIRST NAME"), row.get("LAST NAME"))
+        if not name:
+            continue
+
+        existing = conn.execute(
+            "SELECT id FROM workers WHERE name = ?",
+            (name,),
+        ).fetchone()
+
+        rate = row.get("RATE")
+        tickets = row.get("TICKETS")
+        rate_value: float | None
+        tickets_value: int | None
+        try:
+            rate_value = None if pd.isna(rate) else float(rate)
+        except (TypeError, ValueError):
+            rate_value = None
+        try:
+            tickets_value = None if pd.isna(tickets) else int(tickets)
+        except (TypeError, ValueError):
+            tickets_value = None
+        upsert_worker(
+            conn,
+            name=name,
+            role=str(row.get("ROLE", "") or ""),
+            rate=rate_value,
+            tickets=tickets_value,
+        )
+
+        if existing is None:
+            inserted += 1
+        else:
+            updated += 1
+
+    return inserted, updated
 
 
 def create_shipment(
@@ -679,6 +956,45 @@ def create_shipment(
     ).fetchone()
 
 
+def fetch_driver_shifts(
+    conn: sqlite3.Connection,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    worker_names: Sequence[str] | None = None,
+    truck_ids: Sequence[str] | None = None,
+) -> list[sqlite3.Row]:
+    """Return driver shifts matching the provided filters."""
+
+    filters: list[str] = []
+    params: list[object] = []
+
+    if start_date:
+        filters.append("ds.shift_date >= ?")
+        params.append(start_date)
+    if end_date:
+        filters.append("ds.shift_date <= ?")
+        params.append(end_date)
+    if worker_names:
+        filters.append("w.name IN (" + ",".join(["?"] * len(worker_names)) + ")")
+        params.extend(worker_names)
+    if truck_ids:
+        filters.append("ds.truck_id IN (" + ",".join(["?"] * len(truck_ids)) + ")")
+        params.extend(truck_ids)
+
+    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+    query = f"""
+        SELECT
+            ds.*, w.name AS worker_name, t.name AS truck_name
+        FROM driver_shifts ds
+        LEFT JOIN workers w ON ds.worker_id = w.id
+        LEFT JOIN trucks t ON ds.truck_id = t.truck_id
+        {where_clause}
+        ORDER BY ds.shift_date DESC, ds.shift_start
+    """
+    return list(conn.execute(query, params))
+
+
 def fetch_shipments_with_context(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Return shipments joined with job, inventory, and assignment context."""
 
@@ -703,7 +1019,9 @@ def fetch_shipments_with_context(conn: sqlite3.Connection) -> list[sqlite3.Row]:
             t.truck_id,
             t.name AS truck_name,
             w.name AS worker_name,
-            w.role AS worker_role
+            w.role AS worker_role,
+            w.rate AS worker_rate,
+            w.tickets AS worker_tickets
         FROM shipments AS s
         LEFT JOIN jobs AS j ON s.job_id = j.id
         LEFT JOIN historical_jobs AS h ON s.historical_job_id = h.id

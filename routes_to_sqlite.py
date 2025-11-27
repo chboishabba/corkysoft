@@ -170,6 +170,8 @@ CREATE TABLE IF NOT EXISTS workers (
   name TEXT NOT NULL,
   role TEXT DEFAULT '',
   phone TEXT DEFAULT '',
+  rate REAL,
+  tickets INTEGER,
   active INTEGER NOT NULL DEFAULT 1,
   hired_at TEXT,
   updated_at TEXT,
@@ -183,6 +185,28 @@ CREATE TABLE IF NOT EXISTS trucks (
   active INTEGER NOT NULL DEFAULT 1,
   notes TEXT,
   updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS vehicle_details (
+  truck_id TEXT PRIMARY KEY,
+  state TEXT,
+  rego TEXT,
+  rego_expiry TEXT,
+  make TEXT,
+  model TEXT,
+  year INTEGER,
+  body_type TEXT,
+  description TEXT,
+  nhv_code TEXT,
+  insurance TEXT,
+  odometer INTEGER,
+  last_service TEXT,
+  next_service TEXT,
+  coi_number TEXT,
+  coi_due TEXT,
+  present_driver TEXT,
+  daily_check_complete INTEGER,
+  FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS shipments (
@@ -203,6 +227,26 @@ CREATE TABLE IF NOT EXISTS shipments (
   FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL,
   FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS driver_shifts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  shift_date TEXT NOT NULL,
+  truck_id TEXT,
+  worker_id INTEGER,
+  ticket_numbers TEXT,
+  shift_start TEXT,
+  shift_end TEXT,
+  hours REAL,
+  hourly_rate REAL,
+  cost_total REAL,
+  notes TEXT,
+  source TEXT,
+  imported_at TEXT NOT NULL,
+  UNIQUE(shift_date, truck_id, worker_id, shift_start, shift_end, ticket_numbers),
+  FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL,
+  FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_driver_shifts_date ON driver_shifts(shift_date);
 """
 
 def ensure_schema(conn: sqlite3.Connection):
@@ -311,6 +355,8 @@ def migrate_schema(conn: sqlite3.Connection):
             name TEXT NOT NULL,
             role TEXT DEFAULT '',
             phone TEXT DEFAULT '',
+            rate REAL,
+            tickets INTEGER,
             active INTEGER NOT NULL DEFAULT 1,
             hired_at TEXT,
             updated_at TEXT,
@@ -318,6 +364,10 @@ def migrate_schema(conn: sqlite3.Connection):
         )
         """,
     )
+    worker_columns = {r[1] for r in conn.execute("PRAGMA table_info(workers)")}
+    for column, declaration in {"rate": "REAL", "tickets": "INTEGER"}.items():
+        if column not in worker_columns:
+            conn.execute(f"ALTER TABLE workers ADD COLUMN {column} {declaration}")
     ensure_table(
         "trucks",
         """

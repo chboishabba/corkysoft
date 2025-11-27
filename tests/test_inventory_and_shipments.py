@@ -26,6 +26,9 @@ def test_schema_includes_logistics_tables(tmp_path):
         }
 
         assert {"inventory_items", "workers", "trucks", "shipments"}.issubset(tables)
+
+        worker_columns = {row[1] for row in conn.execute("PRAGMA table_info(workers)")}
+        assert {"rate", "tickets"}.issubset(worker_columns)
     finally:
         conn.close()
 
@@ -70,7 +73,9 @@ def test_crud_helpers_and_views():
 
         item = db.upsert_inventory_item(conn, name="Boxes", quantity=10, unit="ea")
         truck = db.upsert_truck(conn, truck_id="TR-1", name="Prime Mover", capacity_m3=50)
-        worker = db.upsert_worker(conn, name="Alex Driver", role="Driver")
+        worker = db.upsert_worker(
+            conn, name="Alex Driver", role="Driver", rate=42.5, tickets=3
+        )
 
         shipment = db.create_shipment(
             conn,
@@ -90,6 +95,31 @@ def test_crud_helpers_and_views():
         assert row["inventory_name"] == "Boxes"
         assert row["truck_name"] == "Prime Mover"
         assert row["worker_name"] == "Alex Driver"
+        assert row["worker_rate"] == 42.5
+        assert row["worker_tickets"] == 3
+    finally:
+        conn.close()
+
+
+def test_import_workers_from_staff_sheet():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        db.ensure_dashboard_tables(conn)
+        workbook_path = Path(__file__).resolve().parents[1] / "Crusader.xlsx"
+
+        inserted, updated = db.import_workers_from_staff_sheet(conn, workbook_path)
+
+        assert inserted == 1
+        assert updated == 0
+
+        worker = conn.execute(
+            "SELECT name, rate, tickets FROM workers WHERE name = ?",
+            ("Johl Brown",),
+        ).fetchone()
+        assert worker["name"] == "Johl Brown"
+        assert worker["rate"] == 0
+        assert worker["tickets"] is None
     finally:
         conn.close()
 

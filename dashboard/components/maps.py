@@ -616,6 +616,71 @@ def _initial_view_state(df: pd.DataFrame) -> pdk.ViewState:
     return pdk.ViewState(latitude=float(lat.mean()), longitude=float(lon.mean()), zoom=4.5)
 
 
+def _clean_value(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, float) and pd.isna(value):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _truck_label(row: pd.Series) -> str:
+    rego = _clean_value(row.get("rego"))
+    return rego or str(row.get("truck_id"))
+
+
+def _format_truck_tooltip(row: pd.Series) -> str:
+    label = _truck_label(row)
+    status = _clean_value(row.get("status")) or "unknown"
+    lines = [f"{label} ({status})"]
+
+    make = _clean_value(row.get("make"))
+    model = _clean_value(row.get("model"))
+    year = _clean_value(row.get("year"))
+    vehicle_bits = [part for part in (make, model) if part]
+    if year:
+        vehicle_bits.append(year)
+    if vehicle_bits:
+        lines.append("Vehicle: " + " ".join(vehicle_bits))
+
+    body_type = _clean_value(row.get("body_type"))
+    if body_type:
+        lines.append(f"Body: {body_type}")
+
+    nhv_code = _clean_value(row.get("nhv_code"))
+    if nhv_code:
+        lines.append(f"NHV code: {nhv_code}")
+
+    odometer = _clean_value(row.get("odometer"))
+    if odometer:
+        lines.append(f"Odometer: {odometer}")
+
+    next_service = _clean_value(row.get("next_service"))
+    last_service = _clean_value(row.get("last_service"))
+    if next_service:
+        lines.append(f"Next service: {next_service}")
+    if last_service:
+        lines.append(f"Last service: {last_service}")
+
+    coi_due = _clean_value(row.get("coi_due"))
+    coi_number = _clean_value(row.get("coi_number"))
+    if coi_due or coi_number:
+        coi_parts = [part for part in (coi_due, coi_number) if part]
+        lines.append(f"COI: {' / '.join(coi_parts)}")
+
+    present_driver = _clean_value(row.get("present_driver"))
+    if present_driver:
+        lines.append(f"Driver: {present_driver}")
+
+    daily_check = row.get("daily_check_complete")
+    if daily_check is not None and not (isinstance(daily_check, float) and pd.isna(daily_check)):
+        daily_label = "Yes" if bool(daily_check) else "No"
+        lines.append(f"Daily check: {daily_label}")
+
+    return "<br>".join(lines)
+
+
 def render_network_map(
     historical_routes: pd.DataFrame,
     trucks: pd.DataFrame,
@@ -667,13 +732,12 @@ def render_network_map(
 
     truck_data = trucks.copy()
     if not truck_data.empty:
+        truck_data["truck_label"] = truck_data.apply(_truck_label, axis=1)
         truck_data["colour"] = truck_data["status"].map(TRUCK_STATUS_COLOURS)
         truck_data["colour"] = truck_data["colour"].apply(
             lambda value: value if isinstance(value, (list, tuple)) else [0, 122, 204]
         )
-        truck_data["tooltip"] = truck_data.apply(
-            lambda row: f"{row['truck_id']} ({row['status']})", axis=1
-        )
+        truck_data["tooltip"] = truck_data.apply(_format_truck_tooltip, axis=1)
 
     historical_overlay = historical_routes.copy()
     if not historical_overlay.empty and "route_geojson" in historical_overlay.columns:
@@ -985,7 +1049,7 @@ def render_network_map(
                 "TextLayer",
                 data=truck_data,
                 get_position="[lon, lat]",
-                get_text="truck_id",
+                get_text="truck_label",
                 get_color="colour",
                 get_size=12,
                 size_units="meters",
