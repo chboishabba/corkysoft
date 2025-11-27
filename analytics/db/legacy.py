@@ -325,6 +325,7 @@ CREATE TABLE IF NOT EXISTS container_bookings (
 );
 
 CREATE TABLE IF NOT EXISTS job_container_allocations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_id INTEGER NOT NULL,
     booking_id INTEGER NOT NULL,
     segment_id INTEGER,
@@ -354,9 +355,12 @@ CREATE TABLE IF NOT EXISTS container_seals (
     seal_number TEXT NOT NULL,
     applied_at TEXT,
     removed_at TEXT,
+    job_id INTEGER,
+    job_container_allocation_id INTEGER,
     source_ref TEXT,
-    UNIQUE(container_number, seal_number, applied_at, source_ref),
-    FOREIGN KEY(container_number) REFERENCES containers(container_number) ON DELETE CASCADE
+    FOREIGN KEY(container_number) REFERENCES containers(container_number) ON DELETE CASCADE,
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL,
+    FOREIGN KEY(job_container_allocation_id) REFERENCES job_container_allocations(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS condition_reports (
@@ -366,24 +370,69 @@ CREATE TABLE IF NOT EXISTS condition_reports (
     condition TEXT,
     reporter TEXT,
     notes TEXT,
+    job_id INTEGER,
+    job_container_allocation_id INTEGER,
     source_ref TEXT,
-    UNIQUE(container_number, report_time, source_ref),
-    FOREIGN KEY(container_number) REFERENCES containers(container_number) ON DELETE CASCADE
+    FOREIGN KEY(container_number) REFERENCES containers(container_number) ON DELETE CASCADE,
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL,
+    FOREIGN KEY(job_container_allocation_id) REFERENCES job_container_allocations(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS container_charges (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     container_number TEXT NOT NULL,
     booking_id INTEGER,
+    job_id INTEGER,
+    job_container_allocation_id INTEGER,
     charge_type TEXT NOT NULL,
     amount REAL,
     currency TEXT,
     effective_date TEXT,
     source_ref TEXT,
-    UNIQUE(container_number, booking_id, charge_type, effective_date, source_ref),
     FOREIGN KEY(container_number) REFERENCES containers(container_number) ON DELETE CASCADE,
-    FOREIGN KEY(booking_id) REFERENCES container_bookings(id) ON DELETE SET NULL
+    FOREIGN KEY(booking_id) REFERENCES container_bookings(id) ON DELETE SET NULL,
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL,
+    FOREIGN KEY(job_container_allocation_id) REFERENCES job_container_allocations(id) ON DELETE SET NULL
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_container_seals_scope
+    ON container_seals(
+        container_number,
+        seal_number,
+        applied_at,
+        source_ref,
+        COALESCE(job_container_allocation_id, job_id, -1)
+    );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_container_seals_no_job
+    ON container_seals(container_number, seal_number, applied_at, source_ref)
+    WHERE job_container_allocation_id IS NULL AND job_id IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_condition_reports_scope
+    ON condition_reports(
+        container_number,
+        report_time,
+        source_ref,
+        COALESCE(job_container_allocation_id, job_id, -1)
+    );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_condition_reports_no_job
+    ON condition_reports(container_number, report_time, source_ref)
+    WHERE job_container_allocation_id IS NULL AND job_id IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_container_charges_scope
+    ON container_charges(
+        container_number,
+        booking_id,
+        charge_type,
+        effective_date,
+        source_ref,
+        COALESCE(job_container_allocation_id, job_id, -1)
+    );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_container_charges_no_job
+    ON container_charges(container_number, booking_id, charge_type, effective_date, source_ref)
+    WHERE job_container_allocation_id IS NULL AND job_id IS NULL;
 
 CREATE TABLE IF NOT EXISTS driver_shifts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -486,6 +535,7 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
     ensure_historical_job_routes_table(conn)
     _ensure_vehicle_details_table(conn)
     _ensure_shipment_columns(conn)
+    _ensure_container_job_context(conn)
     _backfill_job_segments(conn)
     conn.commit()
 
@@ -527,6 +577,222 @@ def _unique_index_columns(conn: sqlite3.Connection, table: str) -> list[list[str
         cols = conn.execute(f"PRAGMA index_info({name})").fetchall()
         columns.append([col[2] for col in cols])
     return columns
+
+
+def _recreate_table_with_projections(
+    conn: sqlite3.Connection,
+    table_name: str,
+    create_sql: str,
+    projections: dict[str, str],
+) -> None:
+    """Rebuild *table_name* using *create_sql* and *projections* for data copy."""
+
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute(f"ALTER TABLE {table_name} RENAME TO {table_name}_old")
+    conn.executescript(create_sql)
+    columns = ", ".join(projections.keys())
+    selectors = ", ".join(projections.values())
+    conn.execute(
+        f"INSERT INTO {table_name} ({columns}) SELECT {selectors} FROM {table_name}_old"
+    )
+    conn.execute(f"DROP TABLE {table_name}_old")
+    conn.execute("PRAGMA foreign_keys=ON")
+
+
+_JOB_CONTAINER_ALLOCATIONS_SQL = """
+CREATE TABLE IF NOT EXISTS job_container_allocations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL,
+    booking_id INTEGER NOT NULL,
+    segment_id INTEGER,
+    volume_share REAL,
+    weight_share REAL,
+    UNIQUE(job_id, booking_id, segment_id),
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+    FOREIGN KEY(booking_id) REFERENCES container_bookings(id) ON DELETE CASCADE,
+    FOREIGN KEY(segment_id) REFERENCES shipments(id) ON DELETE SET NULL
+);
+"""
+
+
+_CONTAINER_SEALS_SQL = """
+CREATE TABLE IF NOT EXISTS container_seals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    container_number TEXT NOT NULL,
+    seal_number TEXT NOT NULL,
+    applied_at TEXT,
+    removed_at TEXT,
+    job_id INTEGER,
+    job_container_allocation_id INTEGER,
+    source_ref TEXT,
+    FOREIGN KEY(container_number) REFERENCES containers(container_number) ON DELETE CASCADE,
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL,
+    FOREIGN KEY(job_container_allocation_id) REFERENCES job_container_allocations(id) ON DELETE SET NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_container_seals_scope
+    ON container_seals(
+        container_number,
+        seal_number,
+        applied_at,
+        source_ref,
+        COALESCE(job_container_allocation_id, job_id, -1)
+    );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_container_seals_no_job
+    ON container_seals(container_number, seal_number, applied_at, source_ref)
+    WHERE job_container_allocation_id IS NULL AND job_id IS NULL;
+"""
+
+
+_CONDITION_REPORTS_SQL = """
+CREATE TABLE IF NOT EXISTS condition_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    container_number TEXT NOT NULL,
+    report_time TEXT NOT NULL,
+    condition TEXT,
+    reporter TEXT,
+    notes TEXT,
+    job_id INTEGER,
+    job_container_allocation_id INTEGER,
+    source_ref TEXT,
+    FOREIGN KEY(container_number) REFERENCES containers(container_number) ON DELETE CASCADE,
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL,
+    FOREIGN KEY(job_container_allocation_id) REFERENCES job_container_allocations(id) ON DELETE SET NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_condition_reports_scope
+    ON condition_reports(
+        container_number,
+        report_time,
+        source_ref,
+        COALESCE(job_container_allocation_id, job_id, -1)
+    );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_condition_reports_no_job
+    ON condition_reports(container_number, report_time, source_ref)
+    WHERE job_container_allocation_id IS NULL AND job_id IS NULL;
+"""
+
+
+_CONTAINER_CHARGES_SQL = """
+CREATE TABLE IF NOT EXISTS container_charges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    container_number TEXT NOT NULL,
+    booking_id INTEGER,
+    job_id INTEGER,
+    job_container_allocation_id INTEGER,
+    charge_type TEXT NOT NULL,
+    amount REAL,
+    currency TEXT,
+    effective_date TEXT,
+    source_ref TEXT,
+    FOREIGN KEY(container_number) REFERENCES containers(container_number) ON DELETE CASCADE,
+    FOREIGN KEY(booking_id) REFERENCES container_bookings(id) ON DELETE SET NULL,
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL,
+    FOREIGN KEY(job_container_allocation_id) REFERENCES job_container_allocations(id) ON DELETE SET NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_container_charges_scope
+    ON container_charges(
+        container_number,
+        booking_id,
+        charge_type,
+        effective_date,
+        source_ref,
+        COALESCE(job_container_allocation_id, job_id, -1)
+    );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_container_charges_no_job
+    ON container_charges(container_number, booking_id, charge_type, effective_date, source_ref)
+    WHERE job_container_allocation_id IS NULL AND job_id IS NULL;
+"""
+
+
+def _ensure_job_container_allocation_keys(conn: sqlite3.Connection) -> None:
+    """Add identifiers to job_container_allocations so other tables can reference it."""
+
+    if not _table_exists(conn, "job_container_allocations"):
+        conn.executescript(_JOB_CONTAINER_ALLOCATIONS_SQL)
+        return
+
+    columns = set(_table_columns(conn, "job_container_allocations"))
+    if "id" not in columns:
+        _recreate_table_with_projections(
+            conn,
+            "job_container_allocations",
+            _JOB_CONTAINER_ALLOCATIONS_SQL,
+            {
+                "id": "rowid",
+                "job_id": "job_id",
+                "booking_id": "booking_id",
+                "segment_id": "segment_id",
+                "volume_share": "volume_share",
+                "weight_share": "weight_share",
+            },
+        )
+    else:
+        conn.executescript(_JOB_CONTAINER_ALLOCATIONS_SQL)
+
+
+def _ensure_container_job_context(conn: sqlite3.Connection) -> None:
+    """Ensure container event tables can link back to specific jobs."""
+
+    _ensure_job_container_allocation_keys(conn)
+
+    tables = (
+        (
+            "container_seals",
+            _CONTAINER_SEALS_SQL,
+            {
+                "id": "id",
+                "container_number": "container_number",
+                "seal_number": "seal_number",
+                "applied_at": "applied_at",
+                "removed_at": "removed_at",
+                "job_id": "NULL",
+                "job_container_allocation_id": "NULL",
+                "source_ref": "source_ref",
+            },
+        ),
+        (
+            "condition_reports",
+            _CONDITION_REPORTS_SQL,
+            {
+                "id": "id",
+                "container_number": "container_number",
+                "report_time": "report_time",
+                "condition": "condition",
+                "reporter": "reporter",
+                "notes": "notes",
+                "job_id": "NULL",
+                "job_container_allocation_id": "NULL",
+                "source_ref": "source_ref",
+            },
+        ),
+        (
+            "container_charges",
+            _CONTAINER_CHARGES_SQL,
+            {
+                "id": "id",
+                "container_number": "container_number",
+                "booking_id": "booking_id",
+                "job_id": "NULL",
+                "job_container_allocation_id": "NULL",
+                "charge_type": "charge_type",
+                "amount": "amount",
+                "currency": "currency",
+                "effective_date": "effective_date",
+                "source_ref": "source_ref",
+            },
+        ),
+    )
+
+    for table_name, create_sql, projections in tables:
+        if not _table_exists(conn, table_name):
+            conn.executescript(create_sql)
+            continue
+
+        columns = set(_table_columns(conn, table_name))
+        needs_rebuild = any(col not in columns for col in projections)
+        if needs_rebuild:
+            _recreate_table_with_projections(conn, table_name, create_sql, projections)
+        else:
+            conn.executescript(create_sql)
 
 
 def _ensure_inventory_movements_table(conn: sqlite3.Connection) -> None:
