@@ -1,5 +1,7 @@
 # Repository Guidelines
 
+Please note that Crusader.xlsx has been provided as a placeholder for Google Sheets connectors of equivalent table. It is in a working/draft stage.
+
 ## Project Structure & Module Organization
 - Core application code lives under `dashboard/` (`app.py` as the Streamlit entry point, `components/` for reusable widgets) and `analytics/` for data prep, pricing insights, and live telemetry processing.
 - Persistence and schema helpers reside in `analytics/db.py`, while command-line utilities such as `routes_to_sqlite.py` sit at the repo root.
