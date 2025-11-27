@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 
 from analytics.db import connection_scope, fetch_driver_shifts
+from analytics.moveware_import import import_moveware_records
 
 
 def _current_db_path() -> str:
@@ -281,6 +282,8 @@ def import_moveware_resource(
 ) -> ImportSummary:
     """Return a summary for an incoming MoveWare import request."""
 
+    with connection_scope(_current_db_path()) as conn:
+        import_moveware_records(conn, resource, payload.records, dry_run=payload.dry_run)
     return ImportSummary(
         resource=resource,
         imported=len(payload.records),
