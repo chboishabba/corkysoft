@@ -294,6 +294,41 @@ def bootstrap_parameters(
             set_parameter_value(conn, key, value, description)
 
 
+def ensure_suppliers_table(conn: sqlite3.Connection) -> None:
+    """Create or migrate the suppliers table used by inventory features."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS suppliers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_name TEXT NOT NULL,
+            contact_name TEXT,
+            contact_number TEXT,
+            email TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(company_name)
+        )
+        """
+    )
+
+    column_declarations = {
+        "contact_name": "TEXT",
+        "contact_number": "TEXT",
+        "email": "TEXT",
+        "notes": "TEXT",
+        "created_at": "TEXT",
+        "updated_at": "TEXT",
+    }
+
+    for column, declaration in column_declarations.items():
+        if column not in _table_columns(conn, "suppliers"):
+            conn.execute(f"ALTER TABLE suppliers ADD COLUMN {column} {declaration}")
+
+    conn.commit()
+
+
 def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
     """Create empty dashboard tables so the UI can load before data imports."""
 
