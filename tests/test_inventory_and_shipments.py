@@ -2,6 +2,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import pandas as pd
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -88,5 +90,46 @@ def test_crud_helpers_and_views():
         assert row["inventory_name"] == "Boxes"
         assert row["truck_name"] == "Prime Mover"
         assert row["worker_name"] == "Alex Driver"
+    finally:
+        conn.close()
+
+
+def test_supplier_import_and_linkage():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        db.ensure_dashboard_tables(conn)
+
+        dataframe = pd.DataFrame(
+            [
+                {
+                    "company": "Parts Co",
+                    "contact_name": "Sam Supplier",
+                    "phone_number": "555-1234",
+                    "email": "sam@example.com",
+                    "notes": "Preferred for hydraulics",
+                },
+                {"company": "", "contact_name": "Ignored"},
+            ]
+        )
+
+        imported = db.import_suppliers_from_google_sheet(conn, dataframe=dataframe)
+        assert imported == 1
+
+        supplier = db.list_suppliers(conn)[0]
+        item = db.upsert_inventory_item(
+            conn, name="Hydraulic Pump", quantity=2, supplier_id=supplier["id"]
+        )
+
+        job_id = conn.execute(
+            "INSERT INTO jobs (origin, destination) VALUES ('Site A', 'Site B')"
+        ).lastrowid
+        db.create_shipment(conn, job_id=job_id, inventory_item_id=item["id"])
+
+        shipment = db.fetch_shipments_with_context(conn)[0]
+        assert shipment["supplier_company_name"] == "Parts Co"
+        assert shipment["supplier_contact_name"] == "Sam Supplier"
+        assert shipment["supplier_contact_number"] == "555-1234"
+        assert shipment["supplier_email"] == "sam@example.com"
     finally:
         conn.close()
