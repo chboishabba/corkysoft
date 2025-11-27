@@ -83,12 +83,14 @@ CREATE TABLE IF NOT EXISTS geocode_cache (
 
 CREATE TABLE IF NOT EXISTS jobs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_number TEXT,
   origin TEXT NOT NULL,
   destination TEXT NOT NULL,
   hourly_rate REAL NOT NULL DEFAULT 200.0,
   per_km_rate REAL NOT NULL DEFAULT 0.0,
   country TEXT NOT NULL DEFAULT 'Australia',
   provider TEXT NOT NULL DEFAULT 'ors',
+  client_reference TEXT,
   -- outputs
   distance_km REAL,
   duration_hr REAL,
@@ -97,9 +99,11 @@ CREATE TABLE IF NOT EXISTS jobs (
   cost_total REAL,
   internal_cost_total REAL DEFAULT 0,
   internal_cost_updated_at TEXT,
+  created_at TEXT,
   updated_at TEXT,
   UNIQUE(origin, destination, provider)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_job_number ON jobs(job_number);
 
 CREATE TABLE IF NOT EXISTS job_cost_components (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1182,14 +1186,17 @@ def add_job(
     per_km_rate=0.80,
     country="Australia",
     *,
+    job_number: str | None = None,
     provider: Optional[str] = None,
 ):
     provider_value = (provider or os.environ.get("ROUTING_PROVIDER", "ors")).strip().lower()
+    timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
     conn.execute(
         """
-      INSERT INTO jobs (origin, destination, hourly_rate, per_km_rate, country, provider)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO jobs (job_number, origin, destination, hourly_rate, per_km_rate, country, provider, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT DO UPDATE SET
+        job_number=COALESCE(excluded.job_number, jobs.job_number),
         hourly_rate=excluded.hourly_rate,
         per_km_rate=excluded.per_km_rate,
         country=excluded.country,
@@ -1221,12 +1228,14 @@ def add_job(
         updated_at=NULL
     """,
         (
+            job_number,
             origin,
             destination,
-            hourly_rate,
-            per_km_rate,
+            float(hourly_rate),
+            float(per_km_rate),
             country,
             provider_value,
+            timestamp,
         ),
     )
     conn.commit()

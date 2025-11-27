@@ -58,8 +58,10 @@ CREATE TABLE IF NOT EXISTS historical_jobs (
 
 CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_number TEXT,
     job_date TEXT,
     client TEXT,
+    client_reference TEXT,
     client_id INTEGER,
     origin TEXT,
     destination TEXT,
@@ -81,7 +83,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     route_geojson TEXT,
     internal_cost_total REAL DEFAULT 0,
     internal_cost_updated_at TEXT,
-    updated_at TEXT
+    created_at TEXT,
+    updated_at TEXT,
+    UNIQUE(job_number)
 );
 
 CREATE TABLE IF NOT EXISTS suppliers (
@@ -124,6 +128,7 @@ CREATE INDEX IF NOT EXISTS idx_inventory_movements_item
 
 CREATE TABLE IF NOT EXISTS workers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_code TEXT,
     name TEXT NOT NULL,
     role TEXT DEFAULT '',
     phone TEXT DEFAULT '',
@@ -131,8 +136,69 @@ CREATE TABLE IF NOT EXISTS workers (
     tickets INTEGER,
     active INTEGER NOT NULL DEFAULT 1,
     hired_at TEXT,
+    created_at TEXT,
     updated_at TEXT,
-    UNIQUE(name)
+    UNIQUE(employee_code),
+    UNIQUE(name, phone)
+);
+
+CREATE TABLE IF NOT EXISTS job_segments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL,
+    segment_sequence INTEGER NOT NULL,
+    origin TEXT,
+    destination TEXT,
+    mode TEXT,
+    status TEXT,
+    distance_km REAL,
+    client_reference TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT,
+    UNIQUE(job_id, segment_sequence),
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS container_bookings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    booking_reference TEXT NOT NULL,
+    job_id INTEGER,
+    client_reference TEXT,
+    status TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT,
+    UNIQUE(booking_reference),
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS containers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    container_number TEXT NOT NULL,
+    booking_id INTEGER,
+    job_id INTEGER,
+    client_reference TEXT,
+    status TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT,
+    UNIQUE(container_number),
+    FOREIGN KEY(booking_id) REFERENCES container_bookings(id) ON DELETE SET NULL,
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS container_allocations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    allocation_reference TEXT NOT NULL,
+    container_id INTEGER,
+    booking_id INTEGER,
+    job_id INTEGER,
+    worker_id INTEGER,
+    status TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT,
+    UNIQUE(allocation_reference),
+    FOREIGN KEY(container_id) REFERENCES containers(id) ON DELETE SET NULL,
+    FOREIGN KEY(booking_id) REFERENCES container_bookings(id) ON DELETE SET NULL,
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL,
+    FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS trucks (
@@ -368,25 +434,25 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
 
     job_columns = _table_columns(conn, "jobs")
     column_declarations = {
+        "job_number": "TEXT",
         "client_id": "INTEGER",
+        "client_reference": "TEXT",
         "origin_resolved": "TEXT",
         "destination_resolved": "TEXT",
         "route_geojson": "TEXT",
         "internal_cost_total": "REAL DEFAULT 0",
         "internal_cost_updated_at": "TEXT",
+        "created_at": "TEXT",
     }
     for column, declaration in column_declarations.items():
         if column not in job_columns:
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} {declaration}")
 
-    worker_columns = _table_columns(conn, "workers")
-    worker_declarations = {
-        "rate": "REAL",
-        "tickets": "INTEGER",
-    }
-    for column, declaration in worker_declarations.items():
-        if column not in worker_columns:
-            conn.execute(f"ALTER TABLE workers ADD COLUMN {column} {declaration}")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_job_number ON jobs(job_number)"
+    )
+
+    _ensure_worker_schema(conn)
 
     ensure_historical_job_routes_table(conn)
     _ensure_vehicle_details_table(conn)
@@ -411,6 +477,123 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> Sequence[str]:
     """Return the column names for *table* in the current connection."""
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return [row[1] for row in rows]
+
+
+def _unique_index_columns(conn: sqlite3.Connection, table: str) -> list[list[str]]:
+    """Return column lists for all unique indexes on *table*."""
+
+    indexes = conn.execute(f"PRAGMA index_list({table})").fetchall()
+    columns: list[list[str]] = []
+    for _, name, is_unique, *_ in indexes:
+        if not is_unique:
+            continue
+        cols = conn.execute(f"PRAGMA index_info({name})").fetchall()
+        columns.append([col[2] for col in cols])
+    return columns
+
+
+def _ensure_inventory_movements_table(conn: sqlite3.Connection) -> None:
+    """Ensure the inventory_movements table exists for tracking adjustments."""
+
+    if _table_exists(conn, "inventory_movements"):
+        return
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS inventory_movements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inventory_item_id INTEGER NOT NULL,
+            shipment_id INTEGER,
+            change_on_hand INTEGER NOT NULL DEFAULT 0,
+            change_allocated INTEGER NOT NULL DEFAULT 0,
+            reason TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE CASCADE,
+            FOREIGN KEY(shipment_id) REFERENCES shipments(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_inventory_movements_item
+            ON inventory_movements(inventory_item_id);
+        """
+    )
+
+
+def _rebuild_workers_table(conn: sqlite3.Connection) -> None:
+    """Recreate the workers table to enforce new uniqueness and columns."""
+
+    if not _table_exists(conn, "workers"):
+        return
+
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("ALTER TABLE workers RENAME TO workers_old")
+    conn.execute(
+        """
+        CREATE TABLE workers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_code TEXT,
+            name TEXT NOT NULL,
+            role TEXT DEFAULT '',
+            phone TEXT DEFAULT '',
+            rate REAL,
+            tickets INTEGER,
+            active INTEGER NOT NULL DEFAULT 1,
+            hired_at TEXT,
+            created_at TEXT,
+            updated_at TEXT,
+            UNIQUE(employee_code),
+            UNIQUE(name, phone)
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        INSERT INTO workers (
+            id, employee_code, name, role, phone, rate, tickets, active, hired_at, created_at, updated_at
+        )
+        SELECT
+            id,
+            NULL,
+            name,
+            role,
+            phone,
+            rate,
+            tickets,
+            active,
+            hired_at,
+            COALESCE(hired_at, updated_at, datetime('now')),
+            updated_at
+        FROM workers_old
+        """
+    )
+    conn.execute("DROP TABLE workers_old")
+    conn.execute("PRAGMA foreign_keys=ON")
+
+
+def _ensure_worker_schema(conn: sqlite3.Connection) -> None:
+    """Ensure worker columns and uniqueness constraints match import contracts."""
+
+    if not _table_exists(conn, "workers"):
+        return
+
+    worker_columns = _table_columns(conn, "workers")
+    unique_sets = [set(idx) for idx in _unique_index_columns(conn, "workers")]
+    has_employee_code_unique = {"employee_code"} in unique_sets
+    has_name_phone_unique = {"name", "phone"} in unique_sets
+    has_expected_uniques = has_employee_code_unique and has_name_phone_unique
+
+    needs_rebuild = "employee_code" not in worker_columns or "created_at" not in worker_columns
+    needs_rebuild = needs_rebuild or not has_expected_uniques
+
+    if needs_rebuild:
+        _rebuild_workers_table(conn)
+    else:
+        worker_declarations = {
+            "rate": "REAL",
+            "tickets": "INTEGER",
+        }
+        for column, declaration in worker_declarations.items():
+            if column not in worker_columns:
+                conn.execute(f"ALTER TABLE workers ADD COLUMN {column} {declaration}")
 
 
 def _ensure_shipment_columns(conn: sqlite3.Connection) -> None:
@@ -1001,43 +1184,337 @@ def upsert_vehicle_details(
 def upsert_worker(
     conn: sqlite3.Connection,
     *,
+    employee_code: str | None = None,
     name: str,
     role: str = "",
     phone: str = "",
     rate: float | None = None,
     tickets: int | None = None,
     active: bool = True,
+    hired_at: str | None = None,
+    created_at: str | None = None,
 ) -> sqlite3.Row:
     """Create or update a worker record based on the unique name."""
 
     timestamp = datetime.now(UTC).isoformat()
+    created_timestamp = created_at or timestamp
     rate_value = float(rate) if rate is not None else None
     tickets_value = int(tickets) if tickets is not None else None
+    clean_phone = phone.strip()
+    conflict_target = "employee_code" if employee_code else "name, phone"
+    hired_value = hired_at or timestamp
     conn.execute(
-        """
-        INSERT INTO workers (name, role, phone, rate, tickets, active, hired_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(name) DO UPDATE SET
+        f"""
+        INSERT INTO workers (
+            employee_code, name, role, phone, rate, tickets, active, hired_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT({conflict_target}) DO UPDATE SET
+            employee_code = COALESCE(excluded.employee_code, workers.employee_code),
             role = excluded.role,
             phone = excluded.phone,
             rate = excluded.rate,
             tickets = excluded.tickets,
             active = excluded.active,
+            hired_at = COALESCE(workers.hired_at, excluded.hired_at),
             updated_at = excluded.updated_at
         """,
         (
+            employee_code,
             name,
             role,
-            phone,
+            clean_phone,
             rate_value,
             tickets_value,
             int(active),
-            timestamp,
+            hired_value,
+            created_timestamp,
             timestamp,
         ),
     )
     conn.commit()
-    return conn.execute("SELECT * FROM workers WHERE name = ?", (name,)).fetchone()
+    where_clause = "employee_code = ?" if employee_code else "name = ? AND phone IS ?"
+    params = (employee_code,) if employee_code else (name, clean_phone)
+    return conn.execute(f"SELECT * FROM workers WHERE {where_clause}", params).fetchone()
+
+
+def upsert_job_by_number(
+    conn: sqlite3.Connection,
+    *,
+    job_number: str,
+    job_date: str | None = None,
+    client: str | None = None,
+    client_reference: str | None = None,
+    origin: str | None = None,
+    destination: str | None = None,
+    revenue_total: float | None = None,
+    revenue: float | None = None,
+    volume_m3: float | None = None,
+    volume: float | None = None,
+    distance_km: float | None = None,
+    final_cost: float | None = None,
+    origin_postcode: str | None = None,
+    destination_postcode: str | None = None,
+    origin_lat: float | None = None,
+    origin_lon: float | None = None,
+    dest_lat: float | None = None,
+    dest_lon: float | None = None,
+    created_at: str | None = None,
+    updated_at: str | None = None,
+) -> sqlite3.Row:
+    """Insert or update a job keyed by the business ``job_number``."""
+
+    ensure_dashboard_tables(conn)
+    cleaned_job_number = str(job_number).strip()
+    if not cleaned_job_number:
+        raise ValueError("job_number is required for job upsert")
+
+    timestamp = updated_at or datetime.now(UTC).isoformat()
+    created_timestamp = created_at or timestamp
+
+    conn.execute(
+        """
+        INSERT INTO jobs (
+            job_number, job_date, client, client_reference, origin, destination,
+            revenue_total, revenue, volume_m3, volume, distance_km, final_cost,
+            origin_postcode, destination_postcode, origin_lat, origin_lon, dest_lat,
+            dest_lon, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(job_number) DO UPDATE SET
+            job_date = excluded.job_date,
+            client = excluded.client,
+            client_reference = excluded.client_reference,
+            origin = excluded.origin,
+            destination = excluded.destination,
+            revenue_total = excluded.revenue_total,
+            revenue = excluded.revenue,
+            volume_m3 = excluded.volume_m3,
+            volume = excluded.volume,
+            distance_km = excluded.distance_km,
+            final_cost = excluded.final_cost,
+            origin_postcode = excluded.origin_postcode,
+            destination_postcode = excluded.destination_postcode,
+            origin_lat = excluded.origin_lat,
+            origin_lon = excluded.origin_lon,
+            dest_lat = excluded.dest_lat,
+            dest_lon = excluded.dest_lon,
+            updated_at = excluded.updated_at,
+            created_at = COALESCE(jobs.created_at, excluded.created_at)
+        """,
+        (
+            cleaned_job_number,
+            job_date,
+            client,
+            client_reference,
+            origin,
+            destination,
+            revenue_total,
+            revenue,
+            volume_m3,
+            volume,
+            distance_km,
+            final_cost,
+            origin_postcode,
+            destination_postcode,
+            origin_lat,
+            origin_lon,
+            dest_lat,
+            dest_lon,
+            created_timestamp,
+            timestamp,
+        ),
+    )
+    conn.commit()
+    return conn.execute(
+        "SELECT * FROM jobs WHERE job_number = ?", (cleaned_job_number,)
+    ).fetchone()
+
+
+def upsert_job_segment(
+    conn: sqlite3.Connection,
+    *,
+    job_id: int,
+    segment_sequence: int,
+    origin: str | None = None,
+    destination: str | None = None,
+    mode: str | None = None,
+    status: str | None = None,
+    distance_km: float | None = None,
+    client_reference: str | None = None,
+    created_at: str | None = None,
+    updated_at: str | None = None,
+) -> sqlite3.Row:
+    """Insert or update a job segment keyed by job and sequence."""
+
+    timestamp = updated_at or datetime.now(UTC).isoformat()
+    created_timestamp = created_at or timestamp
+    conn.execute(
+        """
+        INSERT INTO job_segments (
+            job_id, segment_sequence, origin, destination, mode, status,
+            distance_km, client_reference, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(job_id, segment_sequence) DO UPDATE SET
+            origin = excluded.origin,
+            destination = excluded.destination,
+            mode = excluded.mode,
+            status = excluded.status,
+            distance_km = excluded.distance_km,
+            client_reference = excluded.client_reference,
+            updated_at = excluded.updated_at,
+            created_at = COALESCE(job_segments.created_at, excluded.created_at)
+        """,
+        (
+            job_id,
+            segment_sequence,
+            origin,
+            destination,
+            mode,
+            status,
+            distance_km,
+            client_reference,
+            created_timestamp,
+            timestamp,
+        ),
+    )
+    conn.commit()
+    return conn.execute(
+        "SELECT * FROM job_segments WHERE job_id = ? AND segment_sequence = ?",
+        (job_id, segment_sequence),
+    ).fetchone()
+
+
+def upsert_container_booking(
+    conn: sqlite3.Connection,
+    *,
+    booking_reference: str,
+    job_id: int | None = None,
+    client_reference: str | None = None,
+    status: str | None = None,
+    created_at: str | None = None,
+    updated_at: str | None = None,
+) -> sqlite3.Row:
+    """Insert or update a container booking keyed by ``booking_reference``."""
+
+    timestamp = updated_at or datetime.now(UTC).isoformat()
+    created_timestamp = created_at or timestamp
+    conn.execute(
+        """
+        INSERT INTO container_bookings (
+            booking_reference, job_id, client_reference, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(booking_reference) DO UPDATE SET
+            job_id = COALESCE(excluded.job_id, container_bookings.job_id),
+            client_reference = excluded.client_reference,
+            status = excluded.status,
+            updated_at = excluded.updated_at,
+            created_at = COALESCE(container_bookings.created_at, excluded.created_at)
+        """,
+        (
+            booking_reference,
+            job_id,
+            client_reference,
+            status,
+            created_timestamp,
+            timestamp,
+        ),
+    )
+    conn.commit()
+    return conn.execute(
+        "SELECT * FROM container_bookings WHERE booking_reference = ?",
+        (booking_reference,),
+    ).fetchone()
+
+
+def upsert_container(
+    conn: sqlite3.Connection,
+    *,
+    container_number: str,
+    booking_id: int | None = None,
+    job_id: int | None = None,
+    client_reference: str | None = None,
+    status: str | None = None,
+    created_at: str | None = None,
+    updated_at: str | None = None,
+) -> sqlite3.Row:
+    """Insert or update a container keyed by container number."""
+
+    timestamp = updated_at or datetime.now(UTC).isoformat()
+    created_timestamp = created_at or timestamp
+    conn.execute(
+        """
+        INSERT INTO containers (
+            container_number, booking_id, job_id, client_reference, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(container_number) DO UPDATE SET
+            booking_id = COALESCE(excluded.booking_id, containers.booking_id),
+            job_id = COALESCE(excluded.job_id, containers.job_id),
+            client_reference = excluded.client_reference,
+            status = excluded.status,
+            updated_at = excluded.updated_at,
+            created_at = COALESCE(containers.created_at, excluded.created_at)
+        """,
+        (
+            container_number,
+            booking_id,
+            job_id,
+            client_reference,
+            status,
+            created_timestamp,
+            timestamp,
+        ),
+    )
+    conn.commit()
+    return conn.execute(
+        "SELECT * FROM containers WHERE container_number = ?", (container_number,)
+    ).fetchone()
+
+
+def upsert_container_allocation(
+    conn: sqlite3.Connection,
+    *,
+    allocation_reference: str,
+    container_id: int | None = None,
+    booking_id: int | None = None,
+    job_id: int | None = None,
+    worker_id: int | None = None,
+    status: str | None = None,
+    created_at: str | None = None,
+    updated_at: str | None = None,
+) -> sqlite3.Row:
+    """Insert or update a container allocation keyed by reference."""
+
+    timestamp = updated_at or datetime.now(UTC).isoformat()
+    created_timestamp = created_at or timestamp
+    conn.execute(
+        """
+        INSERT INTO container_allocations (
+            allocation_reference, container_id, booking_id, job_id, worker_id, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(allocation_reference) DO UPDATE SET
+            container_id = COALESCE(excluded.container_id, container_allocations.container_id),
+            booking_id = COALESCE(excluded.booking_id, container_allocations.booking_id),
+            job_id = COALESCE(excluded.job_id, container_allocations.job_id),
+            worker_id = COALESCE(excluded.worker_id, container_allocations.worker_id),
+            status = excluded.status,
+            updated_at = excluded.updated_at,
+            created_at = COALESCE(container_allocations.created_at, excluded.created_at)
+        """,
+        (
+            allocation_reference,
+            container_id,
+            booking_id,
+            job_id,
+            worker_id,
+            status,
+            created_timestamp,
+            timestamp,
+        ),
+    )
+    conn.commit()
+    return conn.execute(
+        "SELECT * FROM container_allocations WHERE allocation_reference = ?",
+        (allocation_reference,),
+    ).fetchone()
 
 
 def _resolve_shift_job_id(
