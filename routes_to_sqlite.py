@@ -156,6 +156,8 @@ CREATE TABLE IF NOT EXISTS workers (
   name TEXT NOT NULL,
   role TEXT DEFAULT '',
   phone TEXT DEFAULT '',
+  rate REAL,
+  tickets INTEGER,
   active INTEGER NOT NULL DEFAULT 1,
   hired_at TEXT,
   updated_at TEXT,
@@ -169,6 +171,28 @@ CREATE TABLE IF NOT EXISTS trucks (
   active INTEGER NOT NULL DEFAULT 1,
   notes TEXT,
   updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS vehicle_details (
+  truck_id TEXT PRIMARY KEY,
+  state TEXT,
+  rego TEXT,
+  rego_expiry TEXT,
+  make TEXT,
+  model TEXT,
+  year INTEGER,
+  body_type TEXT,
+  description TEXT,
+  nhv_code TEXT,
+  insurance TEXT,
+  odometer INTEGER,
+  last_service TEXT,
+  next_service TEXT,
+  coi_number TEXT,
+  coi_due TEXT,
+  present_driver TEXT,
+  daily_check_complete INTEGER,
+  FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS shipments (
@@ -294,6 +318,8 @@ def migrate_schema(conn: sqlite3.Connection):
             name TEXT NOT NULL,
             role TEXT DEFAULT '',
             phone TEXT DEFAULT '',
+            rate REAL,
+            tickets INTEGER,
             active INTEGER NOT NULL DEFAULT 1,
             hired_at TEXT,
             updated_at TEXT,
@@ -301,6 +327,10 @@ def migrate_schema(conn: sqlite3.Connection):
         )
         """,
     )
+    worker_columns = {r[1] for r in conn.execute("PRAGMA table_info(workers)")}
+    for column, declaration in {"rate": "REAL", "tickets": "INTEGER"}.items():
+        if column not in worker_columns:
+            conn.execute(f"ALTER TABLE workers ADD COLUMN {column} {declaration}")
     ensure_table(
         "trucks",
         """

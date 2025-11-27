@@ -84,11 +84,45 @@ def _ensure_live_tables(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE active_routes ADD COLUMN travel_seconds REAL")
 
 
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone()
+    return row is not None
+
+
 def load_truck_positions(conn: sqlite3.Connection) -> pd.DataFrame:
     """Return a DataFrame containing the latest truck telemetry."""
 
     try:
-        df = pd.read_sql_query("SELECT * FROM truck_positions", conn)
+        if _table_exists(conn, "vehicle_details") and _table_exists(conn, "trucks"):
+            query = """
+                SELECT
+                    tp.*, t.name AS truck_name, t.capacity_m3, t.notes AS truck_notes,
+                    vd.state,
+                    vd.rego,
+                    vd.rego_expiry,
+                    vd.make,
+                    vd.model,
+                    vd.year,
+                    vd.body_type,
+                    vd.description AS vehicle_description,
+                    vd.nhv_code,
+                    vd.insurance,
+                    vd.odometer,
+                    vd.last_service,
+                    vd.next_service,
+                    vd.coi_number,
+                    vd.coi_due,
+                    vd.present_driver,
+                    vd.daily_check_complete
+                FROM truck_positions AS tp
+                LEFT JOIN trucks AS t ON tp.truck_id = t.truck_id
+                LEFT JOIN vehicle_details AS vd ON tp.truck_id = vd.truck_id
+            """
+            df = pd.read_sql_query(query, conn)
+        else:
+            df = pd.read_sql_query("SELECT * FROM truck_positions", conn)
     except Exception:
         return pd.DataFrame(columns=["truck_id", "lat", "lon", "status", "updated_at"])
     return df
