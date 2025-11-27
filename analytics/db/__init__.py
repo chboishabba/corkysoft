@@ -1,30 +1,19 @@
 """Database facade module re-exporting domain helpers."""
 from __future__ import annotations
 
-from .connection import DEFAULT_DB_PATH, connection_scope, get_connection
-from .fleet import import_workers_from_staff_sheet, upsert_truck, upsert_vehicle_details, upsert_worker
-from .inventory import (
-    INVENTORY_STATES,
-    ensure_suppliers_table,
-
-from __future__ import annotations
-
 from .connection import (
     DEFAULT_DB_PATH,
-    _create_table_if_missing,
-    _table_columns,
-    _table_exists,
-    _unique_index_columns,
     connection_scope,
     get_connection,
-    initialize_database,
 )
-from .fleet import upsert_truck, upsert_vehicle_details
-from __future__ import annotations
-
-from .connection import DEFAULT_DB_PATH, connection_scope, get_connection
-from .fleet import import_workers_from_staff_sheet, upsert_truck, upsert_vehicle_details, upsert_worker
+from .fleet import (
+    import_workers_from_staff_sheet,
+    upsert_truck,
+    upsert_vehicle_details,
+    upsert_worker,
+)
 from .inventory import (
+    INVENTORY_STATES,
     get_inventory_balance,
     import_inventory_items_from_dataframe,
     import_inventory_movements_from_dataframe,
@@ -39,14 +28,18 @@ from .inventory import (
     upsert_inventory_item,
     upsert_supplier,
 )
-from .parameters import bootstrap_parameters, ensure_global_parameters_table, get_parameter_value, set_parameter_value
+from .parameters import (
+    bootstrap_parameters,
+    ensure_global_parameters_table,
+    get_parameter_value,
+    set_parameter_value,
+)
 from .schema import (
     _DASHBOARD_SCHEMA_SQL,
     ensure_dashboard_tables,
     ensure_historical_job_routes_table,
     migrate_geojson_to_routes,
 )
-from .schema import _DASHBOARD_SCHEMA_SQL, ensure_dashboard_tables, ensure_historical_job_routes_table, migrate_geojson_to_routes
 from .shipments import (
     create_shipment,
     fetch_driver_shifts,
@@ -58,7 +51,6 @@ from .shipments import (
     upsert_job_by_number,
     upsert_job_container_allocation,
     upsert_job_segment,
-    upsert_driver_shift,
 )
 
 __all__ = [

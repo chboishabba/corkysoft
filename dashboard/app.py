@@ -958,7 +958,7 @@ def render_price_distribution_dashboard():
 
         with tab_map["Histogram"]:
             if has_filtered_data:
-                with st.popover("❓ Histogram stats", use_container_width=True):
+                with st.popover("❓ Histogram stats", width='stretch'):
                     st.markdown(
                         """
                         ### **Break-even bands**
@@ -2120,7 +2120,7 @@ def render_price_distribution_dashboard():
 
         with tab_map["Optimizer"]:
 
-            with st.popover("❓ How to use the Optimiser", use_container_width=True):
+            with st.popover("❓ How to use the Optimiser", width='stretch'):
                 st.markdown(
                 """
                 ### **How it works**
@@ -2203,7 +2203,7 @@ def render_price_distribution_dashboard():
                 .drop(columns="_job_sort_key")
             )
 
-        st.dataframe(filtered_display_df[display_columns + remaining_columns])
+        st.dataframe(filtered_display_df[display_columns + remaining_columns], width='content')
 
         csv_buffer = io.StringIO()
         filtered_display_df.to_csv(csv_buffer, index=False)
@@ -2272,7 +2272,7 @@ def render_inventory_tab(conn: sqlite3.Connection) -> None:
             "updated_at",
         ]
         present_columns = [col for col in display_columns if col in balances_df.columns]
-        st.dataframe(balances_df[present_columns], use_container_width=True)
+        st.dataframe(balances_df[present_columns], width='stretch')
 
     with st.expander("Import inventory items", expanded=False):
         items_file = st.file_uploader(
@@ -2394,7 +2394,7 @@ def render_inventory_tab(conn: sqlite3.Connection) -> None:
             present_columns = [
                 col for col in display_columns if col in movements_df.columns
             ]
-            st.dataframe(movements_df[present_columns], use_container_width=True)
+            st.dataframe(movements_df[present_columns], width='stretch')
 
     with st.expander("Inventory exceptions", expanded=True):
         exceptions = list_inventory_exceptions(conn, resolved=False)
@@ -2634,7 +2634,7 @@ def render_staff_tab(conn: sqlite3.Connection) -> None:
     edited_df = st.data_editor(
         filtered_df[present_columns],
         hide_index=True,
-        use_container_width=True,
+        width='stretch',
         num_rows="dynamic",
         column_config={
             "id": st.column_config.Column("ID", disabled=True, width="small"),
@@ -2651,7 +2651,6 @@ def render_staff_tab(conn: sqlite3.Connection) -> None:
                 "Vehicle assignments", disabled=True
             ),
         },
-        help="Edit names, roles, rates, tickets, and active status directly. Add rows to create new workers.",
     )
 
     if st.button("Save staff changes", type="primary", key="staff_save_button"):
@@ -2749,7 +2748,7 @@ def render_staff_tab(conn: sqlite3.Connection) -> None:
             present_shift_cols = [col for col in columns if col in shift_df.columns]
             st.dataframe(
                 shift_df.sort_values(by="shift_date", ascending=False)[present_shift_cols],
-                use_container_width=True,
+                width='stretch',
             )
         else:
             st.caption("No driver shifts linked to this worker yet.")
@@ -2877,7 +2876,7 @@ def render_driver_shifts_tab(conn: sqlite3.Connection) -> None:
         "source",
     ]
     present_columns = [col for col in display_columns if col in filtered.columns]
-    st.dataframe(filtered[present_columns], use_container_width=True)
+    st.dataframe(filtered[present_columns], width='stretch')
 
 
 def main() -> None:

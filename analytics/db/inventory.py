@@ -534,8 +534,6 @@ def _normalize_inventory_column(column_name: str) -> str:
 
 
 def _build_suppliers_sheet_url(
-    sheet_id: str | None, sheet_name: str, *, env_var: str = "SUPPLIERS_SHEET_ID"
-def _build_suppliers_sheet_url(
     sheet_id: str | None,
     sheet_name: str,
     *,

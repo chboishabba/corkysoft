@@ -1,4 +1,3 @@
-"""Helper functions for dashboard global parameters."""
 """Functions for managing global parameters in the database."""
 from __future__ import annotations
 
