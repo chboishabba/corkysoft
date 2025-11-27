@@ -1,5 +1,4 @@
 """Global parameter helpers used across analytics features."""
-"""Backwards-compatible wrapper around the packaged parameter helpers."""
 from __future__ import annotations
 
 from .db.parameters import (

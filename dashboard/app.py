@@ -30,7 +30,18 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency for pin UI
     folium = None  # type: ignore[assignment]
     st_folium = None  # type: ignore[assignment]
 
-from analytics.db import ensure_dashboard_tables, import_workers_from_staff_sheet
+from analytics.db import (
+    INVENTORY_STATES,
+    ensure_dashboard_tables,
+    import_inventory_items_from_dataframe,
+    import_inventory_movements_from_dataframe,
+    import_workers_from_staff_sheet,
+    list_inventory_balances,
+    list_inventory_exceptions,
+    list_inventory_movements,
+    record_inventory_movement,
+    resolve_inventory_exception,
+)
 from analytics.db_connection import connection_scope
 from analytics.driver_shifts import (
     DEFAULT_DRIVER_SHEET_NAME,
@@ -132,6 +143,7 @@ PRICE_DASHBOARD_TABS = [
     "Vehicle maintenance",
     "Quote builder",
     "Optimizer",
+    "Inventory",
     "Driver shifts",
 ]
 _QUOTE_COUNTRY_STATE_KEY = "quote_builder_country"
@@ -2209,6 +2221,9 @@ def render_price_distribution_dashboard():
 
             render_optimizer(filtered_df)
 
+        with tab_map["Inventory"]:
+            render_inventory_tab(conn)
+
         with tab_map["Driver shifts"]:
             render_driver_shifts_tab(conn)
 
@@ -2245,6 +2260,215 @@ def render_price_distribution_dashboard():
             file_name="price_distribution_filtered.csv",
             mime="text/csv",
         )
+
+
+def _read_uploaded_inventory_file(uploaded_file: Any | None) -> pd.DataFrame:
+    """Parse a CSV or Excel upload into a dataframe."""
+
+    if uploaded_file is None:
+        return pd.DataFrame()
+
+    filename = uploaded_file.name.lower()
+    if filename.endswith(".csv"):
+        return pd.read_csv(uploaded_file)
+    if filename.endswith(('.xls', '.xlsx')):
+        return pd.read_excel(uploaded_file)
+    raise ValueError("Unsupported file type. Please upload CSV or Excel.")
+
+
+def render_inventory_tab(conn: sqlite3.Connection) -> None:
+    st.subheader("Inventory and movements")
+    st.caption(
+        "States follow the logistics contract: created → staged → loaded → in_transit → delivered → exception."
+    )
+
+    state_filter = st.multiselect(
+        "Filter by state",
+        INVENTORY_STATES,
+        default=list(INVENTORY_STATES),
+        help="States are derived from movement events and item imports.",
+    )
+
+    job_filter_raw = st.text_input(
+        "Filter by job (numeric id)",
+        value="",
+        help="Leave blank to show all jobs.",
+    )
+    job_filter: int | None = None
+    if job_filter_raw.strip():
+        try:
+            job_filter = int(job_filter_raw)
+        except ValueError:
+            st.warning("Job filter must be a number if provided.")
+
+    balances = list_inventory_balances(
+        conn, job_id=job_filter, states=state_filter or None
+    )
+    balances_df = pd.DataFrame(balances)
+    if balances_df.empty:
+        st.info("No inventory items found. Import items to begin tracking balances.")
+    else:
+        display_columns = [
+            "name",
+            "state",
+            "job_id",
+            "on_hand_quantity",
+            "allocated_quantity",
+            "available_quantity",
+            "unit",
+            "updated_at",
+        ]
+        present_columns = [col for col in display_columns if col in balances_df.columns]
+        st.dataframe(balances_df[present_columns], use_container_width=True)
+
+    with st.expander("Import inventory items", expanded=False):
+        items_file = st.file_uploader(
+            "Upload CSV or Excel for inventory items",
+            type=["csv", "xlsx", "xls"],
+            key="inventory_items_upload",
+        )
+        if st.button(
+            "Import items",
+            type="primary",
+            disabled=items_file is None,
+            key="inventory_items_import_button",
+        ):
+            try:
+                df = _read_uploaded_inventory_file(items_file)
+                imported = import_inventory_items_from_dataframe(conn, df)
+            except Exception as exc:  # pragma: no cover - surfaced in UI
+                st.error(f"Failed to import inventory items: {exc}")
+            else:
+                st.success(f"Imported or refreshed {imported} inventory rows.")
+                st.experimental_rerun()
+
+    with st.expander("Import movement events", expanded=False):
+        movements_file = st.file_uploader(
+            "Upload CSV or Excel for movement events",
+            type=["csv", "xlsx", "xls"],
+            key="inventory_movements_upload",
+        )
+        default_reason = st.text_input(
+            "Default reason (optional)",
+            value="",
+            help="Applied when the upload does not specify a reason column.",
+        )
+        if st.button(
+            "Import movements",
+            type="primary",
+            disabled=movements_file is None,
+            key="inventory_movements_import_button",
+        ):
+            try:
+                df = _read_uploaded_inventory_file(movements_file)
+                imported = import_inventory_movements_from_dataframe(
+                    conn, df, default_reason=default_reason or None
+                )
+            except Exception as exc:  # pragma: no cover - surfaced in UI
+                st.error(f"Failed to import movement events: {exc}")
+            else:
+                st.success(f"Recorded {imported} movement events.")
+                st.experimental_rerun()
+
+    with st.expander("Reserve or release stock", expanded=False):
+        if balances_df.empty:
+            st.caption("Add inventory items to enable reservations and releases.")
+        else:
+            option_labels = {
+                f"{row['name']} ({row.get('available_quantity', 0)} available)": row[
+                    "id"
+                ]
+                for _, row in balances_df.iterrows()
+            }
+            selected_label = st.selectbox(
+                "Inventory item",
+                options=list(option_labels.keys()),
+                key="inventory_reservation_item",
+            )
+            quantity = st.number_input(
+                "Quantity", min_value=1, step=1, value=1, key="inventory_reservation_qty"
+            )
+            target_state = st.selectbox(
+                "Set state",
+                INVENTORY_STATES,
+                index=INVENTORY_STATES.index("staged"),
+                key="inventory_reservation_state",
+            )
+
+            item_id = option_labels.get(selected_label)
+            cols = st.columns(2)
+            with cols[0]:
+                if st.button("Reserve allocation", type="primary"):
+                    record_inventory_movement(
+                        conn,
+                        inventory_item_id=int(item_id),
+                        change_allocated=int(quantity),
+                        state=target_state,
+                        job_id=job_filter,
+                    )
+                    st.success("Reserved stock and updated state.")
+                    st.experimental_rerun()
+            with cols[1]:
+                if st.button("Release allocation"):
+                    record_inventory_movement(
+                        conn,
+                        inventory_item_id=int(item_id),
+                        change_allocated=-int(quantity),
+                        state=target_state,
+                        job_id=job_filter,
+                    )
+                    st.success("Released stock and updated state.")
+                    st.experimental_rerun()
+
+    with st.expander("Recent movements", expanded=True):
+        movements = list_inventory_movements(
+            conn, limit=100, job_id=job_filter, states=state_filter or None
+        )
+        movements_df = pd.DataFrame(movements)
+        if movements_df.empty:
+            st.caption("No movement history available for the current filters.")
+        else:
+            display_columns = [
+                "inventory_name",
+                "movement_state",
+                "job_id",
+                "change_on_hand",
+                "change_allocated",
+                "reason",
+                "sequence_no",
+                "created_at",
+            ]
+            present_columns = [
+                col for col in display_columns if col in movements_df.columns
+            ]
+            st.dataframe(movements_df[present_columns], use_container_width=True)
+
+    with st.expander("Inventory exceptions", expanded=True):
+        exceptions = list_inventory_exceptions(conn, resolved=False)
+        if not exceptions:
+            st.caption("No outstanding exceptions detected by reconciliation jobs.")
+        else:
+            for exception in exceptions:
+                cols = st.columns([4, 1])
+                with cols[0]:
+                    st.markdown(
+                        f"**Item:** {exception.get('inventory_name') or 'Unknown'}  \
+                        **State:** {exception.get('state') or 'n/a'}  \
+                        **Job:** {exception.get('job_id') or exception.get('inventory_job_id') or 'n/a'}"
+                    )
+                    st.caption(exception.get("notes") or "No notes recorded.")
+                with cols[1]:
+                    if st.button(
+                        "Reconcile",
+                        key=f"inventory_exception_{exception['id']}",
+                    ):
+                        resolve_inventory_exception(
+                            conn,
+                            exception_id=int(exception["id"]),
+                            note="Reconciled via dashboard",
+                        )
+                        st.success("Exception marked as reconciled.")
+                        st.experimental_rerun()
 
 
 def render_driver_shifts_tab(conn: sqlite3.Connection) -> None:
