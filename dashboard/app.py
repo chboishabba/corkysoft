@@ -31,6 +31,11 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency for pin UI
     st_folium = None  # type: ignore[assignment]
 
 from analytics.db import connection_scope, ensure_dashboard_tables
+from analytics.driver_shifts import (
+    DEFAULT_DRIVER_SHEET_NAME,
+    import_driver_shifts_from_sheet,
+    load_driver_shifts_dataframe,
+)
 from analytics.price_distribution import (
     DistributionSummary,
     ProfitabilitySummary,
@@ -124,6 +129,7 @@ PRICE_DASHBOARD_TABS = [
     "Route maps",
     "Quote builder",
     "Optimizer",
+    "Driver shifts",
 ]
 _QUOTE_COUNTRY_STATE_KEY = "quote_builder_country"
 
@@ -2256,6 +2262,9 @@ def render_price_distribution_dashboard():
                 "Optimizer works on the same filters applied across the dashboard, making it safe for non-technical teams to explore 'what if' pricing scenarios."
             )
 
+        with tab_map["Driver shifts"]:
+            render_driver_shifts_tab(conn)
+
         st.subheader("Filtered jobs")
         display_columns = [
             col
@@ -2289,6 +2298,118 @@ def render_price_distribution_dashboard():
             file_name="price_distribution_filtered.csv",
             mime="text/csv",
         )
+
+
+def render_driver_shifts_tab(conn: sqlite3.Connection) -> None:
+    st.subheader("Driver shifts (VEHICLE_DRIVER)")
+    st.caption(
+        "Review driver and worker shifts independent of shipments,"
+        " sourced directly from the VEHICLE_DRIVER Google Sheet."
+    )
+
+    with st.expander("Import from Google Sheet", expanded=False):
+        default_sheet_id = os.environ.get("VEHICLE_DRIVER_SHEET_ID", "")
+        sheet_id = st.text_input(
+            "Sheet ID or full URL",
+            value=default_sheet_id,
+            help="Paste the Google Sheet ID or sharing URL for the VEHICLE_DRIVER tab.",
+            key="driver_shift_sheet_id",
+        )
+        sheet_name = st.text_input(
+            "Sheet tab name",
+            value=DEFAULT_DRIVER_SHEET_NAME,
+            help="Defaults to the VEHICLE_DRIVER tab name.",
+            key="driver_shift_sheet_name",
+        )
+        if st.button(
+            "Import driver shifts",
+            type="primary",
+            key="driver_shift_import_button",
+            disabled=not sheet_id.strip(),
+        ):
+            try:
+                inserted, updated = import_driver_shifts_from_sheet(
+                    conn,
+                    sheet_id=sheet_id.strip(),
+                    sheet_name=sheet_name.strip() or DEFAULT_DRIVER_SHEET_NAME,
+                )
+            except Exception as exc:  # pragma: no cover - surfaced in UI
+                st.error(f"Failed to import driver shifts: {exc}")
+            else:
+                st.success(
+                    f"Imported {inserted} new shift entries and refreshed {updated} existing rows."
+                )
+
+    df = load_driver_shifts_dataframe(conn)
+    if df.empty:
+        st.info(
+            "No driver shifts available. Import the VEHICLE_DRIVER sheet to populate this view."
+        )
+        return
+
+    df = df.copy()
+    df["shift_date"] = pd.to_datetime(df["shift_date"], errors="coerce")
+    df = df.dropna(subset=["shift_date"])
+    if df.empty:
+        st.info("Driver shift dates could not be parsed from the data.")
+        return
+
+    min_date = df["shift_date"].min().date()
+    max_date = df["shift_date"].max().date()
+    date_range = st.date_input(
+        "Shift date range",
+        value=(min_date, max_date),
+    )
+    selected_workers = st.multiselect(
+        "Drivers/workers",
+        sorted(df["worker_name"].dropna().unique().tolist()),
+    )
+    selected_trucks = st.multiselect(
+        "Trucks",
+        sorted(df["truck_id"].dropna().unique().tolist()),
+    )
+
+    filtered = df
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        start_date, end_date = date_range
+        if start_date:
+            filtered = filtered[filtered["shift_date"] >= pd.to_datetime(start_date)]
+        if end_date:
+            filtered = filtered[filtered["shift_date"] <= pd.to_datetime(end_date)]
+    if selected_workers:
+        filtered = filtered[filtered["worker_name"].isin(selected_workers)]
+    if selected_trucks:
+        filtered = filtered[filtered["truck_id"].isin(selected_trucks)]
+
+    filtered = filtered.sort_values(
+        by=["shift_date", "shift_start", "truck_id", "worker_name"],
+        ascending=[False, True, True, True],
+    )
+    filtered = filtered.assign(shift_date=filtered["shift_date"].dt.date)
+
+    total_hours = filtered["hours"].sum(skipna=True) if "hours" in filtered else 0
+    total_cost = (
+        filtered["cost_total"].sum(skipna=True) if "cost_total" in filtered else 0
+    )
+    metric_cols = st.columns(2)
+    metric_cols[0].metric("Total hours", f"{total_hours:,.2f}")
+    metric_cols[1].metric("Total cost", f"${total_cost:,.2f}")
+
+    display_columns = [
+        "shift_date",
+        "truck_id",
+        "truck_name",
+        "worker_name",
+        "ticket_numbers",
+        "shift_start",
+        "shift_end",
+        "hours",
+        "hourly_rate",
+        "cost_total",
+        "source",
+    ]
+    present_columns = [col for col in display_columns if col in filtered.columns]
+    st.dataframe(filtered[present_columns], use_container_width=True)
 
 
 def main() -> None:

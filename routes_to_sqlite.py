@@ -189,6 +189,26 @@ CREATE TABLE IF NOT EXISTS shipments (
   FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL,
   FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS driver_shifts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  shift_date TEXT NOT NULL,
+  truck_id TEXT,
+  worker_id INTEGER,
+  ticket_numbers TEXT,
+  shift_start TEXT,
+  shift_end TEXT,
+  hours REAL,
+  hourly_rate REAL,
+  cost_total REAL,
+  notes TEXT,
+  source TEXT,
+  imported_at TEXT NOT NULL,
+  UNIQUE(shift_date, truck_id, worker_id, shift_start, shift_end, ticket_numbers),
+  FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL,
+  FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_driver_shifts_date ON driver_shifts(shift_date);
 """
 
 def ensure_schema(conn: sqlite3.Connection):

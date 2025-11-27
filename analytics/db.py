@@ -129,6 +129,26 @@ CREATE TABLE IF NOT EXISTS shipments (
     FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL,
     FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS driver_shifts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shift_date TEXT NOT NULL,
+    truck_id TEXT,
+    worker_id INTEGER,
+    ticket_numbers TEXT,
+    shift_start TEXT,
+    shift_end TEXT,
+    hours REAL,
+    hourly_rate REAL,
+    cost_total REAL,
+    notes TEXT,
+    source TEXT,
+    imported_at TEXT NOT NULL,
+    UNIQUE(shift_date, truck_id, worker_id, shift_start, shift_end, ticket_numbers),
+    FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL,
+    FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_driver_shifts_date ON driver_shifts(shift_date);
 """
 
 
@@ -239,7 +259,9 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
     ensure_historical_job_routes_table(conn)
     conn.commit()
 
-    for table_name in ("inventory_items", "workers", "trucks", "shipments"):
+    _ensure_driver_shift_columns(conn)
+
+    for table_name in ("inventory_items", "workers", "trucks", "shipments", "driver_shifts"):
         if not _table_exists(conn, table_name):
             conn.execute(
                 f"SELECT RAISE(FAIL, 'Failed to create {table_name} during bootstrap')"
@@ -250,6 +272,22 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> Sequence[str]:
     """Return the column names for *table* in the current connection."""
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return [row[1] for row in rows]
+
+
+def _ensure_driver_shift_columns(conn: sqlite3.Connection) -> None:
+    columns = _table_columns(conn, "driver_shifts") if _table_exists(conn, "driver_shifts") else []
+    declarations = {
+        "ticket_numbers": "TEXT",
+        "shift_start": "TEXT",
+        "shift_end": "TEXT",
+        "notes": "TEXT",
+        "source": "TEXT",
+        "imported_at": "TEXT NOT NULL DEFAULT ''",
+    }
+    for column, declaration in declarations.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE driver_shifts ADD COLUMN {column} {declaration}")
+
 
 
 def ensure_historical_job_routes_table(conn: sqlite3.Connection) -> None:
@@ -406,6 +444,139 @@ def upsert_worker(
     return conn.execute("SELECT * FROM workers WHERE name = ?", (name,)).fetchone()
 
 
+def upsert_driver_shift(
+    conn: sqlite3.Connection,
+    *,
+    shift_date: str,
+    truck_id: str | None = None,
+    worker_name: str | None = None,
+    ticket_numbers: str | None = None,
+    shift_start: str | None = None,
+    shift_end: str | None = None,
+    hours: float | None = None,
+    hourly_rate: float | None = None,
+    cost_total: float | None = None,
+    notes: str | None = None,
+    source: str | None = None,
+) -> tuple[sqlite3.Row, bool]:
+    """Insert or update a driver shift record.
+
+    Returns a tuple ``(row, created)`` where ``created`` indicates whether the
+    record was newly inserted.
+    """
+
+    worker_id: int | None = None
+    if worker_name:
+        worker_row = upsert_worker(conn, name=worker_name)
+        worker_id = int(worker_row["id"])
+
+    if truck_id:
+        upsert_truck(conn, truck_id=truck_id)
+
+    lookup_sql = """
+        SELECT * FROM driver_shifts
+        WHERE shift_date = ? AND truck_id IS ? AND worker_id IS ?
+          AND COALESCE(shift_start, '') = COALESCE(?, '')
+          AND COALESCE(shift_end, '') = COALESCE(?, '')
+          AND COALESCE(ticket_numbers, '') = COALESCE(?, '')
+    """
+    existing = conn.execute(
+        lookup_sql,
+        (
+            shift_date,
+            truck_id,
+            worker_id,
+            shift_start,
+            shift_end,
+            ticket_numbers,
+        ),
+    ).fetchone()
+
+    timestamp = datetime.now(UTC).isoformat()
+    if existing is None:
+        conn.execute(
+            """
+            INSERT INTO driver_shifts (
+                shift_date,
+                truck_id,
+                worker_id,
+                ticket_numbers,
+                shift_start,
+                shift_end,
+                hours,
+                hourly_rate,
+                cost_total,
+                notes,
+                source,
+                imported_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                shift_date,
+                truck_id,
+                worker_id,
+                ticket_numbers,
+                shift_start,
+                shift_end,
+                hours,
+                hourly_rate,
+                cost_total,
+                notes,
+                source,
+                timestamp,
+            ),
+        )
+        conn.commit()
+        created = True
+    else:
+        conn.execute(
+            """
+            UPDATE driver_shifts
+            SET
+                hours = COALESCE(?, hours),
+                hourly_rate = COALESCE(?, hourly_rate),
+                cost_total = COALESCE(?, cost_total),
+                notes = COALESCE(?, notes),
+                source = COALESCE(?, source),
+                imported_at = ?
+            WHERE id = ?
+            """,
+            (
+                hours,
+                hourly_rate,
+                cost_total,
+                notes,
+                source,
+                timestamp,
+                existing["id"],
+            ),
+        )
+        conn.commit()
+        created = False
+
+    row = conn.execute(
+        """
+        SELECT ds.*, w.name AS worker_name, t.name AS truck_name
+        FROM driver_shifts ds
+        LEFT JOIN workers w ON ds.worker_id = w.id
+        LEFT JOIN trucks t ON ds.truck_id = t.truck_id
+        WHERE ds.shift_date = ? AND ds.truck_id IS ? AND ds.worker_id IS ?
+          AND COALESCE(ds.shift_start, '') = COALESCE(?, '')
+          AND COALESCE(ds.shift_end, '') = COALESCE(?, '')
+          AND COALESCE(ds.ticket_numbers, '') = COALESCE(?, '')
+        """,
+        (
+            shift_date,
+            truck_id,
+            worker_id,
+            shift_start,
+            shift_end,
+            ticket_numbers,
+        ),
+    ).fetchone()
+    return row, created
+
+
 def create_shipment(
     conn: sqlite3.Connection,
     *,
@@ -456,6 +627,45 @@ def create_shipment(
     return conn.execute(
         "SELECT * FROM shipments WHERE id = last_insert_rowid()"
     ).fetchone()
+
+
+def fetch_driver_shifts(
+    conn: sqlite3.Connection,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    worker_names: Sequence[str] | None = None,
+    truck_ids: Sequence[str] | None = None,
+) -> list[sqlite3.Row]:
+    """Return driver shifts matching the provided filters."""
+
+    filters: list[str] = []
+    params: list[object] = []
+
+    if start_date:
+        filters.append("ds.shift_date >= ?")
+        params.append(start_date)
+    if end_date:
+        filters.append("ds.shift_date <= ?")
+        params.append(end_date)
+    if worker_names:
+        filters.append("w.name IN (" + ",".join(["?"] * len(worker_names)) + ")")
+        params.extend(worker_names)
+    if truck_ids:
+        filters.append("ds.truck_id IN (" + ",".join(["?"] * len(truck_ids)) + ")")
+        params.extend(truck_ids)
+
+    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+    query = f"""
+        SELECT
+            ds.*, w.name AS worker_name, t.name AS truck_name
+        FROM driver_shifts ds
+        LEFT JOIN workers w ON ds.worker_id = w.id
+        LEFT JOIN trucks t ON ds.truck_id = t.truck_id
+        {where_clause}
+        ORDER BY ds.shift_date DESC, ds.shift_start
+    """
+    return list(conn.execute(query, params))
 
 
 def fetch_shipments_with_context(conn: sqlite3.Connection) -> list[sqlite3.Row]:
