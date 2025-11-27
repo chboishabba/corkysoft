@@ -7,6 +7,9 @@
 
 Route profitability tooling for removals operators. The project couples a command-line workflow for distance lookups and cost capture with a Streamlit dashboard that surfaces price distribution, lane performance, and live telemetry overlays.
 
+Run `./start_app.sh` or `start_app.bat` to run the app.
+
+
 ## Dashboard Preview
 
 Explore the main dashboard workflows currently deployable locally.
@@ -269,7 +272,7 @@ Historical jobs with geocoded origins/destinations backfill the mock data so the
 ## Development Workflow
 
 - **Bootstrap the environment**: Run `python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt`
-  (or execute `./start_app.sh` to combine setup with a `streamlit run dashboard/app.py`).
+  (or execute `./start_app.sh` or `start_app.bat` to combine setup with a `streamlit run dashboard/app.py`).
 - **Iterate on analytics**: Modify modules inside `analytics/` and run targeted tests via `pytest tests/test_<area>.py` to
   validate corridor aggregations, optimiser helpers, and export routines before wiring them into Streamlit.
 - **Exercise the CLI**: Use `routes_to_sqlite.py` to seed `routes.db`, export CSVs, and sanity-check new schema changes before
