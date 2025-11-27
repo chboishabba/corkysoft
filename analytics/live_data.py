@@ -12,7 +12,7 @@ from typing import Iterable, Mapping, Optional, Sequence
 
 import pandas as pd
 
-from analytics.db import DEFAULT_DB_PATH, connection_scope
+from analytics.db_connection import DEFAULT_DB_PATH, connection_scope
 
 Status = str
 

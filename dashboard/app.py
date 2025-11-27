@@ -30,11 +30,8 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency for pin UI
     folium = None  # type: ignore[assignment]
     st_folium = None  # type: ignore[assignment]
 
-from analytics.db import (
-    connection_scope,
-    ensure_dashboard_tables,
-    import_workers_from_staff_sheet,
-)
+from analytics.db import ensure_dashboard_tables, import_workers_from_staff_sheet
+from analytics.db_connection import connection_scope
 from analytics.driver_shifts import (
     DEFAULT_DRIVER_SHEET_NAME,
     import_driver_shifts_from_sheet,

@@ -10,7 +10,8 @@ from typing import Callable, Dict, Iterator, List, Optional, Tuple
 import pandas as pd
 import streamlit as st
 
-from analytics.db import connection_scope, ensure_dashboard_tables
+from analytics.db import ensure_dashboard_tables
+from analytics.db_connection import connection_scope
 from analytics.price_distribution import (
     ColumnMapping,
     ensure_break_even_parameter,
