@@ -102,7 +102,7 @@ from dashboard.components.maps import (
     _initial_view_state,
     render_network_map,
 )
-from dashboard.components.maintenance import render_vehicle_maintenance_tab
+from dashboard.components.maintenance import render_fleet_tab, render_vehicle_maintenance_tab
 from dashboard.components.route_maps import render_route_maps_tab
 from dashboard.components.price_history import render_price_history_tab
 from dashboard.components.optimizer import render_optimizer
@@ -129,6 +129,7 @@ PRICE_DASHBOARD_TABS = [
     "Profitability insights",
     "Live network overview",
     "Route maps",
+    "Fleet",
     "Vehicle maintenance",
     "Quote builder",
     "Optimizer",
@@ -1133,6 +1134,10 @@ def render_price_distribution_dashboard():
                 dataset_key=dataset_key,
                 metro_distance_km=metro_distance_km,
             )
+
+
+        with tab_map["Fleet"]:
+            render_fleet_tab(conn)
 
 
         with tab_map["Vehicle maintenance"]:
