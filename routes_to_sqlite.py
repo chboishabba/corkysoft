@@ -230,6 +230,7 @@ CREATE TABLE IF NOT EXISTS shipments (
   inventory_item_id INTEGER,
   truck_id TEXT,
   worker_id INTEGER,
+  segment_id INTEGER,
   quantity REAL NOT NULL DEFAULT 1,
   from_location TEXT,
   to_location TEXT,
@@ -242,7 +243,58 @@ CREATE TABLE IF NOT EXISTS shipments (
   FOREIGN KEY(historical_job_id) REFERENCES historical_jobs(id) ON DELETE SET NULL,
   FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE SET NULL,
   FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL,
-  FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
+  FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL,
+  FOREIGN KEY(segment_id) REFERENCES job_segments(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS worker_roles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS worker_compliances (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS job_segments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL,
+  segment_sequence INTEGER NOT NULL,
+  from_location TEXT,
+  to_location TEXT,
+  planned_start TEXT,
+  planned_end TEXT,
+  status TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT,
+  UNIQUE(job_id, segment_sequence),
+  FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS job_segment_workers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  segment_id INTEGER NOT NULL,
+  worker_id INTEGER NOT NULL,
+  start_time TEXT NOT NULL DEFAULT '',
+  end_time TEXT NOT NULL DEFAULT '',
+  role_id INTEGER,
+  FOREIGN KEY(segment_id) REFERENCES job_segments(id) ON DELETE CASCADE,
+  FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE CASCADE,
+  FOREIGN KEY(role_id) REFERENCES worker_roles(id) ON DELETE SET NULL,
+  UNIQUE(segment_id, worker_id, start_time, end_time)
+);
+
+CREATE TABLE IF NOT EXISTS job_segment_vehicles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  segment_id INTEGER NOT NULL,
+  truck_id TEXT NOT NULL,
+  requirement_met INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY(segment_id) REFERENCES job_segments(id) ON DELETE CASCADE,
+  FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE CASCADE,
+  UNIQUE(segment_id, truck_id)
 );
 
 CREATE TABLE IF NOT EXISTS driver_shifts (
@@ -417,6 +469,7 @@ def migrate_schema(conn: sqlite3.Connection):
             inventory_item_id INTEGER,
             truck_id TEXT,
             worker_id INTEGER,
+            segment_id INTEGER,
             quantity REAL NOT NULL DEFAULT 1,
             from_location TEXT,
             to_location TEXT,
@@ -429,9 +482,98 @@ def migrate_schema(conn: sqlite3.Connection):
             FOREIGN KEY(historical_job_id) REFERENCES historical_jobs(id) ON DELETE SET NULL,
             FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE SET NULL,
             FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL,
-            FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
+            FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL,
+            FOREIGN KEY(segment_id) REFERENCES job_segments(id) ON DELETE SET NULL
         )
         """,
+    )
+    ensure_table(
+        "worker_roles",
+        """
+        CREATE TABLE IF NOT EXISTS worker_roles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT DEFAULT ''
+        )
+        """,
+    )
+    ensure_table(
+        "worker_compliances",
+        """
+        CREATE TABLE IF NOT EXISTS worker_compliances (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT DEFAULT ''
+        )
+        """,
+    )
+    ensure_table(
+        "job_segments",
+        """
+        CREATE TABLE IF NOT EXISTS job_segments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL,
+            segment_sequence INTEGER NOT NULL,
+            from_location TEXT,
+            to_location TEXT,
+            planned_start TEXT,
+            planned_end TEXT,
+            status TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            UNIQUE(job_id, segment_sequence),
+            FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+        )
+        """,
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_job_segments_job_seq
+            ON job_segments(job_id, segment_sequence)
+        """
+    )
+    ensure_table(
+        "job_segment_workers",
+        """
+        CREATE TABLE IF NOT EXISTS job_segment_workers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            segment_id INTEGER NOT NULL,
+            worker_id INTEGER NOT NULL,
+            start_time TEXT NOT NULL DEFAULT '',
+            end_time TEXT NOT NULL DEFAULT '',
+            role_id INTEGER,
+            FOREIGN KEY(segment_id) REFERENCES job_segments(id) ON DELETE CASCADE,
+            FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE CASCADE,
+            FOREIGN KEY(role_id) REFERENCES worker_roles(id) ON DELETE SET NULL,
+            UNIQUE(segment_id, worker_id, start_time, end_time)
+        )
+        """,
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_job_segment_workers_segment
+            ON job_segment_workers(segment_id)
+        """
+    )
+    ensure_table(
+        "job_segment_vehicles",
+        """
+        CREATE TABLE IF NOT EXISTS job_segment_vehicles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            segment_id INTEGER NOT NULL,
+            truck_id TEXT NOT NULL,
+            requirement_met INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY(segment_id) REFERENCES job_segments(id) ON DELETE CASCADE,
+            FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE CASCADE,
+            UNIQUE(segment_id, truck_id)
+        )
+        """,
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_job_segment_vehicles_segment
+            ON job_segment_vehicles(segment_id)
+        """
     )
     ensure_table(
         "inventory_movements",
@@ -465,6 +607,7 @@ def migrate_schema(conn: sqlite3.Connection):
     add_shipment_column("quantity", "REAL NOT NULL DEFAULT 1")
     add_shipment_column("from_location", "TEXT")
     add_shipment_column("to_location", "TEXT")
+    add_shipment_column("segment_id", "INTEGER")
 
     conn.execute(
         "UPDATE shipments SET quantity = COALESCE(quantity, 1) WHERE quantity IS NULL"
@@ -517,6 +660,64 @@ def migrate_schema(conn: sqlite3.Connection):
         "CREATE INDEX IF NOT EXISTS idx_driver_shifts_shipment ON driver_shifts(shipment_id)"
     )
 
+    def backfill_job_segments() -> None:
+        timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
+        for job_id, origin, destination in conn.execute(
+            "SELECT id, origin, destination FROM jobs"
+        ):
+            segment = conn.execute(
+                "SELECT id, from_location, to_location FROM job_segments WHERE job_id = ? AND segment_sequence = 1",
+                (job_id,),
+            ).fetchone()
+            if segment is None:
+                conn.execute(
+                    """
+                    INSERT INTO job_segments (
+                        job_id, segment_sequence, from_location, to_location, status, created_at
+                    ) VALUES (?, 1, ?, ?, 'planned', ?)
+                    """,
+                    (job_id, origin, destination, timestamp),
+                )
+                segment_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            else:
+                segment_id = segment[0]
+                if segment[1] is None and origin:
+                    conn.execute(
+                        "UPDATE job_segments SET from_location = ? WHERE id = ?",
+                        (origin, segment_id),
+                    )
+                if segment[2] is None and destination:
+                    conn.execute(
+                        "UPDATE job_segments SET to_location = ? WHERE id = ?",
+                        (destination, segment_id),
+                    )
+
+            conn.execute(
+                "UPDATE shipments SET segment_id = COALESCE(segment_id, ?) WHERE job_id = ?",
+                (segment_id, job_id),
+            )
+            for truck_id, worker_id in conn.execute(
+                "SELECT truck_id, worker_id FROM shipments WHERE job_id = ?",
+                (job_id,),
+            ):
+                if truck_id:
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO job_segment_vehicles (segment_id, truck_id, requirement_met)
+                        VALUES (?, ?, 0)
+                        """,
+                        (segment_id, truck_id),
+                    )
+                if worker_id:
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO job_segment_workers (
+                            segment_id, worker_id, start_time, end_time
+                        ) VALUES (?, ?, '', '')
+                        """,
+                        (segment_id, worker_id),
+                    )
+
     def backfill_shipments() -> None:
         existing_shipments = conn.execute("SELECT COUNT(1) FROM shipments").fetchone()[0]
         if existing_shipments:
@@ -527,14 +728,16 @@ def migrate_schema(conn: sqlite3.Connection):
             conn.execute(
                 """
                 INSERT INTO shipments (
-                    job_id, status, quantity, from_location, to_location, created_at
-                ) VALUES (?, 'planned', 1, (
-                    SELECT origin FROM jobs WHERE jobs.id = ?
-                ), (
-                    SELECT destination FROM jobs WHERE jobs.id = ?
-                ), ?)
+                    job_id, status, quantity, from_location, to_location, created_at, segment_id
+                ) VALUES (
+                    ?, 'planned', 1,
+                    (SELECT origin FROM jobs WHERE jobs.id = ?),
+                    (SELECT destination FROM jobs WHERE jobs.id = ?),
+                    ?,
+                    (SELECT id FROM job_segments WHERE job_id = ? ORDER BY segment_sequence LIMIT 1)
+                )
                 """,
-                (job_id, job_id, job_id, now),
+                (job_id, job_id, job_id, now, job_id),
             )
 
         if table_exists("historical_jobs"):
@@ -565,6 +768,7 @@ def migrate_schema(conn: sqlite3.Connection):
                     (job_id, job_date, job_id, job_id, now),
                 )
 
+    backfill_job_segments()
     backfill_shipments()
     conn.commit()
 
