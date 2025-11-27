@@ -9,8 +9,8 @@ from typing import IO, Iterable, Optional, Sequence
 
 import pandas as pd
 
-from .db_connection import DEFAULT_DB_PATH, connection_scope, get_connection
-from .db_parameters import (
+from .connection import DEFAULT_DB_PATH, connection_scope, get_connection
+from .parameters import (
     bootstrap_parameters,
     ensure_global_parameters_table,
     get_parameter_value,
@@ -786,6 +786,19 @@ def _ensure_job_segment_tables(conn: sqlite3.Connection) -> None:
             ON job_segments(job_id, segment_sequence)
         """
     )
+
+    columns = _table_columns(conn, "job_segments")
+    column_declarations = {
+        "from_location": "TEXT",
+        "to_location": "TEXT",
+        "planned_start": "TEXT",
+        "planned_end": "TEXT",
+        "status": "TEXT",
+        "updated_at": "TEXT",
+    }
+    for column, declaration in column_declarations.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE job_segments ADD COLUMN {column} {declaration}")
 
     conn.execute(
         """
