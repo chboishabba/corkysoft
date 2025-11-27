@@ -257,11 +257,38 @@ CREATE TABLE IF NOT EXISTS worker_roles (
   description TEXT DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS worker_role_assignments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  worker_id INTEGER NOT NULL,
+  role_id INTEGER NOT NULL,
+  assigned_at TEXT NOT NULL,
+  UNIQUE(worker_id, role_id),
+  FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE CASCADE,
+  FOREIGN KEY(role_id) REFERENCES worker_roles(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_worker_role_assignments_worker
+  ON worker_role_assignments(worker_id);
+
 CREATE TABLE IF NOT EXISTS worker_compliances (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE,
   description TEXT DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS worker_compliance_assignments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  worker_id INTEGER NOT NULL,
+  compliance_id INTEGER NOT NULL,
+  expiry_date TEXT,
+  assigned_at TEXT NOT NULL,
+  UNIQUE(worker_id, compliance_id),
+  FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE CASCADE,
+  FOREIGN KEY(compliance_id) REFERENCES worker_compliances(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_worker_compliance_assignments_worker
+  ON worker_compliance_assignments(worker_id);
 
 CREATE TABLE IF NOT EXISTS job_segments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -507,6 +534,26 @@ def migrate_schema(conn: sqlite3.Connection):
         """,
     )
     ensure_table(
+        "worker_role_assignments",
+        """
+        CREATE TABLE IF NOT EXISTS worker_role_assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            worker_id INTEGER NOT NULL,
+            role_id INTEGER NOT NULL,
+            assigned_at TEXT NOT NULL,
+            UNIQUE(worker_id, role_id),
+            FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE CASCADE,
+            FOREIGN KEY(role_id) REFERENCES worker_roles(id) ON DELETE CASCADE
+        )
+        """,
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_worker_role_assignments_worker
+            ON worker_role_assignments(worker_id)
+        """
+    )
+    ensure_table(
         "worker_compliances",
         """
         CREATE TABLE IF NOT EXISTS worker_compliances (
@@ -515,6 +562,27 @@ def migrate_schema(conn: sqlite3.Connection):
             description TEXT DEFAULT ''
         )
         """,
+    )
+    ensure_table(
+        "worker_compliance_assignments",
+        """
+        CREATE TABLE IF NOT EXISTS worker_compliance_assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            worker_id INTEGER NOT NULL,
+            compliance_id INTEGER NOT NULL,
+            expiry_date TEXT,
+            assigned_at TEXT NOT NULL,
+            UNIQUE(worker_id, compliance_id),
+            FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE CASCADE,
+            FOREIGN KEY(compliance_id) REFERENCES worker_compliances(id) ON DELETE CASCADE
+        )
+        """,
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_worker_compliance_assignments_worker
+            ON worker_compliance_assignments(worker_id)
+        """
     )
     ensure_table(
         "job_segments",

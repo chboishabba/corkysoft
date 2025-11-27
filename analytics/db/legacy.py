@@ -726,11 +726,52 @@ def _ensure_job_segment_tables(conn: sqlite3.Connection) -> None:
 
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS worker_role_assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            worker_id INTEGER NOT NULL,
+            role_id INTEGER NOT NULL,
+            assigned_at TEXT NOT NULL,
+            UNIQUE(worker_id, role_id),
+            FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE CASCADE,
+            FOREIGN KEY(role_id) REFERENCES worker_roles(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_worker_role_assignments_worker
+            ON worker_role_assignments(worker_id)
+        """
+    )
+
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS worker_compliances (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE,
             description TEXT DEFAULT ''
         )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS worker_compliance_assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            worker_id INTEGER NOT NULL,
+            compliance_id INTEGER NOT NULL,
+            expiry_date TEXT,
+            assigned_at TEXT NOT NULL,
+            UNIQUE(worker_id, compliance_id),
+            FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE CASCADE,
+            FOREIGN KEY(compliance_id) REFERENCES worker_compliances(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_worker_compliance_assignments_worker
+            ON worker_compliance_assignments(worker_id)
         """
     )
 
@@ -868,6 +909,154 @@ def _link_vehicle_to_segment(
     )
 
 
+def _get_or_create_worker_role(conn: sqlite3.Connection, role_name: str) -> int:
+    """Return the role id for ``role_name``, creating it when missing."""
+
+    clean_role = role_name.strip()
+    if not clean_role:
+        raise ValueError("Role name must be a non-empty string")
+
+    _ensure_job_segment_tables(conn)
+    row = conn.execute(
+        "SELECT id FROM worker_roles WHERE name = ?", (clean_role,)
+    ).fetchone()
+    if row:
+        return int(row["id"])
+
+    conn.execute(
+        "INSERT INTO worker_roles (name, description) VALUES (?, '')", (clean_role,)
+    )
+    return int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+
+def _assign_worker_role(
+    conn: sqlite3.Connection, *, worker_id: int, role_name: str
+) -> int:
+    """Ensure a worker has a given role assignment and return the role id."""
+
+    role_id = _get_or_create_worker_role(conn, role_name)
+    timestamp = datetime.now(UTC).isoformat()
+    conn.execute(
+        """
+        INSERT INTO worker_role_assignments (worker_id, role_id, assigned_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(worker_id, role_id) DO UPDATE SET
+            assigned_at = excluded.assigned_at
+        """,
+        (worker_id, role_id, timestamp),
+    )
+    return role_id
+
+
+def _get_or_create_compliance(conn: sqlite3.Connection, compliance_name: str) -> int:
+    """Return the compliance id for ``compliance_name``, creating it when missing."""
+
+    clean_name = compliance_name.strip()
+    if not clean_name:
+        raise ValueError("Compliance name must be a non-empty string")
+
+    _ensure_job_segment_tables(conn)
+    row = conn.execute(
+        "SELECT id FROM worker_compliances WHERE name = ?", (clean_name,)
+    ).fetchone()
+    if row:
+        return int(row["id"])
+
+    conn.execute(
+        "INSERT INTO worker_compliances (name, description) VALUES (?, '')",
+        (clean_name,),
+    )
+    return int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+
+def _assign_worker_compliance(
+    conn: sqlite3.Connection,
+    *,
+    worker_id: int,
+    compliance_id: int,
+    expiry_date: str | None = None,
+) -> None:
+    """Ensure a worker has an active compliance assignment."""
+
+    timestamp = datetime.now(UTC).isoformat()
+    conn.execute(
+        """
+        INSERT INTO worker_compliance_assignments (
+            worker_id, compliance_id, expiry_date, assigned_at
+        ) VALUES (?, ?, ?, ?)
+        ON CONFLICT(worker_id, compliance_id) DO UPDATE SET
+            expiry_date = excluded.expiry_date,
+            assigned_at = excluded.assigned_at
+        """,
+        (worker_id, compliance_id, expiry_date, timestamp),
+    )
+
+
+def _validate_worker_role_assignment(
+    conn: sqlite3.Connection, worker_id: int, role_id: int | None
+) -> None:
+    """Raise if the worker is missing the requested role assignment."""
+
+    if role_id is None:
+        return
+
+    _ensure_job_segment_tables(conn)
+    assignment = conn.execute(
+        "SELECT 1 FROM worker_role_assignments WHERE worker_id = ? AND role_id = ?",
+        (worker_id, role_id),
+    ).fetchone()
+    if assignment:
+        return
+
+    role_row = conn.execute("SELECT name FROM worker_roles WHERE id = ?", (role_id,)).fetchone()
+    role_name = role_row["name"] if role_row else f"role {role_id}"
+    raise ValueError(f"Worker {worker_id} is not assigned to required role '{role_name}'")
+
+
+def _validate_worker_compliances(
+    conn: sqlite3.Connection, worker_id: int, compliance_ids: Sequence[int] | None
+) -> None:
+    """Raise if any compliance requirement is missing or expired."""
+
+    if not compliance_ids:
+        return
+
+    _ensure_job_segment_tables(conn)
+    today = datetime.now(UTC).date()
+    for compliance_id in compliance_ids:
+        assignment = conn.execute(
+            """
+            SELECT wca.expiry_date, wc.name
+            FROM worker_compliance_assignments AS wca
+            JOIN worker_compliances AS wc ON wc.id = wca.compliance_id
+            WHERE wca.worker_id = ? AND wca.compliance_id = ?
+            """,
+            (worker_id, compliance_id),
+        ).fetchone()
+
+        if assignment is None:
+            compliance_row = conn.execute(
+                "SELECT name FROM worker_compliances WHERE id = ?", (compliance_id,)
+            ).fetchone()
+            compliance_name = compliance_row["name"] if compliance_row else str(compliance_id)
+            raise ValueError(
+                f"Worker {worker_id} is missing required compliance '{compliance_name}'"
+            )
+
+        expiry_value = assignment["expiry_date"]
+        if expiry_value:
+            try:
+                expiry_date = datetime.fromisoformat(str(expiry_value)).date()
+            except ValueError as exc:
+                raise ValueError(
+                    f"Worker {worker_id} has invalid expiry '{expiry_value}' for compliance"
+                ) from exc
+            if expiry_date < today:
+                raise ValueError(
+                    f"Worker {worker_id} compliance '{assignment['name']}' expired on {expiry_value}"
+                )
+
+
 def _link_worker_to_segment(
     conn: sqlite3.Connection,
     *,
@@ -876,8 +1065,12 @@ def _link_worker_to_segment(
     start_time: str | None = None,
     end_time: str | None = None,
     role_id: int | None = None,
+    required_compliance_ids: Sequence[int] | None = None,
 ) -> None:
     """Associate a worker with a job segment."""
+
+    _validate_worker_role_assignment(conn, worker_id, role_id)
+    _validate_worker_compliances(conn, worker_id, required_compliance_ids)
 
     conn.execute(
         """
@@ -1609,7 +1802,13 @@ def upsert_worker(
     conn.commit()
     where_clause = "employee_code = ?" if employee_code else "name = ? AND phone IS ?"
     params = (employee_code,) if employee_code else (name, clean_phone)
-    return conn.execute(f"SELECT * FROM workers WHERE {where_clause}", params).fetchone()
+    worker_row = conn.execute(f"SELECT * FROM workers WHERE {where_clause}", params).fetchone()
+
+    if worker_row and role.strip():
+        _assign_worker_role(conn, worker_id=int(worker_row["id"]), role_name=role)
+        conn.commit()
+
+    return worker_row
 
 
 def upsert_job_by_number(
@@ -1958,7 +2157,7 @@ def upsert_driver_shift(
 
     worker_id: int | None = None
     if worker_name:
-        worker = upsert_worker(conn, name=worker_name)
+        worker = upsert_worker(conn, name=worker_name, role=role or "")
         worker_id = int(worker["id"])
 
     resolved_job_id = _resolve_shift_job_id(conn, job_id, shipment_id)
@@ -2151,6 +2350,7 @@ def create_shipment(
     worker_role_id: int | None = None,
     worker_start_time: str | None = None,
     worker_end_time: str | None = None,
+    required_compliance_ids: Sequence[int] | None = None,
     vehicle_requirement_met: bool | None = None,
     quantity: float | None = None,
     from_location: str | None = None,
@@ -2289,6 +2489,7 @@ def create_shipment(
             start_time=worker_start_time,
             end_time=worker_end_time,
             role_id=worker_role_id,
+            required_compliance_ids=required_compliance_ids,
         )
     conn.commit()
     return conn.execute(
