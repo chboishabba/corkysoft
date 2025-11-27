@@ -5,7 +5,9 @@ import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import Iterable, Optional, Sequence
+from typing import IO, Iterable, Optional, Sequence
+
+import pandas as pd
 
 DEFAULT_DB_PATH = os.environ.get("CORKYSOFT_DB", os.environ.get("ROUTES_DB", "routes.db"))
 
@@ -96,6 +98,8 @@ CREATE TABLE IF NOT EXISTS workers (
     name TEXT NOT NULL,
     role TEXT DEFAULT '',
     phone TEXT DEFAULT '',
+    rate REAL,
+    tickets INTEGER,
     active INTEGER NOT NULL DEFAULT 1,
     hired_at TEXT,
     updated_at TEXT,
@@ -235,6 +239,15 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
     for column, declaration in column_declarations.items():
         if column not in job_columns:
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} {declaration}")
+
+    worker_columns = _table_columns(conn, "workers")
+    worker_declarations = {
+        "rate": "REAL",
+        "tickets": "INTEGER",
+    }
+    for column, declaration in worker_declarations.items():
+        if column not in worker_columns:
+            conn.execute(f"ALTER TABLE workers ADD COLUMN {column} {declaration}")
 
     ensure_historical_job_routes_table(conn)
     conn.commit()
@@ -385,25 +398,107 @@ def upsert_worker(
     name: str,
     role: str = "",
     phone: str = "",
+    rate: float | None = None,
+    tickets: int | None = None,
     active: bool = True,
 ) -> sqlite3.Row:
     """Create or update a worker record based on the unique name."""
 
     timestamp = datetime.now(UTC).isoformat()
+    rate_value = float(rate) if rate is not None else None
+    tickets_value = int(tickets) if tickets is not None else None
     conn.execute(
         """
-        INSERT INTO workers (name, role, phone, active, hired_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO workers (name, role, phone, rate, tickets, active, hired_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(name) DO UPDATE SET
             role = excluded.role,
             phone = excluded.phone,
+            rate = excluded.rate,
+            tickets = excluded.tickets,
             active = excluded.active,
             updated_at = excluded.updated_at
         """,
-        (name, role, phone, int(active), timestamp, timestamp),
+        (
+            name,
+            role,
+            phone,
+            rate_value,
+            tickets_value,
+            int(active),
+            timestamp,
+            timestamp,
+        ),
     )
     conn.commit()
     return conn.execute("SELECT * FROM workers WHERE name = ?", (name,)).fetchone()
+
+
+def _coalesce_name(first_name: str | float | None, last_name: str | float | None) -> str:
+    parts = [
+        str(first_name).strip() if first_name is not None and not pd.isna(first_name) else "",
+        str(last_name).strip() if last_name is not None and not pd.isna(last_name) else "",
+    ]
+    return " ".join(part for part in parts if part)
+
+
+def import_workers_from_staff_sheet(
+    conn: sqlite3.Connection,
+    workbook: os.PathLike[str] | str | bytes | IO[bytes],
+    *,
+    sheet_name: str = "STAFF",
+) -> tuple[int, int]:
+    """Import or update worker records from a STAFF worksheet.
+
+    Returns a ``(inserted, updated)`` tuple.
+    """
+
+    if hasattr(workbook, "seek"):
+        try:
+            workbook.seek(0)
+        except Exception:
+            pass
+
+    df = pd.read_excel(workbook, sheet_name=sheet_name)
+    inserted = 0
+    updated = 0
+
+    for _, row in df.iterrows():
+        name = _coalesce_name(row.get("FIRST NAME"), row.get("LAST NAME"))
+        if not name:
+            continue
+
+        existing = conn.execute(
+            "SELECT id FROM workers WHERE name = ?",
+            (name,),
+        ).fetchone()
+
+        rate = row.get("RATE")
+        tickets = row.get("TICKETS")
+        rate_value: float | None
+        tickets_value: int | None
+        try:
+            rate_value = None if pd.isna(rate) else float(rate)
+        except (TypeError, ValueError):
+            rate_value = None
+        try:
+            tickets_value = None if pd.isna(tickets) else int(tickets)
+        except (TypeError, ValueError):
+            tickets_value = None
+        upsert_worker(
+            conn,
+            name=name,
+            role=str(row.get("ROLE", "") or ""),
+            rate=rate_value,
+            tickets=tickets_value,
+        )
+
+        if existing is None:
+            inserted += 1
+        else:
+            updated += 1
+
+    return inserted, updated
 
 
 def create_shipment(
@@ -478,7 +573,9 @@ def fetch_shipments_with_context(conn: sqlite3.Connection) -> list[sqlite3.Row]:
             t.truck_id,
             t.name AS truck_name,
             w.name AS worker_name,
-            w.role AS worker_role
+            w.role AS worker_role,
+            w.rate AS worker_rate,
+            w.tickets AS worker_tickets
         FROM shipments AS s
         LEFT JOIN jobs AS j ON s.job_id = j.id
         LEFT JOIN historical_jobs AS h ON s.historical_job_id = h.id

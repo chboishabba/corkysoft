@@ -30,7 +30,11 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency for pin UI
     folium = None  # type: ignore[assignment]
     st_folium = None  # type: ignore[assignment]
 
-from analytics.db import connection_scope, ensure_dashboard_tables
+from analytics.db import (
+    connection_scope,
+    ensure_dashboard_tables,
+    import_workers_from_staff_sheet,
+)
 from analytics.price_distribution import (
     DistributionSummary,
     ProfitabilitySummary,
@@ -565,6 +569,7 @@ def render_price_distribution_dashboard():
     with connection_scope() as conn:
         break_even_value = ensure_break_even_parameter(conn)
         ensure_quote_schema(conn)
+        ensure_dashboard_tables(conn)
 
         df_all: pd.DataFrame = pd.DataFrame()
         mapping: ColumnMapping = _blank_column_mapping()
@@ -695,6 +700,36 @@ def render_price_distribution_dashboard():
                                             message = "No rows imported from the provided file."
                                         import_feedback = ("warning", message)
 
+            staff_feedback: Optional[tuple[str, str]] = None
+            with st.expander("Import staff roster (Excel)", expanded=False):
+                staff_form = st.form(key="dashboard_staff_import_form")
+                staff_upload = staff_form.file_uploader(
+                    "Select Google Sheets export (.xlsx)",
+                    type=["xlsx"],
+                    help="Upload the STAFF worksheet downloaded from Google Sheets.",
+                )
+                staff_submit = staff_form.form_submit_button("Import staff")
+                if staff_submit:
+                    if staff_upload is None:
+                        staff_feedback = (
+                            "warning",
+                            "Choose a STAFF workbook before importing.",
+                        )
+                    else:
+                        try:
+                            ensure_dashboard_tables(conn)
+                            inserted, updated = import_workers_from_staff_sheet(conn, staff_upload)
+                        except Exception as exc:
+                            staff_feedback = (
+                                "error",
+                                f"Failed to import staff: {exc}",
+                            )
+                        else:
+                            staff_feedback = (
+                                "success",
+                                f"Imported {inserted} new staff and updated {updated} existing records.",
+                            )
+
             try:
                 df_all, mapping = dataset_loader(conn)
             except RuntimeError as exc:
@@ -704,6 +739,15 @@ def render_price_distribution_dashboard():
 
             if import_feedback:
                 level, message = import_feedback
+                if level == "success":
+                    st.success(message)
+                elif level == "warning":
+                    st.info(message)
+                else:
+                    st.error(message)
+
+            if staff_feedback:
+                level, message = staff_feedback
                 if level == "success":
                     st.success(message)
                 elif level == "warning":
@@ -846,6 +890,25 @@ def render_price_distribution_dashboard():
             )
         elif not has_filtered_data:
             st.warning("No jobs match the selected filters. Quote builder remains available below.")
+
+        with st.expander("Workers roster", expanded=False):
+            workers_df = pd.read_sql_query(
+                """
+                SELECT name, role, rate, tickets, phone, active, hired_at, updated_at
+                FROM workers
+                ORDER BY name
+                """,
+                conn,
+            )
+            if workers_df.empty:
+                st.caption(
+                    "No staff found. Import the STAFF worksheet from Google Sheets to populate the roster."
+                )
+            else:
+                workers_df = workers_df.assign(
+                    active=workers_df["active"].map({1: "Yes", 0: "No"})
+                )
+                st.dataframe(workers_df, use_container_width=True)
 
         tab_labels = PRICE_DASHBOARD_TABS
         params = _get_query_params()
