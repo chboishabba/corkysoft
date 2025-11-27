@@ -1283,7 +1283,6 @@ def create_shipment(
     job_id: int | None = None,
     historical_job_id: int | None = None,
     inventory_item_id: int | None = None,
-    quantity: int = 1,
     truck_id: str | None = None,
     worker_id: int | None = None,
     quantity: float | None = None,
