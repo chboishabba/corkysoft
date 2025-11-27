@@ -285,6 +285,7 @@ Historical jobs with geocoded origins/destinations backfill the mock data so the
 - Schema helpers (table creation, migrations, connection scopes) live in `analytics/db.py`.
 - `global_parameters` stores network-wide cost settings that feed the dashboard break-even engine.
 - Corridor aggregation utilities produce bidirectional lanes and profitability KPIs for systemic diagnostics.
+- Fleet metadata, repair ledger, and driver shift tables extend `trucks`/`workers` with supplier and labour context. See `docs/fleet_tables.md` for column layouts and ingestion helpers.
 
 ## Testing
 
@@ -301,6 +302,7 @@ Target a specific area via `pytest tests/test_price_distribution.py` or similar 
 
 - `docs/media_ingest.md`: Capture→upload workflow for PEC stills and bodycam clips, including triggers, required metadata, hashing, storage layout, and linkage to `movement_events`/items.
 - `docs/ingest_inventory_logistics.md`: Contracts for ingest payloads, inventory reconciliation, and logistics movement events plus their linkage to jobs, telemetry, and dashboard overlays.
+- `docs/fleet_tables.md`: Column reference for vehicle metadata, supplier-tagged repair history, and driver shift tables.
 - `docs/live_network_overview.md`: Functional spec for the profitability-focused network map.
 - `docs/price_history.md`: Reference for the price history analytics and lane comparisons.
 - `docs/mock_telemetry_workflow.md`: Details of the telemetry ingestion harness.
