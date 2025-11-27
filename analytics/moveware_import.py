@@ -194,10 +194,22 @@ def import_segments(conn, records: Sequence[Mapping[str, object]], *, dry_run: b
                 conn,
                 job_id=job_id,
                 segment_sequence=sequence,
-                origin=_clean_str(record.get("origin")),
-                destination=_clean_str(record.get("destination")),
+                from_location=_clean_str(record.get("origin")),
+                to_location=_clean_str(record.get("destination")),
                 mode=_clean_str(record.get("mode")),
                 status=_clean_str(record.get("status")),
+                planned_start=_coerce_timestamp(
+                    _first_present(record, "planned_start", "plannedStart")
+                ),
+                planned_end=_coerce_timestamp(
+                    _first_present(record, "planned_end", "plannedEnd")
+                ),
+                actual_start=_coerce_timestamp(
+                    _first_present(record, "actual_start", "actualStart")
+                ),
+                actual_end=_coerce_timestamp(
+                    _first_present(record, "actual_end", "actualEnd")
+                ),
                 distance_km=_coerce_float(_first_present(record, "distance_km", "distanceKm")),
                 client_reference=_clean_str(
                     _first_present(record, "client_reference", "clientReference")

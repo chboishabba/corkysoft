@@ -147,22 +147,6 @@ CREATE TABLE IF NOT EXISTS workers (
     UNIQUE(name, phone)
 );
 
-CREATE TABLE IF NOT EXISTS job_segments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_id INTEGER NOT NULL,
-    segment_sequence INTEGER NOT NULL,
-    origin TEXT,
-    destination TEXT,
-    mode TEXT,
-    status TEXT,
-    distance_km REAL,
-    client_reference TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT,
-    UNIQUE(job_id, segment_sequence),
-    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
-);
-
 CREATE TABLE IF NOT EXISTS container_bookings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     booking_reference TEXT NOT NULL,
@@ -297,8 +281,13 @@ CREATE TABLE IF NOT EXISTS job_segments (
     segment_sequence INTEGER NOT NULL,
     from_location TEXT,
     to_location TEXT,
+    mode TEXT,
+    distance_km REAL,
+    client_reference TEXT,
     planned_start TEXT,
     planned_end TEXT,
+    actual_start TEXT,
+    actual_end TEXT,
     status TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT,
@@ -770,8 +759,13 @@ def _ensure_job_segment_tables(conn: sqlite3.Connection) -> None:
             segment_sequence INTEGER NOT NULL,
             from_location TEXT,
             to_location TEXT,
+            mode TEXT,
+            distance_km REAL,
+            client_reference TEXT,
             planned_start TEXT,
             planned_end TEXT,
+            actual_start TEXT,
+            actual_end TEXT,
             status TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT,
@@ -791,14 +785,36 @@ def _ensure_job_segment_tables(conn: sqlite3.Connection) -> None:
     column_declarations = {
         "from_location": "TEXT",
         "to_location": "TEXT",
+        "mode": "TEXT",
+        "distance_km": "REAL",
+        "client_reference": "TEXT",
         "planned_start": "TEXT",
         "planned_end": "TEXT",
+        "actual_start": "TEXT",
+        "actual_end": "TEXT",
         "status": "TEXT",
         "updated_at": "TEXT",
     }
     for column, declaration in column_declarations.items():
         if column not in columns:
             conn.execute(f"ALTER TABLE job_segments ADD COLUMN {column} {declaration}")
+
+    if "origin" in columns and "from_location" in columns:
+        conn.execute(
+            """
+            UPDATE job_segments
+            SET from_location = COALESCE(from_location, origin)
+            WHERE origin IS NOT NULL
+            """
+        )
+    if "destination" in columns and "to_location" in columns:
+        conn.execute(
+            """
+            UPDATE job_segments
+            SET to_location = COALESCE(to_location, destination)
+            WHERE destination IS NOT NULL
+            """
+        )
 
     conn.execute(
         """
@@ -964,6 +980,8 @@ def get_or_create_job_segment(
     to_location: str | None = None,
     planned_start: str | None = None,
     planned_end: str | None = None,
+    actual_start: str | None = None,
+    actual_end: str | None = None,
     status: str = "planned",
 ) -> sqlite3.Row:
     """Return the requested job segment, creating it if missing."""
@@ -979,8 +997,8 @@ def get_or_create_job_segment(
             """
             INSERT INTO job_segments (
                 job_id, segment_sequence, from_location, to_location, planned_start,
-                planned_end, status, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                planned_end, actual_start, actual_end, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
@@ -989,6 +1007,8 @@ def get_or_create_job_segment(
                 to_location,
                 planned_start,
                 planned_end,
+                actual_start,
+                actual_end,
                 status,
                 timestamp,
             ),
@@ -1003,6 +1023,16 @@ def get_or_create_job_segment(
             conn.execute(
                 "UPDATE job_segments SET to_location = ? WHERE id = ?",
                 (to_location, existing["id"]),
+            )
+        if existing["actual_start"] is None and actual_start:
+            conn.execute(
+                "UPDATE job_segments SET actual_start = ? WHERE id = ?",
+                (actual_start, existing["id"]),
+            )
+        if existing["actual_end"] is None and actual_end:
+            conn.execute(
+                "UPDATE job_segments SET actual_end = ? WHERE id = ?",
+                (actual_end, existing["id"]),
             )
     return conn.execute(
         "SELECT * FROM job_segments WHERE job_id = ? AND segment_sequence = ?",
@@ -1696,10 +1726,14 @@ def upsert_job_segment(
     *,
     job_id: int,
     segment_sequence: int,
-    origin: str | None = None,
-    destination: str | None = None,
+    from_location: str | None = None,
+    to_location: str | None = None,
     mode: str | None = None,
     status: str | None = None,
+    planned_start: str | None = None,
+    planned_end: str | None = None,
+    actual_start: str | None = None,
+    actual_end: str | None = None,
     distance_km: float | None = None,
     client_reference: str | None = None,
     created_at: str | None = None,
@@ -1712,14 +1746,19 @@ def upsert_job_segment(
     conn.execute(
         """
         INSERT INTO job_segments (
-            job_id, segment_sequence, origin, destination, mode, status,
-            distance_km, client_reference, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            job_id, segment_sequence, from_location, to_location, mode, status,
+            planned_start, planned_end, actual_start, actual_end, distance_km,
+            client_reference, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(job_id, segment_sequence) DO UPDATE SET
-            origin = excluded.origin,
-            destination = excluded.destination,
+            from_location = excluded.from_location,
+            to_location = excluded.to_location,
             mode = excluded.mode,
             status = excluded.status,
+            planned_start = COALESCE(excluded.planned_start, job_segments.planned_start),
+            planned_end = COALESCE(excluded.planned_end, job_segments.planned_end),
+            actual_start = COALESCE(excluded.actual_start, job_segments.actual_start),
+            actual_end = COALESCE(excluded.actual_end, job_segments.actual_end),
             distance_km = excluded.distance_km,
             client_reference = excluded.client_reference,
             updated_at = excluded.updated_at,
@@ -1728,10 +1767,14 @@ def upsert_job_segment(
         (
             job_id,
             segment_sequence,
-            origin,
-            destination,
+            from_location,
+            to_location,
             mode,
             status,
+            planned_start,
+            planned_end,
+            actual_start,
+            actual_end,
             distance_km,
             client_reference,
             created_timestamp,
