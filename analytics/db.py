@@ -111,6 +111,24 @@ CREATE TABLE IF NOT EXISTS trucks (
     updated_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS vehicle_repairs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    truck_id TEXT NOT NULL,
+    job_item TEXT NOT NULL,
+    description TEXT,
+    price REAL,
+    supplier TEXT,
+    service_date TEXT,
+    next_service_date TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT,
+    FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_vehicle_repairs_truck_date
+    ON vehicle_repairs(truck_id, service_date);
+
 CREATE TABLE IF NOT EXISTS shipments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_id INTEGER,
@@ -239,7 +257,13 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
     ensure_historical_job_routes_table(conn)
     conn.commit()
 
-    for table_name in ("inventory_items", "workers", "trucks", "shipments"):
+    for table_name in (
+        "inventory_items",
+        "workers",
+        "trucks",
+        "vehicle_repairs",
+        "shipments",
+    ):
         if not _table_exists(conn, table_name):
             conn.execute(
                 f"SELECT RAISE(FAIL, 'Failed to create {table_name} during bootstrap')"
