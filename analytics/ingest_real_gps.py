@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from itertools import chain
 from typing import IO, Iterable, Iterator, Optional
 
-from analytics.db import connection_scope
+from analytics.db_connection import connection_scope
 from analytics.live_data import TruckGpsSnapshot, TruckTelemetryHarness
 
 

@@ -8,7 +8,8 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 
-from analytics.db import connection_scope, fetch_driver_shifts
+from analytics.db import fetch_driver_shifts
+from analytics.db_connection import connection_scope
 from analytics.moveware_import import import_moveware_records
 
 
