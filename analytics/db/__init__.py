@@ -1,4 +1,18 @@
 """Database facade module re-exporting domain helpers."""
+
+from __future__ import annotations
+
+from .connection import (
+    DEFAULT_DB_PATH,
+    _create_table_if_missing,
+    _table_columns,
+    _table_exists,
+    _unique_index_columns,
+    connection_scope,
+    get_connection,
+    initialize_database,
+)
+from .fleet import upsert_truck, upsert_vehicle_details
 from __future__ import annotations
 
 from .connection import DEFAULT_DB_PATH, connection_scope, get_connection
@@ -48,6 +62,9 @@ __all__ = [
     "set_parameter_value",
     "upsert_driver_shift",
     "upsert_inventory_item",
+    "upsert_job_by_number",
+    "upsert_job_container_allocation",
+    "upsert_job_segment",
     "upsert_supplier",
     "upsert_truck",
     "upsert_vehicle_details",

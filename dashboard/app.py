@@ -30,7 +30,11 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency for pin UI
     folium = None  # type: ignore[assignment]
     st_folium = None  # type: ignore[assignment]
 
-from analytics.db import ensure_dashboard_tables, import_workers_from_staff_sheet
+from analytics.db import (
+    ensure_dashboard_tables,
+    import_workers_from_staff_sheet,
+    upsert_worker,
+)
 from analytics.db_connection import connection_scope
 from analytics.driver_shifts import (
     DEFAULT_DRIVER_SHEET_NAME,
@@ -133,6 +137,7 @@ PRICE_DASHBOARD_TABS = [
     "Vehicle maintenance",
     "Quote builder",
     "Optimizer",
+    "Staff",
     "Driver shifts",
 ]
 _QUOTE_COUNTRY_STATE_KEY = "quote_builder_country"
@@ -706,36 +711,6 @@ def render_price_distribution_dashboard():
                                             message = "No rows imported from the provided file."
                                         import_feedback = ("warning", message)
 
-            staff_feedback: Optional[tuple[str, str]] = None
-            with st.expander("Import staff roster (Excel)", expanded=False):
-                staff_form = st.form(key="dashboard_staff_import_form")
-                staff_upload = staff_form.file_uploader(
-                    "Select Google Sheets export (.xlsx)",
-                    type=["xlsx"],
-                    help="Upload the STAFF worksheet downloaded from Google Sheets.",
-                )
-                staff_submit = staff_form.form_submit_button("Import staff")
-                if staff_submit:
-                    if staff_upload is None:
-                        staff_feedback = (
-                            "warning",
-                            "Choose a STAFF workbook before importing.",
-                        )
-                    else:
-                        try:
-                            ensure_dashboard_tables(conn)
-                            inserted, updated = import_workers_from_staff_sheet(conn, staff_upload)
-                        except Exception as exc:
-                            staff_feedback = (
-                                "error",
-                                f"Failed to import staff: {exc}",
-                            )
-                        else:
-                            staff_feedback = (
-                                "success",
-                                f"Imported {inserted} new staff and updated {updated} existing records.",
-                            )
-
             try:
                 df_all, mapping = dataset_loader(conn)
             except RuntimeError as exc:
@@ -745,15 +720,6 @@ def render_price_distribution_dashboard():
 
             if import_feedback:
                 level, message = import_feedback
-                if level == "success":
-                    st.success(message)
-                elif level == "warning":
-                    st.info(message)
-                else:
-                    st.error(message)
-
-            if staff_feedback:
-                level, message = staff_feedback
                 if level == "success":
                     st.success(message)
                 elif level == "warning":
@@ -896,25 +862,6 @@ def render_price_distribution_dashboard():
             )
         elif not has_filtered_data:
             st.warning("No jobs match the selected filters. Quote builder remains available below.")
-
-        with st.expander("Workers roster", expanded=False):
-            workers_df = pd.read_sql_query(
-                """
-                SELECT name, role, rate, tickets, phone, active, hired_at, updated_at
-                FROM workers
-                ORDER BY name
-                """,
-                conn,
-            )
-            if workers_df.empty:
-                st.caption(
-                    "No staff found. Import the STAFF worksheet from Google Sheets to populate the roster."
-                )
-            else:
-                workers_df = workers_df.assign(
-                    active=workers_df["active"].map({1: "Yes", 0: "No"})
-                )
-                st.dataframe(workers_df, use_container_width=True)
 
         tab_labels = PRICE_DASHBOARD_TABS
         params = _get_query_params()
@@ -2214,6 +2161,9 @@ def render_price_distribution_dashboard():
 
             render_optimizer(filtered_df)
 
+        with tab_map["Staff"]:
+            render_staff_tab(conn)
+
         with tab_map["Driver shifts"]:
             render_driver_shifts_tab(conn)
 
@@ -2250,6 +2200,347 @@ def render_price_distribution_dashboard():
             file_name="price_distribution_filtered.csv",
             mime="text/csv",
         )
+
+
+def _split_worker_name(name: str) -> tuple[str, str]:
+    parts = name.strip().split(" ", 1)
+    if len(parts) == 1:
+        return parts[0], ""
+    return parts[0], parts[1]
+
+
+def _format_truck_list(truck_string: str | float | None) -> str:
+    if truck_string is None or (isinstance(truck_string, float) and pd.isna(truck_string)):
+        return ""
+    trucks = {truck.strip() for truck in str(truck_string).split(",") if truck.strip()}
+    return ", ".join(sorted(trucks))
+
+
+def _prepare_staff_export(workers_df: pd.DataFrame) -> bytes:
+    export_df = workers_df.copy()
+    first_names: list[str] = []
+    last_names: list[str] = []
+    for _, row in export_df.iterrows():
+        first, last = _split_worker_name(str(row.get("name", "")))
+        first_names.append(first)
+        last_names.append(last)
+
+    export_df.insert(0, "FIRST NAME", first_names)
+    export_df.insert(1, "LAST NAME", last_names)
+    export_df = export_df[
+        [
+            "FIRST NAME",
+            "LAST NAME",
+            "role",
+            "rate",
+            "tickets",
+            "phone",
+            "active",
+        ]
+    ].rename(columns={"role": "ROLE", "rate": "RATE", "tickets": "TICKETS"})
+
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        export_df.to_excel(writer, sheet_name="STAFF", index=False)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def render_staff_tab(conn: sqlite3.Connection) -> None:
+    st.subheader("Staff roster (STAFF)")
+    st.caption(
+        "Import, audit, and edit the STAFF worksheet. Link workers to driver shifts and vehicles."
+    )
+
+    ensure_dashboard_tables(conn)
+
+    import_feedback: Optional[tuple[str, str]] = None
+    with st.expander("Import/export STAFF worksheet", expanded=False):
+        import_col, export_col = st.columns(2)
+        with import_col:
+            staff_upload = st.file_uploader(
+                "Upload STAFF workbook (.xlsx)",
+                type=["xlsx"],
+                help="Re-use the STAFF worksheet downloaded from Google Sheets.",
+                key="staff_upload_widget",
+            )
+            if st.button("Import STAFF", key="staff_import_button"):
+                if staff_upload is None:
+                    import_feedback = (
+                        "warning",
+                        "Choose a STAFF workbook before importing.",
+                    )
+                else:
+                    try:
+                        inserted, updated = import_workers_from_staff_sheet(
+                            conn, staff_upload
+                        )
+                    except Exception as exc:  # pragma: no cover - surfaced in UI
+                        import_feedback = (
+                            "error",
+                            f"Failed to import staff: {exc}",
+                        )
+                    else:
+                        import_feedback = (
+                            "success",
+                            f"Imported {inserted} new staff and updated {updated} existing records.",
+                        )
+
+        with export_col:
+            workers_for_export = pd.read_sql_query(
+                "SELECT name, role, rate, tickets, phone, active FROM workers ORDER BY name",
+                conn,
+            )
+            if workers_for_export.empty:
+                st.caption(
+                    "Add staff before exporting a workbook compatible with the STAFF sheet."
+                )
+            else:
+                export_bytes = _prepare_staff_export(workers_for_export)
+                st.download_button(
+                    "Download STAFF workbook",
+                    export_bytes,
+                    file_name="STAFF.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="staff_export_button",
+                )
+
+    if import_feedback:
+        level, message = import_feedback
+        if level == "success":
+            st.success(message)
+        elif level == "warning":
+            st.info(message)
+        else:
+            st.error(message)
+
+    workers_df = pd.read_sql_query(
+        """
+        SELECT
+            w.id,
+            w.name,
+            w.role,
+            w.phone,
+            w.rate,
+            w.tickets,
+            w.active,
+            w.hired_at,
+            w.updated_at,
+            COUNT(ds.id) AS shift_count,
+            MAX(ds.shift_date) AS last_shift_date,
+            GROUP_CONCAT(DISTINCT ds.truck_id) AS shift_trucks
+        FROM workers AS w
+        LEFT JOIN driver_shifts AS ds ON ds.worker_id = w.id
+        GROUP BY w.id
+        ORDER BY w.name
+        """,
+        conn,
+    )
+
+    vehicle_df = pd.read_sql_query(
+        """
+        SELECT truck_id, present_driver
+        FROM vehicle_details
+        WHERE present_driver IS NOT NULL AND TRIM(present_driver) != ''
+        """,
+        conn,
+    )
+    vehicle_assignments = (
+        vehicle_df.groupby("present_driver")["truck_id"]
+        .apply(lambda series: ", ".join(sorted({str(val).strip() for val in series if str(val).strip()})))
+        .to_dict()
+    )
+
+    if not workers_df.empty:
+        workers_df["active"] = workers_df["active"].astype(bool)
+        workers_df["last_shift_date"] = pd.to_datetime(
+            workers_df["last_shift_date"], errors="coerce"
+        ).dt.date
+        workers_df["shift_trucks"] = workers_df["shift_trucks"].apply(_format_truck_list)
+        workers_df["assigned_trucks"] = workers_df["name"].map(vehicle_assignments).fillna("")
+        workers_df["shift_count"] = workers_df["shift_count"].fillna(0).astype(int)
+
+    summary_cols = st.columns(3)
+    summary_cols[0].metric("Total workers", int(len(workers_df)))
+    active_count = int(workers_df[workers_df["active"]].shape[0]) if not workers_df.empty else 0
+    summary_cols[1].metric("Active workers", active_count)
+    summary_cols[2].metric("Workers with shifts", int((workers_df["shift_count"] > 0).sum()))
+
+    filter_cols = st.columns(3)
+    name_filter = filter_cols[0].text_input("Search by name", key="staff_name_filter")
+    role_options = (
+        sorted(
+            filter(
+                lambda r: bool(r),
+                workers_df.get("role").dropna().unique().tolist(),
+            )
+        )
+        if not workers_df.empty and "role" in workers_df
+        else []
+    )
+    role_filter = filter_cols[1].multiselect("Roles", role_options, key="staff_role_filter")
+    status_filter = filter_cols[2].selectbox(
+        "Active status",
+        ["All", "Active", "Inactive"],
+        key="staff_status_filter",
+    )
+
+    filtered_df = workers_df.copy()
+    if name_filter:
+        filtered_df = filtered_df[
+            filtered_df["name"].str.contains(name_filter, case=False, na=False)
+        ]
+    if role_filter:
+        filtered_df = filtered_df[filtered_df["role"].isin(role_filter)]
+    if status_filter == "Active":
+        filtered_df = filtered_df[filtered_df["active"]]
+    elif status_filter == "Inactive":
+        filtered_df = filtered_df[~filtered_df["active"]]
+
+    display_columns = [
+        "id",
+        "name",
+        "role",
+        "phone",
+        "rate",
+        "tickets",
+        "active",
+        "last_shift_date",
+        "shift_count",
+        "shift_trucks",
+        "assigned_trucks",
+    ]
+    present_columns = [col for col in display_columns if col in filtered_df.columns]
+    edited_df = st.data_editor(
+        filtered_df[present_columns],
+        hide_index=True,
+        use_container_width=True,
+        num_rows="dynamic",
+        column_config={
+            "id": st.column_config.Column("ID", disabled=True, width="small"),
+            "name": st.column_config.Column("Name"),
+            "role": st.column_config.Column("Role"),
+            "phone": st.column_config.Column("Phone"),
+            "rate": st.column_config.NumberColumn("Rate", format="%.2f"),
+            "tickets": st.column_config.NumberColumn("Tickets", format="%d"),
+            "active": st.column_config.CheckboxColumn("Active"),
+            "last_shift_date": st.column_config.DateColumn("Last shift", disabled=True),
+            "shift_count": st.column_config.NumberColumn("Shift count", disabled=True),
+            "shift_trucks": st.column_config.Column("Recent trucks", disabled=True),
+            "assigned_trucks": st.column_config.Column(
+                "Vehicle assignments", disabled=True
+            ),
+        },
+        help="Edit names, roles, rates, tickets, and active status directly. Add rows to create new workers.",
+    )
+
+    if st.button("Save staff changes", type="primary", key="staff_save_button"):
+        if edited_df.empty:
+            st.info("No staff rows to save.")
+        else:
+            errors: list[str] = []
+            saved = 0
+            for idx, row in edited_df.iterrows():
+                name = str(row.get("name") or "").strip()
+                if not name:
+                    errors.append(f"Row {idx + 1}: name is required.")
+                    continue
+
+                rate_raw = row.get("rate")
+                rate_value: float | None
+                if rate_raw in ("", None) or (isinstance(rate_raw, float) and math.isnan(rate_raw)):
+                    rate_value = None
+                else:
+                    try:
+                        rate_value = float(rate_raw)
+                        if rate_value < 0:
+                            raise ValueError("Rate cannot be negative")
+                    except Exception as exc:
+                        errors.append(f"{name}: invalid rate ({exc}).")
+                        continue
+
+                tickets_raw = row.get("tickets")
+                tickets_value: int | None
+                if tickets_raw in ("", None) or (isinstance(tickets_raw, float) and math.isnan(tickets_raw)):
+                    tickets_value = None
+                else:
+                    try:
+                        tickets_value = int(tickets_raw)
+                        if tickets_value < 0:
+                            raise ValueError("Tickets cannot be negative")
+                    except Exception as exc:
+                        errors.append(f"{name}: invalid tickets ({exc}).")
+                        continue
+
+                try:
+                    upsert_worker(
+                        conn,
+                        name=name,
+                        role=str(row.get("role") or ""),
+                        phone=str(row.get("phone") or ""),
+                        rate=rate_value,
+                        tickets=tickets_value,
+                        active=bool(row.get("active")),
+                    )
+                except Exception as exc:  # pragma: no cover - surfaced in UI
+                    errors.append(f"{name}: failed to save ({exc}).")
+                else:
+                    saved += 1
+
+            if errors:
+                st.error("\n".join(errors))
+            if saved and not errors:
+                st.success(f"Saved {saved} staff record{'s' if saved != 1 else ''}.")
+                _rerun_app()
+            elif saved:
+                st.info(
+                    f"Saved {saved} staff record{'s' if saved != 1 else ''}. Fix the remaining issues and try again."
+                )
+
+    st.divider()
+    st.subheader("Linked shifts and vehicle assignments")
+    if workers_df.empty:
+        st.info("No staff available to display shift links.")
+        return
+
+    worker_choice = st.selectbox(
+        "Choose a worker to review recent shifts and vehicles",
+        sorted(workers_df["name"].tolist()),
+        key="staff_worker_review",
+    )
+    if worker_choice:
+        shift_df = load_driver_shifts_dataframe(conn, workers=[worker_choice])
+        if not shift_df.empty:
+            shift_df = shift_df.copy()
+            shift_df["shift_date"] = pd.to_datetime(shift_df["shift_date"], errors="coerce").dt.date
+            columns = [
+                "shift_date",
+                "truck_id",
+                "truck_name",
+                "shift_window_start",
+                "shift_window_end",
+                "shift_start",
+                "shift_end",
+                "hours",
+                "hourly_rate",
+                "cost_total",
+                "source",
+            ]
+            present_shift_cols = [col for col in columns if col in shift_df.columns]
+            st.dataframe(
+                shift_df.sort_values(by="shift_date", ascending=False)[present_shift_cols],
+                use_container_width=True,
+            )
+        else:
+            st.caption("No driver shifts linked to this worker yet.")
+
+        assigned_trucks = vehicle_assignments.get(worker_choice)
+        if assigned_trucks:
+            st.info(f"Vehicle assignments: {assigned_trucks}")
+        elif not shift_df.empty:
+            st.caption("No vehicles directly assigned; trucks only appear on recorded shifts.")
+        else:
+            st.caption("No recorded vehicles for this worker.")
 
 
 def render_driver_shifts_tab(conn: sqlite3.Connection) -> None:
