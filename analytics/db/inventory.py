@@ -126,6 +126,7 @@ def list_inventory_balances(
 
     where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
     return list(conn.execute(_inventory_balance_query(where_sql), params))
+    return list(conn.execute(_inventory_balance_query()))
 
 
 def get_inventory_balance(
@@ -534,6 +535,11 @@ def _normalize_inventory_column(column_name: str) -> str:
 
 def _build_suppliers_sheet_url(
     sheet_id: str | None, sheet_name: str, *, env_var: str = "SUPPLIERS_SHEET_ID"
+def _build_suppliers_sheet_url(
+    sheet_id: str | None,
+    sheet_name: str,
+    *,
+    env_var: str = "SUPPLIERS_SHEET_ID",
 ) -> str | None:
     resolved_id = sheet_id or os.environ.get(env_var)
     if not resolved_id:

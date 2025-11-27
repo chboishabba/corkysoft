@@ -15,6 +15,18 @@ from .legacy import (
 )
 from .schema import _ensure_driver_shift_columns
 
+__all__ = [
+    "create_shipment",
+    "fetch_shipments_with_context",
+    "rollup_driver_shift_costs_by_job",
+    "upsert_container",
+    "upsert_container_booking",
+    "upsert_job_by_number",
+    "upsert_job_container_allocation",
+    "upsert_job_segment",
+    "upsert_driver_shift",
+]
+
 
 def _resolve_shift_job_id(
     conn: sqlite3.Connection, job_id: int | None, shipment_id: int | None

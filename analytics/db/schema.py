@@ -1,6 +1,5 @@
 """Schema definitions and migration helpers for the dashboard database."""
 from __future__ import annotations
-from __future__ import annotations
 
 import sqlite3
 

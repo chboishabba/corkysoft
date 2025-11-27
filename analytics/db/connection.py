@@ -1,4 +1,4 @@
-"""Connection helpers for the analytics database."""
+"""Connection and schema helpers for the analytics SQLite database."""
 from __future__ import annotations
 
 import os
@@ -30,6 +30,13 @@ def connection_scope(db_path: Optional[str] = None):
         conn.close()
 
 
+def _table_columns(conn: sqlite3.Connection, table: str) -> Sequence[str]:
+    """Return column names for ``table`` preserving declared order."""
+
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return [row["name"] for row in rows]
+
+
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
     """Return True when ``table`` is present in the SQLite schema."""
 
@@ -37,13 +44,6 @@ def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
         "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
     ).fetchone()
     return row is not None
-
-
-def _table_columns(conn: sqlite3.Connection, table: str) -> Sequence[str]:
-    """Return column names for ``table`` preserving declared order."""
-
-    columns = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return [column["name"] if isinstance(column, sqlite3.Row) else column[1] for column in columns]
 
 
 def _unique_index_columns(conn: sqlite3.Connection, table: str) -> list[list[str]]:
