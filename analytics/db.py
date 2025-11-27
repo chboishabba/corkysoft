@@ -206,6 +206,90 @@ CREATE TABLE IF NOT EXISTS shipments (
     FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS containers (
+    container_number TEXT PRIMARY KEY,
+    type TEXT,
+    tare REAL,
+    payload REAL,
+    ownership TEXT,
+    status TEXT,
+    location TEXT
+);
+
+CREATE TABLE IF NOT EXISTS container_bookings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    container_number TEXT NOT NULL,
+    booking_ref TEXT NOT NULL,
+    etd TEXT,
+    eta TEXT,
+    load_port TEXT,
+    discharge_port TEXT,
+    carrier TEXT,
+    UNIQUE(container_number, booking_ref),
+    FOREIGN KEY(container_number) REFERENCES containers(container_number) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS job_container_allocations (
+    job_id INTEGER NOT NULL,
+    booking_id INTEGER NOT NULL,
+    segment_id INTEGER,
+    volume_share REAL,
+    weight_share REAL,
+    UNIQUE(job_id, booking_id, segment_id),
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+    FOREIGN KEY(booking_id) REFERENCES container_bookings(id) ON DELETE CASCADE,
+    FOREIGN KEY(segment_id) REFERENCES shipments(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS container_movements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    container_number TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    source_ref TEXT,
+    location TEXT,
+    notes TEXT,
+    UNIQUE(container_number, event_type, timestamp, source_ref),
+    FOREIGN KEY(container_number) REFERENCES containers(container_number) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS container_seals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    container_number TEXT NOT NULL,
+    seal_number TEXT NOT NULL,
+    applied_at TEXT,
+    removed_at TEXT,
+    source_ref TEXT,
+    UNIQUE(container_number, seal_number, applied_at, source_ref),
+    FOREIGN KEY(container_number) REFERENCES containers(container_number) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS condition_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    container_number TEXT NOT NULL,
+    report_time TEXT NOT NULL,
+    condition TEXT,
+    reporter TEXT,
+    notes TEXT,
+    source_ref TEXT,
+    UNIQUE(container_number, report_time, source_ref),
+    FOREIGN KEY(container_number) REFERENCES containers(container_number) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS container_charges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    container_number TEXT NOT NULL,
+    booking_id INTEGER,
+    charge_type TEXT NOT NULL,
+    amount REAL,
+    currency TEXT,
+    effective_date TEXT,
+    source_ref TEXT,
+    UNIQUE(container_number, booking_id, charge_type, effective_date, source_ref),
+    FOREIGN KEY(container_number) REFERENCES containers(container_number) ON DELETE CASCADE,
+    FOREIGN KEY(booking_id) REFERENCES container_bookings(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS driver_shifts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     shift_date TEXT NOT NULL,
@@ -400,6 +484,13 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
         "trucks",
         "vehicle_repairs",
         "shipments",
+        "containers",
+        "container_bookings",
+        "job_container_allocations",
+        "container_movements",
+        "container_seals",
+        "condition_reports",
+        "container_charges",
     ):
         if not _table_exists(conn, table_name):
             conn.execute(
