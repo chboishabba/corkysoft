@@ -165,6 +165,20 @@ CREATE TABLE IF NOT EXISTS inventory_items (
   FOREIGN KEY(supplier_id) REFERENCES suppliers(id)
 );
 
+CREATE TABLE IF NOT EXISTS inventory_movements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  inventory_item_id INTEGER NOT NULL,
+  shipment_id INTEGER,
+  change_on_hand INTEGER NOT NULL DEFAULT 0,
+  change_allocated INTEGER NOT NULL DEFAULT 0,
+  reason TEXT DEFAULT '',
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE CASCADE,
+  FOREIGN KEY(shipment_id) REFERENCES shipments(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_inventory_movements_item
+  ON inventory_movements(inventory_item_id);
+
 CREATE TABLE IF NOT EXISTS workers (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -216,6 +230,9 @@ CREATE TABLE IF NOT EXISTS shipments (
   inventory_item_id INTEGER,
   truck_id TEXT,
   worker_id INTEGER,
+  quantity REAL NOT NULL DEFAULT 1,
+  from_location TEXT,
+  to_location TEXT,
   status TEXT NOT NULL DEFAULT 'planned',
   scheduled_date TEXT,
   delivered_at TEXT,
@@ -400,6 +417,9 @@ def migrate_schema(conn: sqlite3.Connection):
             inventory_item_id INTEGER,
             truck_id TEXT,
             worker_id INTEGER,
+            quantity REAL NOT NULL DEFAULT 1,
+            from_location TEXT,
+            to_location TEXT,
             status TEXT NOT NULL DEFAULT 'planned',
             scheduled_date TEXT,
             delivered_at TEXT,
@@ -412,6 +432,68 @@ def migrate_schema(conn: sqlite3.Connection):
             FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
         )
         """,
+    )
+    ensure_table(
+        "inventory_movements",
+        """
+        CREATE TABLE IF NOT EXISTS inventory_movements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inventory_item_id INTEGER NOT NULL,
+            shipment_id INTEGER,
+            change_on_hand INTEGER NOT NULL DEFAULT 0,
+            change_allocated INTEGER NOT NULL DEFAULT 0,
+            reason TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE CASCADE,
+            FOREIGN KEY(shipment_id) REFERENCES shipments(id) ON DELETE CASCADE
+        )
+        """,
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_inventory_movements_item
+            ON inventory_movements(inventory_item_id)
+        """
+    )
+
+    shipment_columns = {r[1] for r in conn.execute("PRAGMA table_info(shipments)")}
+    def add_shipment_column(name: str, declaration: str) -> None:
+        if name not in shipment_columns:
+            conn.execute(f"ALTER TABLE shipments ADD COLUMN {name} {declaration}")
+            shipment_columns.add(name)
+
+    add_shipment_column("quantity", "REAL NOT NULL DEFAULT 1")
+    add_shipment_column("from_location", "TEXT")
+    add_shipment_column("to_location", "TEXT")
+
+    conn.execute(
+        "UPDATE shipments SET quantity = COALESCE(quantity, 1) WHERE quantity IS NULL"
+    )
+    conn.execute(
+        """
+        UPDATE shipments
+        SET from_location = COALESCE(
+            from_location,
+            (SELECT origin FROM jobs WHERE jobs.id = shipments.job_id),
+            (SELECT origin FROM historical_jobs WHERE historical_jobs.id = shipments.historical_job_id)
+        )
+        WHERE from_location IS NULL
+        """
+    )
+    conn.execute(
+        """
+        UPDATE shipments
+        SET to_location = COALESCE(
+            to_location,
+            (SELECT destination FROM jobs WHERE jobs.id = shipments.job_id),
+            (
+                SELECT destination
+                FROM historical_jobs
+                WHERE historical_jobs.id = shipments.historical_job_id
+            )
+        )
+        WHERE to_location IS NULL
+        """
     )
 
     shift_columns = {r[1] for r in conn.execute("PRAGMA table_info(driver_shifts)")}
@@ -443,8 +525,16 @@ def migrate_schema(conn: sqlite3.Connection):
         now = dt.datetime.now(dt.timezone.utc).isoformat()
         for (job_id,) in conn.execute("SELECT id FROM jobs"):
             conn.execute(
-                "INSERT INTO shipments (job_id, status, created_at) VALUES (?, 'planned', ?)",
-                (job_id, now),
+                """
+                INSERT INTO shipments (
+                    job_id, status, quantity, from_location, to_location, created_at
+                ) VALUES (?, 'planned', 1, (
+                    SELECT origin FROM jobs WHERE jobs.id = ?
+                ), (
+                    SELECT destination FROM jobs WHERE jobs.id = ?
+                ), ?)
+                """,
+                (job_id, job_id, job_id, now),
             )
 
         if table_exists("historical_jobs"):
@@ -453,10 +543,26 @@ def migrate_schema(conn: sqlite3.Connection):
             ):
                 conn.execute(
                     """
-                    INSERT INTO shipments (historical_job_id, status, scheduled_date, created_at)
-                    VALUES (?, 'delivered', ?, ?)
+                    INSERT INTO shipments (
+                        historical_job_id,
+                        status,
+                        scheduled_date,
+                        quantity,
+                        from_location,
+                        to_location,
+                        created_at
+                    )
+                    VALUES (
+                        ?,
+                        'delivered',
+                        ?,
+                        1,
+                        (SELECT origin FROM historical_jobs WHERE historical_jobs.id = ?),
+                        (SELECT destination FROM historical_jobs WHERE historical_jobs.id = ?),
+                        ?
+                    )
                     """,
-                    (job_id, job_date, now),
+                    (job_id, job_date, job_id, job_id, now),
                 )
 
     backfill_shipments()
