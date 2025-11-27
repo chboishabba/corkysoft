@@ -9,3 +9,4 @@ openrouteservice>=2.3
 fastapi>=0.111
 httpx>=0.27
 googlemaps
+openpyxl>=3.1
