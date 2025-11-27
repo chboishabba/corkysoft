@@ -280,31 +280,12 @@ def _pick_candidate_routes(
         ]
     )
 
-    rows = conn.execute(
-        f"""
-        SELECT
-            hj.id,
-            hj.job_date,
-            o.lat AS origin_lat,
-            o.lon AS origin_lon,
-            d.lat AS dest_lat,
-            d.lon AS dest_lon,
-            hj.distance_km,
-            hj.duration_hr,
-            hr.geojson AS route_geometry
-        FROM historical_jobs AS hj
-        JOIN addresses AS o ON hj.origin_address_id = o.id
-        JOIN addresses AS d ON hj.destination_address_id = d.id
-        LEFT JOIN historical_job_routes AS hr ON hr.historical_job_id = hj.id
-        WHERE {where_clause}
-    """,
-        params,
-    ).fetchall()
     try:
         rows = conn.execute(
-            """
+            f"""
             SELECT
                 hj.id,
+                hj.job_date,
                 o.lat AS origin_lat,
                 o.lon AS origin_lon,
                 d.lat AS dest_lat,
@@ -316,11 +297,9 @@ def _pick_candidate_routes(
             JOIN addresses AS o ON hj.origin_address_id = o.id
             JOIN addresses AS d ON hj.destination_address_id = d.id
             LEFT JOIN historical_job_routes AS hr ON hr.historical_job_id = hj.id
-            WHERE o.lat IS NOT NULL
-              AND o.lon IS NOT NULL
-              AND d.lat IS NOT NULL
-              AND d.lon IS NOT NULL
-        """
+            WHERE {where_clause}
+        """,
+            params,
         ).fetchall()
     except sqlite3.OperationalError:
         rows = []

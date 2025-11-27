@@ -17,7 +17,7 @@ from analytics.live_data import (
     load_active_routes,
     load_truck_positions,
 )
-from analytics.live_data import _pick_candidate_routes, _position_along_route, _apply_duty_cycle,  # type: ignore[attr-defined]
+from analytics.live_data import _pick_candidate_routes, _position_along_route, _apply_duty_cycle  # type: ignore[attr-defined]
 
 from analytics.price_distribution import (
     PROFITABILITY_COLOURS,
