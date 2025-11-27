@@ -7,19 +7,21 @@ from typing import Iterable, Mapping, Sequence
 from analytics.db import (
     ensure_dashboard_tables,
     upsert_container,
-    upsert_container_allocation,
     upsert_container_booking,
     upsert_job_by_number,
     upsert_job_segment,
+    upsert_job_container_allocation,
     upsert_worker,
 )
 
 
-def _first_present(record: Mapping[str, object], *keys: str) -> object | None:
+def _first_present(
+    record: Mapping[str, object], *keys: str, default: object | None = None
+) -> object | None:
     for key in keys:
         if key in record:
             return record[key]
-    return None
+    return default
 
 
 def _clean_str(value: object | None) -> str | None:
@@ -320,23 +322,6 @@ def import_allocations(
     inserted = 0
     updated = 0
     for record in records:
-        allocation_reference = _clean_str(
-            _first_present(record, "allocation_reference", "allocationReference")
-        )
-        if not allocation_reference:
-            raise ValueError("Allocation record missing allocation_reference")
-
-        container_number = _clean_str(
-            _first_present(record, "container_number", "containerNumber")
-        )
-        container_id = _coerce_int(record.get("container_id"))
-        if container_id is None and container_number:
-            container_row = conn.execute(
-                "SELECT id FROM containers WHERE container_number = ?",
-                (container_number,),
-            ).fetchone()
-            container_id = container_row[0] if container_row else None
-
         booking_reference = _clean_str(
             _first_present(record, "booking_reference", "bookingReference")
         )
@@ -353,23 +338,48 @@ def import_allocations(
         if job_id is None and job_number:
             job_id = _job_id_from_number(conn, job_number)
 
-        worker_id = _coerce_int(record.get("worker_id"))
+        if job_id is None:
+            raise ValueError("Allocation record missing job linkage")
+        if booking_id is None:
+            raise ValueError("Allocation record missing booking linkage")
+
+        segment_sequence = _coerce_int(
+            _first_present(record, "segment_sequence", "segmentSequence")
+        )
+        segment_id = _coerce_int(
+            _first_present(record, "segment_id", "segmentId", default=None)
+        )
+        if segment_id is None and segment_sequence is not None:
+            segment_row = conn.execute(
+                """
+                SELECT id FROM job_segments
+                WHERE job_id = ? AND segment_sequence = ?
+                """,
+                (job_id, segment_sequence),
+            ).fetchone()
+            segment_id = segment_row[0] if segment_row else None
 
         existing = conn.execute(
-            "SELECT id FROM container_allocations WHERE allocation_reference = ?",
-            (allocation_reference,),
+            """
+            SELECT 1 FROM job_container_allocations
+            WHERE job_id = ? AND booking_id = ? AND (
+                (segment_id IS NULL AND ? IS NULL) OR segment_id = ?
+            )
+            """,
+            (job_id, booking_id, segment_id, segment_id),
         ).fetchone()
         if not dry_run:
-            upsert_container_allocation(
+            upsert_job_container_allocation(
                 conn,
-                allocation_reference=allocation_reference,
-                container_id=container_id,
-                booking_id=booking_id,
                 job_id=job_id,
-                worker_id=worker_id,
-                status=_clean_str(record.get("status")),
-                created_at=_coerce_timestamp(_first_present(record, "created_at", "createdAt")),
-                updated_at=_coerce_timestamp(_first_present(record, "updated_at", "updatedAt")),
+                booking_id=booking_id,
+                segment_id=segment_id,
+                volume_share=_coerce_float(
+                    _first_present(record, "volume_share", "volumeShare")
+                ),
+                weight_share=_coerce_float(
+                    _first_present(record, "weight_share", "weightShare")
+                ),
             )
         if existing is None:
             inserted += 1

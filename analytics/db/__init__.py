@@ -38,9 +38,9 @@ from .shipments import (
     create_shipment,
     fetch_shipments_with_context,
     upsert_container,
-    upsert_container_allocation,
     upsert_container_booking,
     upsert_job_by_number,
+    upsert_job_container_allocation,
     upsert_job_segment,
 )
 from .workers import import_workers_from_staff_sheet, upsert_worker
@@ -79,11 +79,11 @@ __all__ = [
     "rollup_driver_shift_costs_by_job",
     "set_parameter_value",
     "upsert_container",
-    "upsert_container_allocation",
     "upsert_container_booking",
     "upsert_driver_shift",
     "upsert_inventory_item",
     "upsert_job_by_number",
+    "upsert_job_container_allocation",
     "upsert_job_segment",
     "upsert_supplier",
     "upsert_truck",
