@@ -1,5 +1,4 @@
 """Functions for managing global parameters in the database."""
-
 from __future__ import annotations
 
 import sqlite3
@@ -39,10 +38,7 @@ def get_parameter_value(
 
 
 def set_parameter_value(
-    conn: sqlite3.Connection,
-    key: str,
-    value: float,
-    description: Optional[str] = None,
+    conn: sqlite3.Connection, key: str, value: float, description: Optional[str] = None
 ) -> None:
     """Insert or update a numeric parameter in ``global_parameters``."""
 

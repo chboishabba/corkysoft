@@ -1,5 +1,4 @@
-"""Core database connection utilities."""
-
+"""Connection and schema helpers for the analytics SQLite database."""
 from __future__ import annotations
 
 import os
@@ -7,9 +6,7 @@ import sqlite3
 from contextlib import contextmanager
 from typing import Optional, Sequence
 
-DEFAULT_DB_PATH = os.environ.get(
-    "CORKYSOFT_DB", os.environ.get("ROUTES_DB", "routes.db")
-)
+DEFAULT_DB_PATH = os.environ.get("CORKYSOFT_DB", os.environ.get("ROUTES_DB", "routes.db"))
 
 
 def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
@@ -24,13 +21,20 @@ def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
 
 @contextmanager
 def connection_scope(db_path: Optional[str] = None):
-    """Yield a SQLite connection and close it afterwards."""
+    """Context manager that yields a SQLite connection and closes it afterwards."""
 
     conn = get_connection(db_path)
     try:
         yield conn
     finally:
         conn.close()
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> Sequence[str]:
+    """Return column names for ``table`` preserving declared order."""
+
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return [row["name"] for row in rows]
 
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
@@ -40,13 +44,6 @@ def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
         "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
     ).fetchone()
     return row is not None
-
-
-def _table_columns(conn: sqlite3.Connection, table: str) -> Sequence[str]:
-    """Return column names for ``table`` preserving declared order."""
-
-    columns = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return [column["name"] for column in columns]
 
 
 def _unique_index_columns(conn: sqlite3.Connection, table: str) -> list[list[str]]:
@@ -77,8 +74,8 @@ def initialize_database(conn: Optional[sqlite3.Connection] = None) -> None:
         working_conn = get_connection()
         close_conn = True
     try:
-        from .legacy import ensure_dashboard_tables
         from .parameters import ensure_global_parameters_table
+        from .schema import ensure_dashboard_tables
 
         ensure_dashboard_tables(working_conn)
         ensure_global_parameters_table(working_conn)

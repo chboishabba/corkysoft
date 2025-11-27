@@ -1,28 +1,16 @@
 """Inventory and supplier-related database functions."""
-
 from __future__ import annotations
 
 import os
 import sqlite3
 from datetime import UTC, datetime
-from typing import IO, Iterable
 from urllib.parse import quote_plus
+from typing import IO, Iterable, Optional, Sequence
 
 import pandas as pd
 
+from .connection import _table_columns
 from .schema import ensure_suppliers_table
-
-__all__ = [
-    "ensure_suppliers_table",
-    "get_inventory_balance",
-    "import_suppliers_from_google_sheet",
-    "list_inventory",
-    "list_inventory_balances",
-    "list_suppliers",
-    "record_inventory_movement",
-    "upsert_inventory_item",
-    "upsert_supplier",
-]
 
 
 def upsert_inventory_item(

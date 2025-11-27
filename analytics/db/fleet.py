@@ -1,5 +1,4 @@
 """Fleet and worker-related database functions."""
-
 from __future__ import annotations
 
 import sqlite3
