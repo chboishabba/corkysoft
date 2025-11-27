@@ -95,6 +95,10 @@ CREATE TABLE IF NOT EXISTS inventory_items (
     quantity INTEGER NOT NULL DEFAULT 0,
     unit TEXT DEFAULT 'unit',
     supplier_id INTEGER,
+    job_id INTEGER,
+    state TEXT DEFAULT 'created',
+    item_id TEXT,
+    asset_tag TEXT,
     updated_at TEXT,
     UNIQUE(name),
     FOREIGN KEY(supplier_id) REFERENCES suppliers(id)
@@ -188,15 +192,33 @@ CREATE TABLE IF NOT EXISTS inventory_movements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     inventory_item_id INTEGER NOT NULL,
     shipment_id INTEGER,
+    job_id INTEGER,
     change_on_hand INTEGER NOT NULL DEFAULT 0,
     change_allocated INTEGER NOT NULL DEFAULT 0,
     reason TEXT DEFAULT '',
+    state TEXT,
+    sequence_no INTEGER,
     created_at TEXT NOT NULL,
     FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE CASCADE,
-    FOREIGN KEY(shipment_id) REFERENCES shipments(id) ON DELETE CASCADE
+    FOREIGN KEY(shipment_id) REFERENCES shipments(id) ON DELETE CASCADE,
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_inventory_movements_item
     ON inventory_movements(inventory_item_id);
+
+CREATE TABLE IF NOT EXISTS inventory_exceptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    inventory_item_id INTEGER,
+    job_id INTEGER,
+    exception_type TEXT,
+    state TEXT,
+    notes TEXT,
+    resolution_note TEXT,
+    noted_at TEXT NOT NULL,
+    resolved_at TEXT,
+    FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE SET NULL,
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL
+);
 
 CREATE TABLE IF NOT EXISTS driver_shifts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -271,6 +293,27 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
     ensure_suppliers_table(conn)
     # _ensure_inventory_movements_table(conn)
 
+    inventory_columns = _table_columns(conn, "inventory_items")
+    inventory_declarations = {
+        "job_id": "INTEGER",
+        "state": "TEXT DEFAULT 'created'",
+        "item_id": "TEXT",
+        "asset_tag": "TEXT",
+    }
+    for column, declaration in inventory_declarations.items():
+        if column not in inventory_columns:
+            conn.execute(f"ALTER TABLE inventory_items ADD COLUMN {column} {declaration}")
+
+    movement_columns = _table_columns(conn, "inventory_movements")
+    movement_declarations = {
+        "job_id": "INTEGER",
+        "state": "TEXT",
+        "sequence_no": "INTEGER",
+    }
+    for column, declaration in movement_declarations.items():
+        if column not in movement_columns:
+            conn.execute(f"ALTER TABLE inventory_movements ADD COLUMN {column} {declaration}")
+
     hist_columns = _table_columns(conn, "historical_jobs")
     if "client_id" not in hist_columns:
         conn.execute("ALTER TABLE historical_jobs ADD COLUMN client_id INTEGER")
@@ -305,6 +348,7 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
     for table_name in (
         "inventory_items",
         "inventory_movements",
+        "inventory_exceptions",
         "workers",
         "trucks",
         "vehicle_repairs",

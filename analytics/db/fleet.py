@@ -237,14 +237,24 @@ def import_workers_from_staff_sheet(
         upsert_worker(
             conn,
             name=name,
-            role=str(row.get("ROLE", "") or ""),
+            role=str(row.get("ROLE") or ""),
+            phone=str(row.get("PHONE") or ""),
             rate=rate_value,
             tickets=tickets_value,
+            active=str(row.get("ACTIVE") or "Yes").strip().lower() != "no",
         )
 
-        if existing is None:
-            inserted += 1
-        else:
+        if existing:
             updated += 1
+        else:
+            inserted += 1
 
     return inserted, updated
+
+
+__all__ = [
+    "upsert_truck",
+    "upsert_vehicle_details",
+    "upsert_worker",
+    "import_workers_from_staff_sheet",
+]

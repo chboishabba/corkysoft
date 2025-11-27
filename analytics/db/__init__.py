@@ -1,4 +1,11 @@
 """Database facade module re-exporting domain helpers."""
+from __future__ import annotations
+
+from .connection import DEFAULT_DB_PATH, connection_scope, get_connection
+from .fleet import import_workers_from_staff_sheet, upsert_truck, upsert_vehicle_details, upsert_worker
+from .inventory import (
+    INVENTORY_STATES,
+    ensure_suppliers_table,
 
 from __future__ import annotations
 
@@ -19,26 +26,44 @@ from .connection import DEFAULT_DB_PATH, connection_scope, get_connection
 from .fleet import import_workers_from_staff_sheet, upsert_truck, upsert_vehicle_details, upsert_worker
 from .inventory import (
     get_inventory_balance,
+    import_inventory_items_from_dataframe,
+    import_inventory_movements_from_dataframe,
     import_suppliers_from_google_sheet,
     list_inventory,
     list_inventory_balances,
+    list_inventory_exceptions,
+    list_inventory_movements,
     list_suppliers,
     record_inventory_movement,
+    resolve_inventory_exception,
     upsert_inventory_item,
     upsert_supplier,
 )
 from .parameters import bootstrap_parameters, ensure_global_parameters_table, get_parameter_value, set_parameter_value
+from .schema import (
+    _DASHBOARD_SCHEMA_SQL,
+    ensure_dashboard_tables,
+    ensure_historical_job_routes_table,
+    migrate_geojson_to_routes,
+)
 from .schema import _DASHBOARD_SCHEMA_SQL, ensure_dashboard_tables, ensure_historical_job_routes_table, migrate_geojson_to_routes
 from .shipments import (
     create_shipment,
     fetch_driver_shifts,
     fetch_shipments_with_context,
     rollup_driver_shift_costs_by_job,
+    upsert_container,
+    upsert_container_booking,
+    upsert_driver_shift,
+    upsert_job_by_number,
+    upsert_job_container_allocation,
+    upsert_job_segment,
     upsert_driver_shift,
 )
 
 __all__ = [
     "DEFAULT_DB_PATH",
+    "INVENTORY_STATES",
     "_DASHBOARD_SCHEMA_SQL",
     "bootstrap_parameters",
     "connection_scope",
@@ -51,13 +76,18 @@ __all__ = [
     "get_connection",
     "get_inventory_balance",
     "get_parameter_value",
+    "import_inventory_items_from_dataframe",
+    "import_inventory_movements_from_dataframe",
     "import_suppliers_from_google_sheet",
     "import_workers_from_staff_sheet",
     "list_inventory",
     "list_inventory_balances",
+    "list_inventory_exceptions",
+    "list_inventory_movements",
     "list_suppliers",
     "migrate_geojson_to_routes",
     "record_inventory_movement",
+    "resolve_inventory_exception",
     "rollup_driver_shift_costs_by_job",
     "set_parameter_value",
     "upsert_driver_shift",

@@ -52,10 +52,15 @@ def _unique_index_columns(conn: sqlite3.Connection, table: str) -> list[list[str
     indexes = conn.execute(f"PRAGMA index_list({table})").fetchall()
     unique_columns: list[list[str]] = []
     for index in indexes:
-        index_name, is_unique = index["name"], index["unique"]
+        index_name = index["name"] if isinstance(index, sqlite3.Row) else index[1]
+        is_unique = index["unique"] if isinstance(index, sqlite3.Row) else index[2]
         if is_unique:
             columns = conn.execute(f"PRAGMA index_info({index_name})").fetchall()
-            unique_columns.append([column["name"] for column in columns])
+            column_names = [
+                column["name"] if isinstance(column, sqlite3.Row) else column[2]
+                for column in columns
+            ]
+            unique_columns.append(column_names)
     return unique_columns
 
 

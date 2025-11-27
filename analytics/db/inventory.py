@@ -4,13 +4,21 @@ from __future__ import annotations
 import os
 import sqlite3
 from datetime import UTC, datetime
+from typing import Sequence
 from urllib.parse import quote_plus
-from typing import IO, Iterable, Optional, Sequence
 
 import pandas as pd
 
-from .connection import _table_columns
 from .schema import ensure_suppliers_table
+
+INVENTORY_STATES: Sequence[str] = (
+    "created",
+    "staged",
+    "loaded",
+    "in_transit",
+    "delivered",
+    "exception",
+)
 
 
 def upsert_inventory_item(
@@ -21,27 +29,55 @@ def upsert_inventory_item(
     quantity: int = 0,
     unit: str = "unit",
     supplier_id: int | None = None,
+    job_id: int | None = None,
+    state: str = "created",
+    item_id: str | None = None,
+    asset_tag: str | None = None,
 ) -> sqlite3.Row:
     """Create or update an inventory item and return the stored row."""
 
     timestamp = datetime.now(UTC).isoformat()
+    state_value = state if state in INVENTORY_STATES else "created"
     conn.execute(
         """
-        INSERT INTO inventory_items (name, description, quantity, unit, supplier_id, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO inventory_items (
+            name,
+            description,
+            quantity,
+            unit,
+            supplier_id,
+            job_id,
+            state,
+            item_id,
+            asset_tag,
+            updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(name) DO UPDATE SET
             description = excluded.description,
             quantity = excluded.quantity,
             unit = excluded.unit,
             supplier_id = excluded.supplier_id,
+            job_id = COALESCE(excluded.job_id, inventory_items.job_id),
+            state = excluded.state,
+            item_id = COALESCE(excluded.item_id, inventory_items.item_id),
+            asset_tag = COALESCE(excluded.asset_tag, inventory_items.asset_tag),
             updated_at = excluded.updated_at
         """,
-        (name, description, int(quantity), unit, supplier_id, timestamp),
+        (
+            name,
+            description,
+            int(quantity),
+            unit,
+            supplier_id,
+            job_id,
+            state_value,
+            item_id,
+            asset_tag,
+            timestamp,
+        ),
     )
     conn.commit()
-    return conn.execute(
-        "SELECT * FROM inventory_items WHERE name = ?", (name,)
-    ).fetchone()
+    return conn.execute("SELECT * FROM inventory_items WHERE name = ?", (name,)).fetchone()
 
 
 def _inventory_balance_query(where_clause: str = "") -> str:
@@ -70,9 +106,26 @@ def _inventory_balance_query(where_clause: str = "") -> str:
     return balances_cte + select_sql
 
 
-def list_inventory_balances(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def list_inventory_balances(
+    conn: sqlite3.Connection,
+    *,
+    job_id: int | None = None,
+    states: Sequence[str] | None = None,
+) -> list[sqlite3.Row]:
     """Return inventory items with on-hand, allocated, and available totals."""
 
+    where_clauses: list[str] = []
+    params: list[object] = []
+    if job_id is not None:
+        where_clauses.append("i.job_id = ?")
+        params.append(job_id)
+    if states:
+        placeholders = ",".join("?" for _ in states)
+        where_clauses.append(f"i.state IN ({placeholders})")
+        params.extend(states)
+
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    return list(conn.execute(_inventory_balance_query(where_sql), params))
     return list(conn.execute(_inventory_balance_query()))
 
 
@@ -96,30 +149,53 @@ def record_inventory_movement(
     change_allocated: int = 0,
     reason: str | None = None,
     commit: bool = True,
+    state: str | None = None,
+    job_id: int | None = None,
+    sequence_no: int | None = None,
 ) -> sqlite3.Row:
     """Insert an inventory movement entry and return the stored row."""
 
     timestamp = datetime.now(UTC).isoformat()
+    state_value = state if state in INVENTORY_STATES else None
     conn.execute(
         """
         INSERT INTO inventory_movements (
             inventory_item_id,
             shipment_id,
+            job_id,
             change_on_hand,
             change_allocated,
             reason,
+            state,
+            sequence_no,
             created_at
-        ) VALUES (?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             inventory_item_id,
             shipment_id,
+            job_id,
             int(change_on_hand),
             int(change_allocated),
             reason or "",
+            state_value,
+            sequence_no,
             timestamp,
         ),
     )
+
+    if state_value or job_id is not None:
+        conn.execute(
+            """
+            UPDATE inventory_items
+            SET state = COALESCE(?, state),
+                job_id = COALESCE(?, job_id),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (state_value, job_id, timestamp, inventory_item_id),
+        )
+
     if commit:
         conn.commit()
     return conn.execute(
@@ -144,6 +220,44 @@ def list_inventory(conn: sqlite3.Connection) -> list[sqlite3.Row]:
             LEFT JOIN suppliers AS s ON i.supplier_id = s.id
             ORDER BY i.name
             """
+        )
+    )
+
+
+def list_inventory_movements(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 50,
+    job_id: int | None = None,
+    states: Sequence[str] | None = None,
+) -> list[sqlite3.Row]:
+    """Return recent inventory movements with item context."""
+
+    where_clauses: list[str] = []
+    params: list[object] = []
+    if job_id is not None:
+        where_clauses.append("m.job_id = ?")
+        params.append(job_id)
+    if states:
+        placeholders = ",".join("?" for _ in states)
+        where_clauses.append(f"COALESCE(m.state, i.state) IN ({placeholders})")
+        params.extend(states)
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+    return list(
+        conn.execute(
+            f"""
+            SELECT
+                m.*, i.name AS inventory_name, i.unit,
+                COALESCE(m.state, i.state) AS movement_state,
+                i.job_id AS item_job_id
+            FROM inventory_movements AS m
+            JOIN inventory_items AS i ON i.id = m.inventory_item_id
+            {where_sql}
+            ORDER BY m.created_at DESC
+            LIMIT ?
+            """,
+            (*params, limit),
         )
     )
 
@@ -195,9 +309,7 @@ def list_suppliers(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Return suppliers ordered by company name."""
 
     return list(
-        conn.execute(
-            "SELECT * FROM suppliers ORDER BY LOWER(company_name), company_name"
-        )
+        conn.execute("SELECT * FROM suppliers ORDER BY LOWER(company_name), company_name")
     )
 
 
@@ -252,6 +364,140 @@ def import_suppliers_from_google_sheet(
     return imported
 
 
+def import_inventory_items_from_dataframe(
+    conn: sqlite3.Connection, dataframe: pd.DataFrame
+) -> int:
+    """Bulk import inventory items from a DataFrame."""
+
+    if dataframe.empty:
+        return 0
+    normalized = dataframe.rename(columns=_normalize_inventory_column)
+    if "name" not in normalized.columns:
+        raise ValueError("Inventory imports require a 'name' column")
+
+    imported = 0
+    for _, row in normalized.iterrows():
+        name = _clean_optional_str(row.get("name"))
+        if not name:
+            continue
+        description = row.get("description") or ""
+        unit = row.get("unit") or "unit"
+        quantity = int(row.get("quantity") or 0)
+        supplier_id = row.get("supplier_id")
+        job_id = row.get("job_id")
+        state = row.get("state") or "created"
+        item_id = _clean_optional_str(row.get("item_id"))
+        asset_tag = _clean_optional_str(row.get("asset_tag"))
+        upsert_inventory_item(
+            conn,
+            name=name,
+            description=str(description),
+            quantity=quantity,
+            unit=str(unit),
+            supplier_id=int(supplier_id) if pd.notna(supplier_id) else None,
+            job_id=int(job_id) if pd.notna(job_id) else None,
+            state=str(state),
+            item_id=item_id,
+            asset_tag=asset_tag,
+        )
+        imported += 1
+    return imported
+
+
+def import_inventory_movements_from_dataframe(
+    conn: sqlite3.Connection,
+    dataframe: pd.DataFrame,
+    *,
+    default_reason: str | None = None,
+) -> int:
+    """Bulk import movement events from a DataFrame."""
+
+    if dataframe.empty:
+        return 0
+
+    normalized = dataframe.rename(columns=_normalize_inventory_column)
+    required_field = None
+    for candidate in ("inventory_item_id", "name"):
+        if candidate in normalized.columns:
+            required_field = candidate
+            break
+    if required_field is None:
+        raise ValueError("Movement imports require an 'inventory_item_id' or 'name' column")
+
+    name_to_id = {
+        row["name"]: row["id"] for row in list_inventory(conn)
+    }
+
+    imported = 0
+    for _, row in normalized.iterrows():
+        inventory_item_id = row.get("inventory_item_id")
+        if pd.isna(inventory_item_id) or inventory_item_id is None:
+            name = _clean_optional_str(row.get("name"))
+            inventory_item_id = name_to_id.get(name) if name else None
+        if inventory_item_id is None:
+            continue
+
+        job_id = row.get("job_id")
+        state = row.get("state")
+        reason = row.get("reason") or default_reason
+        sequence_no = row.get("sequence_no")
+        record_inventory_movement(
+            conn,
+            inventory_item_id=int(inventory_item_id),
+            job_id=int(job_id) if pd.notna(job_id) else None,
+            change_on_hand=int(row.get("change_on_hand") or 0),
+            change_allocated=int(row.get("change_allocated") or 0),
+            state=str(state) if pd.notna(state) and state else None,
+            sequence_no=int(sequence_no) if pd.notna(sequence_no) else None,
+            reason=str(reason) if reason is not None else None,
+        )
+        imported += 1
+    return imported
+
+
+def list_inventory_exceptions(
+    conn: sqlite3.Connection, *, resolved: bool | None = None
+) -> list[sqlite3.Row]:
+    """Return inventory exceptions, optionally filtering by resolved status."""
+
+    where = ""
+    params: list[object] = []
+    if resolved is True:
+        where = "WHERE resolved_at IS NOT NULL"
+    elif resolved is False:
+        where = "WHERE resolved_at IS NULL"
+
+    return list(
+        conn.execute(
+            f"""
+            SELECT e.*, i.name AS inventory_name, i.job_id AS inventory_job_id
+            FROM inventory_exceptions AS e
+            LEFT JOIN inventory_items AS i ON i.id = e.inventory_item_id
+            {where}
+            ORDER BY e.noted_at DESC
+            """,
+            params,
+        )
+    )
+
+
+def resolve_inventory_exception(
+    conn: sqlite3.Connection, exception_id: int, *, note: str | None = None
+) -> None:
+    """Mark an inventory exception as resolved."""
+
+    timestamp = datetime.now(UTC).isoformat()
+    conn.execute(
+        """
+        UPDATE inventory_exceptions
+        SET resolved_at = ?, resolution_note = COALESCE(?, resolution_note)
+        WHERE id = ?
+        """,
+        (timestamp, note, exception_id),
+    )
+    conn.commit()
+
+
 def _clean_optional_str(value: object | None) -> str | None:
     if value is None:
         return None
@@ -272,6 +518,23 @@ def _normalize_supplier_column(column_name: str) -> str:
     return normalized
 
 
+def _normalize_inventory_column(column_name: str) -> str:
+    normalized = column_name.strip().lower().replace(" ", "_")
+    aliases = {
+        "item": "name",
+        "inventory": "name",
+        "item_name": "name",
+        "item_id": "item_id",
+        "job": "job_id",
+        "state": "state",
+        "asset": "asset_tag",
+        "barcode": "asset_tag",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _build_suppliers_sheet_url(
+    sheet_id: str | None, sheet_name: str, *, env_var: str = "SUPPLIERS_SHEET_ID"
 def _build_suppliers_sheet_url(
     sheet_id: str | None,
     sheet_name: str,
@@ -286,3 +549,22 @@ def _build_suppliers_sheet_url(
         f"https://docs.google.com/spreadsheets/d/{resolved_id}/gviz/tq?tqx=out:csv"
         f"&sheet={quote_plus(sheet_name)}"
     )
+
+
+__all__ = [
+    "INVENTORY_STATES",
+    "ensure_suppliers_table",
+    "get_inventory_balance",
+    "import_inventory_items_from_dataframe",
+    "import_inventory_movements_from_dataframe",
+    "import_suppliers_from_google_sheet",
+    "list_inventory",
+    "list_inventory_balances",
+    "list_inventory_movements",
+    "list_inventory_exceptions",
+    "list_suppliers",
+    "record_inventory_movement",
+    "resolve_inventory_exception",
+    "upsert_inventory_item",
+    "upsert_supplier",
+]

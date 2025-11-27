@@ -233,7 +233,7 @@ def create_shipment(
         to_location=to_location,
     )
 
-    quantity_value = 1.0 if quantity is None else float(quantity)
+    quantity_value = 1 if quantity is None else float(quantity)
     timestamp = datetime.now(UTC).isoformat()
     conn.execute(
         """
@@ -392,3 +392,17 @@ def fetch_shipments_with_context(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         ORDER BY s.id
     """
     return list(conn.execute(query))
+
+
+__all__ = [
+    "create_shipment",
+    "fetch_driver_shifts",
+    "fetch_shipments_with_context",
+    "rollup_driver_shift_costs_by_job",
+    "upsert_container",
+    "upsert_container_booking",
+    "upsert_driver_shift",
+    "upsert_job_by_number",
+    "upsert_job_container_allocation",
+    "upsert_job_segment",
+]
