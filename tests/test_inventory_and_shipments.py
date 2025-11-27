@@ -37,6 +37,8 @@ def test_schema_includes_logistics_tables(tmp_path):
             "job_segment_vehicles",
             "worker_roles",
             "worker_compliances",
+            "worker_role_assignments",
+            "worker_compliance_assignments",
         }.issubset(tables)
 
         worker_columns = {row[1] for row in conn.execute("PRAGMA table_info(workers)")}
@@ -210,6 +212,131 @@ def test_supplier_import_and_linkage():
         assert shipment["supplier_contact_name"] == "Sam Supplier"
         assert shipment["supplier_contact_number"] == "555-1234"
         assert shipment["supplier_email"] == "sam@example.com"
+    finally:
+        conn.close()
+
+
+def test_segment_worker_requires_assigned_role():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        db.ensure_dashboard_tables(conn)
+        job_id = conn.execute(
+            "INSERT INTO jobs (origin, destination) VALUES ('Origin', 'Destination')"
+        ).lastrowid
+        worker = db.upsert_worker(conn, name="Roleless Worker")
+        role_id = conn.execute(
+            "INSERT INTO worker_roles (name) VALUES ('Loader')"
+        ).lastrowid
+
+        with pytest.raises(ValueError):
+            db.create_shipment(
+                conn,
+                job_id=job_id,
+                worker_id=worker["id"],
+                worker_role_id=role_id,
+            )
+        conn.rollback()
+
+        conn.execute(
+            """
+            INSERT INTO worker_role_assignments (worker_id, role_id, assigned_at)
+            VALUES (?, ?, '2024-01-01T00:00:00Z')
+            """,
+            (worker["id"], role_id),
+        )
+
+        shipment = db.create_shipment(
+            conn, job_id=job_id, worker_id=worker["id"], worker_role_id=role_id
+        )
+        segment_worker = conn.execute(
+            "SELECT role_id FROM job_segment_workers WHERE segment_id = ?",
+            (shipment["segment_id"],),
+        ).fetchone()
+
+        assert segment_worker["role_id"] == role_id
+    finally:
+        conn.close()
+
+
+def test_segment_worker_requires_valid_compliance():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        db.ensure_dashboard_tables(conn)
+        worker = db.upsert_worker(conn, name="Compliance Worker")
+
+        compliance_id = conn.execute(
+            "INSERT INTO worker_compliances (name) VALUES ('MSIC')"
+        ).lastrowid
+        job_id = conn.execute(
+            "INSERT INTO jobs (origin, destination) VALUES ('Origin', 'Destination')"
+        ).lastrowid
+
+        with pytest.raises(ValueError):
+            db.create_shipment(
+                conn,
+                job_id=job_id,
+                worker_id=worker["id"],
+                required_compliance_ids=[compliance_id],
+            )
+        conn.rollback()
+
+        job_id = conn.execute(
+            "INSERT INTO jobs (origin, destination) VALUES ('Origin', 'Destination')"
+        ).lastrowid
+        compliance_id = conn.execute(
+            "INSERT OR IGNORE INTO worker_compliances (name) VALUES ('MSIC')"
+        ).lastrowid or conn.execute(
+            "SELECT id FROM worker_compliances WHERE name = 'MSIC'"
+        ).fetchone()[0]
+        conn.execute(
+            """
+            INSERT INTO worker_compliance_assignments (
+                worker_id, compliance_id, expiry_date, assigned_at
+            ) VALUES (?, ?, '2000-01-01', '2024-01-01T00:00:00Z')
+            """,
+            (worker["id"], compliance_id),
+        )
+
+        with pytest.raises(ValueError):
+            db.create_shipment(
+                conn,
+                job_id=job_id,
+                worker_id=worker["id"],
+                required_compliance_ids=[compliance_id],
+            )
+        conn.rollback()
+
+        job_id = conn.execute(
+            "INSERT INTO jobs (origin, destination) VALUES ('Origin', 'Destination')"
+        ).lastrowid
+        compliance_id = conn.execute(
+            "INSERT OR IGNORE INTO worker_compliances (name) VALUES ('MSIC')"
+        ).lastrowid or conn.execute(
+            "SELECT id FROM worker_compliances WHERE name = 'MSIC'"
+        ).fetchone()[0]
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO worker_compliance_assignments (
+                worker_id, compliance_id, expiry_date, assigned_at
+            ) VALUES (?, ?, '2099-01-01', '2024-01-01T00:00:00Z')
+            """,
+            (worker["id"], compliance_id),
+        )
+
+        shipment = db.create_shipment(
+            conn,
+            job_id=job_id,
+            worker_id=worker["id"],
+            required_compliance_ids=[compliance_id],
+        )
+
+        segment_worker = conn.execute(
+            "SELECT worker_id FROM job_segment_workers WHERE segment_id = ?",
+            (shipment["segment_id"],),
+        ).fetchone()
+        assert segment_worker["worker_id"] == worker["id"]
     finally:
         conn.close()
 
