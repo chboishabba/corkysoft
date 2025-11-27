@@ -1,13 +1,4 @@
-<<<<<<< HEAD
-"""Fleet and vehicle metadata helpers."""
-from __future__ import annotations
-
-from .legacy import upsert_truck, upsert_vehicle_details
-
-__all__ = ["upsert_truck", "upsert_vehicle_details"]
-=======
 """Fleet and worker-related database functions."""
-from __future__ import annotations
 from __future__ import annotations
 
 import os
@@ -251,4 +242,3 @@ def import_workers_from_staff_sheet(
             updated += 1
 
     return inserted, updated
->>>>>>> c3ed293 (Remove tracked pycache)
