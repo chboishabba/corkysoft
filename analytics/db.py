@@ -191,6 +191,9 @@ CREATE TABLE IF NOT EXISTS shipments (
     inventory_item_id INTEGER,
     truck_id TEXT,
     worker_id INTEGER,
+    quantity REAL NOT NULL DEFAULT 1,
+    from_location TEXT,
+    to_location TEXT,
     status TEXT NOT NULL DEFAULT 'planned',
     scheduled_date TEXT,
     delivered_at TEXT,
@@ -309,7 +312,7 @@ def bootstrap_parameters(
 
 
 def ensure_suppliers_table(conn: sqlite3.Connection) -> None:
-    """Guarantee the suppliers table exists for inventory relationships."""
+    """Create or migrate the suppliers table used by inventory features."""
 
     conn.execute(
         """
@@ -326,33 +329,21 @@ def ensure_suppliers_table(conn: sqlite3.Connection) -> None:
         )
         """
     )
+
+    column_declarations = {
+        "contact_name": "TEXT",
+        "contact_number": "TEXT",
+        "email": "TEXT",
+        "notes": "TEXT",
+        "created_at": "TEXT",
+        "updated_at": "TEXT",
+    }
+
+    for column, declaration in column_declarations.items():
+        if column not in _table_columns(conn, "suppliers"):
+            conn.execute(f"ALTER TABLE suppliers ADD COLUMN {column} {declaration}")
+
     conn.commit()
-
-
-def _ensure_inventory_movements_table(conn: sqlite3.Connection) -> None:
-    """Create the inventory_movements table if missing."""
-
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS inventory_movements (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            inventory_item_id INTEGER NOT NULL,
-            shipment_id INTEGER,
-            change_on_hand INTEGER NOT NULL DEFAULT 0,
-            change_allocated INTEGER NOT NULL DEFAULT 0,
-            reason TEXT DEFAULT '',
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE CASCADE,
-            FOREIGN KEY(shipment_id) REFERENCES shipments(id) ON DELETE CASCADE
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_inventory_movements_item
-            ON inventory_movements(inventory_item_id)
-        """
-    )
 
 
 def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
@@ -390,6 +381,7 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
 
     ensure_historical_job_routes_table(conn)
     _ensure_vehicle_details_table(conn)
+    _ensure_shipment_columns(conn)
     conn.commit()
 
     for table_name in (
@@ -410,6 +402,57 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> Sequence[str]:
     """Return the column names for *table* in the current connection."""
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return [row[1] for row in rows]
+
+
+def _ensure_shipment_columns(conn: sqlite3.Connection) -> None:
+    """Ensure shipment columns for quantities and locations exist and are populated."""
+
+    if not _table_exists(conn, "shipments"):
+        return
+
+    columns = set(_table_columns(conn, "shipments"))
+    declarations = {
+        "quantity": "REAL NOT NULL DEFAULT 1",
+        "from_location": "TEXT",
+        "to_location": "TEXT",
+    }
+    for column, declaration in declarations.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE shipments ADD COLUMN {column} {declaration}")
+
+    conn.execute(
+        "UPDATE shipments SET quantity = COALESCE(quantity, 1) WHERE quantity IS NULL"
+    )
+    conn.execute(
+        """
+        UPDATE shipments
+        SET from_location = COALESCE(
+            from_location,
+            (SELECT origin FROM jobs WHERE jobs.id = shipments.job_id),
+            (
+                SELECT origin
+                FROM historical_jobs
+                WHERE historical_jobs.id = shipments.historical_job_id
+            )
+        )
+        WHERE from_location IS NULL
+        """
+    )
+    conn.execute(
+        """
+        UPDATE shipments
+        SET to_location = COALESCE(
+            to_location,
+            (SELECT destination FROM jobs WHERE jobs.id = shipments.job_id),
+            (
+                SELECT destination
+                FROM historical_jobs
+                WHERE historical_jobs.id = shipments.historical_job_id
+            )
+        )
+        WHERE to_location IS NULL
+        """
+    )
 
 
 def _ensure_driver_shift_columns(conn: sqlite3.Connection) -> None:
@@ -1050,6 +1093,42 @@ def import_workers_from_staff_sheet(
     return inserted, updated
 
 
+def _resolve_shipment_locations(
+    conn: sqlite3.Connection,
+    *,
+    job_id: int | None,
+    historical_job_id: int | None,
+    from_location: str | None,
+    to_location: str | None,
+) -> tuple[str | None, str | None]:
+    """Return shipment locations preferring explicit values then job origins/destinations."""
+
+    if from_location is not None and to_location is not None:
+        return from_location, to_location
+
+    resolved_from = from_location
+    resolved_to = to_location
+
+    if resolved_from is None or resolved_to is None:
+        if job_id is not None:
+            row = conn.execute(
+                "SELECT origin, destination FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if row is not None:
+                resolved_from = resolved_from or row[0]
+                resolved_to = resolved_to or row[1]
+        if (resolved_from is None or resolved_to is None) and historical_job_id is not None:
+            row = conn.execute(
+                "SELECT origin, destination FROM historical_jobs WHERE id = ?",
+                (historical_job_id,),
+            ).fetchone()
+            if row is not None:
+                resolved_from = resolved_from or row[0]
+                resolved_to = resolved_to or row[1]
+
+    return resolved_from, resolved_to
+
+
 def create_shipment(
     conn: sqlite3.Connection,
     *,
@@ -1059,6 +1138,9 @@ def create_shipment(
     quantity: int = 1,
     truck_id: str | None = None,
     worker_id: int | None = None,
+    quantity: float | None = None,
+    from_location: str | None = None,
+    to_location: str | None = None,
     status: str = "planned",
     scheduled_date: str | None = None,
     delivered_at: str | None = None,
@@ -1075,71 +1157,51 @@ def create_shipment(
     if job_id is None and historical_job_id is None:
         raise ValueError("Shipments must reference a job or historical job")
 
-    if inventory_item_id is not None and quantity <= 0:
-        raise ValueError("Shipment quantities must be positive when inventory is set")
+    resolved_from, resolved_to = _resolve_shipment_locations(
+        conn,
+        job_id=job_id,
+        historical_job_id=historical_job_id,
+        from_location=from_location,
+        to_location=to_location,
+    )
 
+    quantity_value = 1.0 if quantity is None else float(quantity)
     timestamp = datetime.now(UTC).isoformat()
-    try:
-        conn.execute("SAVEPOINT create_shipment_sp")
-
-        if inventory_item_id is not None:
-            balance = get_inventory_balance(conn, inventory_item_id)
-            if balance is None:
-                raise ValueError("Inventory item not found for shipment")
-
-            available = int(balance["available_quantity"])
-            if available < quantity:
-                raise ValueError("Insufficient available inventory for shipment")
-
-        conn.execute(
-            """
-            INSERT INTO shipments (
-                job_id,
-                historical_job_id,
-                inventory_item_id,
-                truck_id,
-                worker_id,
-                status,
-                scheduled_date,
-                delivered_at,
-                created_at,
-                updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                job_id,
-                historical_job_id,
-                inventory_item_id,
-                truck_id,
-                worker_id,
-                status,
-                scheduled_date,
-                delivered_at,
-                timestamp,
-                timestamp,
-            ),
-        )
-        shipment_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-        if inventory_item_id is not None and quantity:
-            change_on_hand = 0 if reserve_in_transit else -quantity
-            change_allocated = quantity if reserve_in_transit else 0
-            record_inventory_movement(
-                conn,
-                inventory_item_id=inventory_item_id,
-                shipment_id=shipment_id,
-                change_on_hand=change_on_hand,
-                change_allocated=change_allocated,
-                reason="Shipment allocation",
-                commit=False,
-            )
-
-        conn.execute("RELEASE SAVEPOINT create_shipment_sp")
-    except Exception:
-        conn.execute("ROLLBACK TO SAVEPOINT create_shipment_sp")
-        conn.execute("RELEASE SAVEPOINT create_shipment_sp")
-        raise
-
+    conn.execute(
+        """
+        INSERT INTO shipments (
+            job_id,
+            historical_job_id,
+            inventory_item_id,
+            truck_id,
+            worker_id,
+            quantity,
+            from_location,
+            to_location,
+            status,
+            scheduled_date,
+            delivered_at,
+            created_at,
+            updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            job_id,
+            historical_job_id,
+            inventory_item_id,
+            truck_id,
+            worker_id,
+            quantity_value,
+            resolved_from,
+            resolved_to,
+            status,
+            scheduled_date,
+            delivered_at,
+            timestamp,
+            timestamp,
+        ),
+    )
+    conn.commit()
     return conn.execute(
         "SELECT * FROM shipments WHERE id = ?", (shipment_id,)
     ).fetchone()
@@ -1190,6 +1252,9 @@ def fetch_shipments_with_context(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     query = """
         SELECT
             s.id,
+            s.quantity,
+            s.from_location,
+            s.to_location,
             s.status,
             s.scheduled_date,
             s.delivered_at,

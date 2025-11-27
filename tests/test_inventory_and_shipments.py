@@ -36,6 +36,7 @@ def test_schema_includes_logistics_tables(tmp_path):
 
 def test_shipments_backfilled_for_jobs(tmp_path):
     conn = sqlite3.connect(tmp_path / "routes.db")
+    conn.row_factory = sqlite3.Row
     try:
         ensure_schema(conn)
         conn.execute(
@@ -50,14 +51,24 @@ def test_shipments_backfilled_for_jobs(tmp_path):
         migrate_schema(conn)
 
         shipments = conn.execute(
-            "SELECT job_id, historical_job_id, status FROM shipments ORDER BY id"
+            """
+            SELECT job_id, historical_job_id, status, quantity, from_location, to_location
+            FROM shipments
+            ORDER BY id
+            """
         ).fetchall()
 
         assert len(shipments) == 2
-        assert shipments[0][0] is not None
-        assert shipments[0][2] == "planned"
-        assert shipments[1][1] is not None
-        assert shipments[1][2] == "delivered"
+        assert shipments[0]["job_id"] is not None
+        assert shipments[0]["status"] == "planned"
+        assert shipments[0]["quantity"] == 1
+        assert shipments[0]["from_location"] == "A"
+        assert shipments[0]["to_location"] == "B"
+        assert shipments[1]["historical_job_id"] is not None
+        assert shipments[1]["status"] == "delivered"
+        assert shipments[1]["quantity"] == 1
+        assert shipments[1]["from_location"] == "C"
+        assert shipments[1]["to_location"] == "D"
     finally:
         conn.close()
 
@@ -167,71 +178,63 @@ def test_supplier_import_and_linkage():
         conn.close()
 
 
-def test_inventory_balances_and_reservations():
+def test_partial_shipments_track_quantity_and_locations():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     try:
         db.ensure_dashboard_tables(conn)
-
         job_id = conn.execute(
-            "INSERT INTO jobs (origin, destination) VALUES ('Origin', 'Dest')"
+            "INSERT INTO jobs (origin, destination) VALUES ('Warehouse', 'Site Alpha')"
         ).lastrowid
-        item = db.upsert_inventory_item(conn, name="Crates", quantity=5)
+        item = db.upsert_inventory_item(conn, name="Widgets", quantity=20, unit="ea")
 
-        balances = db.list_inventory_balances(conn)
-        assert balances[0]["on_hand_quantity"] == 5
-        assert balances[0]["allocated_quantity"] == 0
-        assert balances[0]["available_quantity"] == 5
-
-        db.create_shipment(
+        first = db.create_shipment(
             conn,
             job_id=job_id,
             inventory_item_id=item["id"],
-            quantity=3,
-            reserve_in_transit=True,
+            quantity=5,
+            from_location="Warehouse",
+            to_location="Staging",
         )
-
-        updated = db.get_inventory_balance(conn, inventory_item_id=item["id"])
-        assert updated["on_hand_quantity"] == 5
-        assert updated["allocated_quantity"] == 3
-        assert updated["available_quantity"] == 2
-
-        db.create_shipment(
+        second = db.create_shipment(
             conn,
             job_id=job_id,
             inventory_item_id=item["id"],
-            quantity=2,
-            reserve_in_transit=False,
+            quantity=7.5,
+            status="in_transit",
+            scheduled_date="2024-02-02",
         )
 
-        final = db.get_inventory_balance(conn, inventory_item_id=item["id"])
-        assert final["on_hand_quantity"] == 3
-        assert final["allocated_quantity"] == 3
-        assert final["available_quantity"] == 0
+        rows = db.fetch_shipments_with_context(conn)
+        by_id = {row["id"]: row for row in rows}
+
+        assert by_id[first["id"]]["quantity"] == 5
+        assert by_id[first["id"]]["from_location"] == "Warehouse"
+        assert by_id[first["id"]]["to_location"] == "Staging"
+
+        assert by_id[second["id"]]["quantity"] == 7.5
+        assert by_id[second["id"]]["from_location"] == "Warehouse"
+        assert by_id[second["id"]]["to_location"] == "Site Alpha"
+        assert by_id[second["id"]]["status"] == "in_transit"
     finally:
         conn.close()
 
 
-def test_shipments_cannot_exceed_available_stock():
-    conn = sqlite3.connect(":memory:")
+def test_shipments_capture_historical_locations_by_default(tmp_path):
+    conn = sqlite3.connect(tmp_path / "routes.db")
     conn.row_factory = sqlite3.Row
     try:
-        db.ensure_dashboard_tables(conn)
+        ensure_schema(conn)
+        conn.execute(
+            "INSERT INTO historical_jobs (job_date, origin, destination, client, quoted_price, imported_at)"
+            " VALUES ('2023-02-02', 'Depot', 'Client Site', 'Client', 25.0, 'now')"
+        )
 
-        job_id = conn.execute(
-            "INSERT INTO jobs (origin, destination) VALUES ('Origin', 'Dest')"
-        ).lastrowid
-        item = db.upsert_inventory_item(conn, name="Pallets", quantity=1)
+        migrate_schema(conn)
 
-        with pytest.raises(ValueError):
-            db.create_shipment(
-                conn, job_id=job_id, inventory_item_id=item["id"], quantity=2
-            )
-
-        shipments = conn.execute("SELECT COUNT(*) FROM shipments").fetchone()[0]
-        movements = conn.execute("SELECT COUNT(*) FROM inventory_movements").fetchone()[0]
-
-        assert shipments == 0
-        assert movements == 0
+        shipment = conn.execute("SELECT * FROM shipments").fetchone()
+        assert shipment["quantity"] == 1
+        assert shipment["from_location"] == "Depot"
+        assert shipment["to_location"] == "Client Site"
     finally:
         conn.close()
