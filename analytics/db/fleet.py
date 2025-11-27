@@ -1,16 +1,7 @@
-<<<<<<< HEAD
-"""Fleet and vehicle metadata helpers."""
-from __future__ import annotations
-
-from .legacy import upsert_truck, upsert_vehicle_details
-
-__all__ = ["upsert_truck", "upsert_vehicle_details"]
-=======
 """Fleet and worker-related database functions."""
-from __future__ import annotations
+
 from __future__ import annotations
 
-import os
 import sqlite3
 from datetime import UTC, datetime
 from typing import IO
@@ -18,6 +9,13 @@ from typing import IO
 import pandas as pd
 
 from .schema import _ensure_vehicle_details_table
+
+__all__ = [
+    "upsert_truck",
+    "upsert_vehicle_details",
+    "upsert_worker",
+    "import_workers_from_staff_sheet",
+]
 
 
 def upsert_truck(
@@ -196,7 +194,7 @@ def _coalesce_name(first_name: str | float | None, last_name: str | float | None
 
 def import_workers_from_staff_sheet(
     conn: sqlite3.Connection,
-    workbook: os.PathLike[str] | str | bytes | IO[bytes],
+    workbook: str | bytes | IO[bytes],
     *,
     sheet_name: str = "STAFF",
 ) -> tuple[int, int]:
@@ -251,4 +249,3 @@ def import_workers_from_staff_sheet(
             updated += 1
 
     return inserted, updated
->>>>>>> c3ed293 (Remove tracked pycache)

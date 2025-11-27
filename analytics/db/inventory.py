@@ -1,21 +1,16 @@
-<<<<<<< HEAD
-"""Inventory and supplier helpers extracted from the legacy database module."""
+"""Inventory and supplier-related database functions."""
+
 from __future__ import annotations
 
+import os
 import sqlite3
+from datetime import UTC, datetime
 from typing import IO, Iterable
+from urllib.parse import quote_plus
 
-from .legacy import (
-    ensure_suppliers_table,
-    get_inventory_balance,
-    import_suppliers_from_google_sheet,
-    list_inventory,
-    list_inventory_balances,
-    list_suppliers,
-    record_inventory_movement,
-    upsert_inventory_item,
-    upsert_supplier,
-)
+import pandas as pd
+
+from .schema import ensure_suppliers_table
 
 __all__ = [
     "ensure_suppliers_table",
@@ -28,20 +23,6 @@ __all__ = [
     "upsert_inventory_item",
     "upsert_supplier",
 ]
-=======
-"""Inventory and supplier-related database functions."""
-from __future__ import annotations
-
-import os
-import sqlite3
-from datetime import UTC, datetime
-from urllib.parse import quote_plus
-from typing import IO, Iterable, Optional, Sequence
-
-import pandas as pd
-
-from .connection import _table_columns
-from .schema import ensure_suppliers_table
 
 
 def upsert_inventory_item(
@@ -104,21 +85,19 @@ def _inventory_balance_query(where_clause: str = "") -> str:
 def list_inventory_balances(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Return inventory items with on-hand, allocated, and available totals."""
 
-    # _ensure_inventory_movements_table(conn)
     return list(conn.execute(_inventory_balance_query()))
 
 
 def get_inventory_balance(
-    conn: sqlite3.Connection,
-    inventory_item_id: int
+    conn: sqlite3.Connection, inventory_item_id: int
 ) -> sqlite3.Row | None:
     """Return a single inventory balance row by item id."""
 
-    # _ensure_inventory_movements_table(conn)
     rows = conn.execute(
         _inventory_balance_query("WHERE i.id = ?"), (inventory_item_id,)
     ).fetchall()
     return rows[0] if rows else None
+
 
 def record_inventory_movement(
     conn: sqlite3.Connection,
@@ -132,7 +111,6 @@ def record_inventory_movement(
 ) -> sqlite3.Row:
     """Insert an inventory movement entry and return the stored row."""
 
-    # _ensure_inventory_movements_table(conn)
     timestamp = datetime.now(UTC).isoformat()
     conn.execute(
         """
@@ -160,6 +138,7 @@ def record_inventory_movement(
         "SELECT * FROM inventory_movements WHERE id = last_insert_rowid()"
     ).fetchone()
 
+
 def list_inventory(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Return all inventory items ordered by name."""
 
@@ -167,7 +146,7 @@ def list_inventory(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         conn.execute(
             """
             SELECT
-                i.*, 
+                i.*,
                 s.company_name AS supplier_company_name,
                 s.contact_name AS supplier_contact_name,
                 s.contact_number AS supplier_contact_number,
@@ -179,6 +158,7 @@ def list_inventory(conn: sqlite3.Connection) -> list[sqlite3.Row]:
             """
         )
     )
+
 
 def upsert_supplier(
     conn: sqlite3.Connection,
@@ -222,6 +202,7 @@ def upsert_supplier(
         "SELECT * FROM suppliers WHERE company_name = ?", (company_name.strip(),)
     ).fetchone()
 
+
 def list_suppliers(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Return suppliers ordered by company name."""
 
@@ -230,6 +211,7 @@ def list_suppliers(conn: sqlite3.Connection) -> list[sqlite3.Row]:
             "SELECT * FROM suppliers ORDER BY LOWER(company_name), company_name"
         )
     )
+
 
 def import_suppliers_from_google_sheet(
     conn: sqlite3.Connection,
@@ -281,6 +263,7 @@ def import_suppliers_from_google_sheet(
         imported += 1
     return imported
 
+
 def _clean_optional_str(value: object | None) -> str | None:
     if value is None:
         return None
@@ -288,6 +271,7 @@ def _clean_optional_str(value: object | None) -> str | None:
         return None
     value_str = str(value).strip()
     return value_str or None
+
 
 def _normalize_supplier_column(column_name: str) -> str:
     normalized = column_name.strip().lower().replace(" ", "_")
@@ -299,11 +283,12 @@ def _normalize_supplier_column(column_name: str) -> str:
         return "contact_number"
     return normalized
 
+
 def _build_suppliers_sheet_url(
     sheet_id: str | None,
     sheet_name: str,
-    *, 
-    env_var: str = "SUPPLIERS_SHEET_ID"
+    *,
+    env_var: str = "SUPPLIERS_SHEET_ID",
 ) -> str | None:
     resolved_id = sheet_id or os.environ.get(env_var)
     if not resolved_id:
@@ -313,4 +298,3 @@ def _build_suppliers_sheet_url(
         f"https://docs.google.com/spreadsheets/d/{resolved_id}/gviz/tq?tqx=out:csv"
         f"&sheet={quote_plus(sheet_name)}"
     )
->>>>>>> c3ed293 (Remove tracked pycache)

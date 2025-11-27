@@ -1,29 +1,4 @@
-<<<<<<< HEAD
-"""Shipment creation and container helpers."""
-from __future__ import annotations
-
-from .legacy import (
-    create_shipment,
-    fetch_shipments_with_context,
-    upsert_container,
-    upsert_container_booking,
-    upsert_job_by_number,
-    upsert_job_container_allocation,
-    upsert_job_segment,
-)
-
-__all__ = [
-    "create_shipment",
-    "fetch_shipments_with_context",
-    "upsert_container",
-    "upsert_container_booking",
-    "upsert_job_container_allocation",
-    "upsert_job_by_number",
-    "upsert_job_segment",
-]
-=======
 """Shipment and driver shift-related database functions."""
-from __future__ import annotations
 from __future__ import annotations
 
 import sqlite3
@@ -31,7 +6,26 @@ from datetime import UTC, datetime
 from typing import Optional, Sequence
 
 from .fleet import upsert_worker
+from .legacy import (
+    upsert_container,
+    upsert_container_booking,
+    upsert_job_by_number,
+    upsert_job_container_allocation,
+    upsert_job_segment,
+)
 from .schema import _ensure_driver_shift_columns
+
+__all__ = [
+    "create_shipment",
+    "fetch_shipments_with_context",
+    "rollup_driver_shift_costs_by_job",
+    "upsert_container",
+    "upsert_container_booking",
+    "upsert_job_by_number",
+    "upsert_job_container_allocation",
+    "upsert_job_segment",
+    "upsert_driver_shift",
+]
 
 
 def _resolve_shift_job_id(
@@ -276,10 +270,6 @@ def create_shipment(
         ),
     )
     conn.commit()
-    # TODO: this is buggy, shipment_id is not defined
-    # return conn.execute(
-    #     "SELECT * FROM shipments WHERE id = ?", (shipment_id,)
-    # ).fetchone()
     return conn.execute("SELECT * FROM shipments WHERE id = last_insert_rowid()").fetchone()
 
 
@@ -402,4 +392,3 @@ def fetch_shipments_with_context(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         ORDER BY s.id
     """
     return list(conn.execute(query))
->>>>>>> c3ed293 (Remove tracked pycache)
