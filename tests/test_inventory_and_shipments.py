@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -25,7 +26,7 @@ def test_schema_includes_logistics_tables(tmp_path):
             )
         }
 
-        assert {"inventory_items", "workers", "trucks", "shipments"}.issubset(tables)
+        assert {"inventory_items", "inventory_movements", "workers", "trucks", "shipments"}.issubset(tables)
 
         worker_columns = {row[1] for row in conn.execute("PRAGMA table_info(workers)")}
         assert {"rate", "tickets"}.issubset(worker_columns)
@@ -116,6 +117,7 @@ def test_import_workers_from_staff_sheet():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     try:
+        pytest.importorskip("openpyxl")
         db.ensure_dashboard_tables(conn)
         workbook_path = Path(__file__).resolve().parents[1] / "Crusader.xlsx"
 
