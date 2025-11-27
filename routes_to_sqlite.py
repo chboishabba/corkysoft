@@ -269,8 +269,13 @@ CREATE TABLE IF NOT EXISTS job_segments (
   segment_sequence INTEGER NOT NULL,
   from_location TEXT,
   to_location TEXT,
+  mode TEXT,
+  distance_km REAL,
+  client_reference TEXT,
   planned_start TEXT,
   planned_end TEXT,
+  actual_start TEXT,
+  actual_end TEXT,
   status TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT,
@@ -520,8 +525,13 @@ def migrate_schema(conn: sqlite3.Connection):
             segment_sequence INTEGER NOT NULL,
             from_location TEXT,
             to_location TEXT,
+            mode TEXT,
+            distance_km REAL,
+            client_reference TEXT,
             planned_start TEXT,
             planned_end TEXT,
+            actual_start TEXT,
+            actual_end TEXT,
             status TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT,
@@ -536,6 +546,36 @@ def migrate_schema(conn: sqlite3.Connection):
             ON job_segments(job_id, segment_sequence)
         """
     )
+    segment_columns = {r[1] for r in conn.execute("PRAGMA table_info(job_segments)")}
+    for column, declaration in {
+        "mode": "TEXT",
+        "distance_km": "REAL",
+        "client_reference": "TEXT",
+        "planned_start": "TEXT",
+        "planned_end": "TEXT",
+        "actual_start": "TEXT",
+        "actual_end": "TEXT",
+        "status": "TEXT",
+        "updated_at": "TEXT",
+    }.items():
+        if column not in segment_columns:
+            conn.execute(f"ALTER TABLE job_segments ADD COLUMN {column} {declaration}")
+    if "origin" in segment_columns and "from_location" in segment_columns:
+        conn.execute(
+            """
+            UPDATE job_segments
+            SET from_location = COALESCE(from_location, origin)
+            WHERE origin IS NOT NULL
+            """
+        )
+    if "destination" in segment_columns and "to_location" in segment_columns:
+        conn.execute(
+            """
+            UPDATE job_segments
+            SET to_location = COALESCE(to_location, destination)
+            WHERE destination IS NOT NULL
+            """
+        )
     ensure_table(
         "job_segment_workers",
         """
