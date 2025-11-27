@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -25,7 +26,7 @@ def test_schema_includes_logistics_tables(tmp_path):
             )
         }
 
-        assert {"inventory_items", "workers", "trucks", "shipments"}.issubset(tables)
+        assert {"inventory_items", "inventory_movements", "workers", "trucks", "shipments"}.issubset(tables)
 
         worker_columns = {row[1] for row in conn.execute("PRAGMA table_info(workers)")}
         assert {"rate", "tickets"}.issubset(worker_columns)
@@ -105,6 +106,7 @@ def test_import_workers_from_staff_sheet():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     try:
+        pytest.importorskip("openpyxl")
         db.ensure_dashboard_tables(conn)
         workbook_path = Path(__file__).resolve().parents[1] / "Crusader.xlsx"
 
@@ -161,5 +163,75 @@ def test_supplier_import_and_linkage():
         assert shipment["supplier_contact_name"] == "Sam Supplier"
         assert shipment["supplier_contact_number"] == "555-1234"
         assert shipment["supplier_email"] == "sam@example.com"
+    finally:
+        conn.close()
+
+
+def test_inventory_balances_and_reservations():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        db.ensure_dashboard_tables(conn)
+
+        job_id = conn.execute(
+            "INSERT INTO jobs (origin, destination) VALUES ('Origin', 'Dest')"
+        ).lastrowid
+        item = db.upsert_inventory_item(conn, name="Crates", quantity=5)
+
+        balances = db.list_inventory_balances(conn)
+        assert balances[0]["on_hand_quantity"] == 5
+        assert balances[0]["allocated_quantity"] == 0
+        assert balances[0]["available_quantity"] == 5
+
+        db.create_shipment(
+            conn,
+            job_id=job_id,
+            inventory_item_id=item["id"],
+            quantity=3,
+            reserve_in_transit=True,
+        )
+
+        updated = db.get_inventory_balance(conn, inventory_item_id=item["id"])
+        assert updated["on_hand_quantity"] == 5
+        assert updated["allocated_quantity"] == 3
+        assert updated["available_quantity"] == 2
+
+        db.create_shipment(
+            conn,
+            job_id=job_id,
+            inventory_item_id=item["id"],
+            quantity=2,
+            reserve_in_transit=False,
+        )
+
+        final = db.get_inventory_balance(conn, inventory_item_id=item["id"])
+        assert final["on_hand_quantity"] == 3
+        assert final["allocated_quantity"] == 3
+        assert final["available_quantity"] == 0
+    finally:
+        conn.close()
+
+
+def test_shipments_cannot_exceed_available_stock():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        db.ensure_dashboard_tables(conn)
+
+        job_id = conn.execute(
+            "INSERT INTO jobs (origin, destination) VALUES ('Origin', 'Dest')"
+        ).lastrowid
+        item = db.upsert_inventory_item(conn, name="Pallets", quantity=1)
+
+        with pytest.raises(ValueError):
+            db.create_shipment(
+                conn, job_id=job_id, inventory_item_id=item["id"], quantity=2
+            )
+
+        shipments = conn.execute("SELECT COUNT(*) FROM shipments").fetchone()[0]
+        movements = conn.execute("SELECT COUNT(*) FROM inventory_movements").fetchone()[0]
+
+        assert shipments == 0
+        assert movements == 0
     finally:
         conn.close()

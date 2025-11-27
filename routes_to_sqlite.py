@@ -165,6 +165,20 @@ CREATE TABLE IF NOT EXISTS inventory_items (
   FOREIGN KEY(supplier_id) REFERENCES suppliers(id)
 );
 
+CREATE TABLE IF NOT EXISTS inventory_movements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  inventory_item_id INTEGER NOT NULL,
+  shipment_id INTEGER,
+  change_on_hand INTEGER NOT NULL DEFAULT 0,
+  change_allocated INTEGER NOT NULL DEFAULT 0,
+  reason TEXT DEFAULT '',
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE CASCADE,
+  FOREIGN KEY(shipment_id) REFERENCES shipments(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_inventory_movements_item
+  ON inventory_movements(inventory_item_id);
+
 CREATE TABLE IF NOT EXISTS workers (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -403,6 +417,28 @@ def migrate_schema(conn: sqlite3.Connection):
             FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
         )
         """,
+    )
+    ensure_table(
+        "inventory_movements",
+        """
+        CREATE TABLE IF NOT EXISTS inventory_movements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inventory_item_id INTEGER NOT NULL,
+            shipment_id INTEGER,
+            change_on_hand INTEGER NOT NULL DEFAULT 0,
+            change_allocated INTEGER NOT NULL DEFAULT 0,
+            reason TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE CASCADE,
+            FOREIGN KEY(shipment_id) REFERENCES shipments(id) ON DELETE CASCADE
+        )
+        """,
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_inventory_movements_item
+            ON inventory_movements(inventory_item_id)
+        """
     )
 
     def backfill_shipments() -> None:

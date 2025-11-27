@@ -108,6 +108,20 @@ CREATE TABLE IF NOT EXISTS inventory_items (
     FOREIGN KEY(supplier_id) REFERENCES suppliers(id)
 );
 
+CREATE TABLE IF NOT EXISTS inventory_movements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    inventory_item_id INTEGER NOT NULL,
+    shipment_id INTEGER,
+    change_on_hand INTEGER NOT NULL DEFAULT 0,
+    change_allocated INTEGER NOT NULL DEFAULT 0,
+    reason TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE CASCADE,
+    FOREIGN KEY(shipment_id) REFERENCES shipments(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_inventory_movements_item
+    ON inventory_movements(inventory_item_id);
+
 CREATE TABLE IF NOT EXISTS workers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -294,11 +308,59 @@ def bootstrap_parameters(
             set_parameter_value(conn, key, value, description)
 
 
+def ensure_suppliers_table(conn: sqlite3.Connection) -> None:
+    """Guarantee the suppliers table exists for inventory relationships."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS suppliers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_name TEXT NOT NULL,
+            contact_name TEXT,
+            contact_number TEXT,
+            email TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(company_name)
+        )
+        """
+    )
+    conn.commit()
+
+
+def _ensure_inventory_movements_table(conn: sqlite3.Connection) -> None:
+    """Create the inventory_movements table if missing."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS inventory_movements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inventory_item_id INTEGER NOT NULL,
+            shipment_id INTEGER,
+            change_on_hand INTEGER NOT NULL DEFAULT 0,
+            change_allocated INTEGER NOT NULL DEFAULT 0,
+            reason TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE CASCADE,
+            FOREIGN KEY(shipment_id) REFERENCES shipments(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_inventory_movements_item
+            ON inventory_movements(inventory_item_id)
+        """
+    )
+
+
 def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
     """Create empty dashboard tables so the UI can load before data imports."""
 
     conn.executescript(_DASHBOARD_SCHEMA_SQL)
     ensure_suppliers_table(conn)
+    _ensure_inventory_movements_table(conn)
 
     hist_columns = _table_columns(conn, "historical_jobs")
     if "client_id" not in hist_columns:
@@ -332,6 +394,7 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
 
     for table_name in (
         "inventory_items",
+        "inventory_movements",
         "workers",
         "trucks",
         "vehicle_repairs",
@@ -510,6 +573,89 @@ def upsert_inventory_item(
     conn.commit()
     return conn.execute(
         "SELECT * FROM inventory_items WHERE name = ?", (name,)
+    ).fetchone()
+
+
+def _inventory_balance_query(where_clause: str = "") -> str:
+    balances_cte = """
+        WITH movement_totals AS (
+            SELECT
+                inventory_item_id,
+                COALESCE(SUM(change_on_hand), 0) AS delta_on_hand,
+                COALESCE(SUM(change_allocated), 0) AS delta_allocated
+            FROM inventory_movements
+            GROUP BY inventory_item_id
+        )
+    """
+    select_sql = f"""
+        SELECT
+            i.*,\n            i.quantity + COALESCE(m.delta_on_hand, 0) AS on_hand_quantity,\n            COALESCE(m.delta_allocated, 0) AS allocated_quantity,\n            i.quantity + COALESCE(m.delta_on_hand, 0) - COALESCE(m.delta_allocated, 0)
+                AS available_quantity
+        FROM inventory_items AS i
+        LEFT JOIN movement_totals AS m ON m.inventory_item_id = i.id
+        {where_clause}
+        ORDER BY i.name
+    """
+    return balances_cte + select_sql
+
+
+def list_inventory_balances(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Return inventory items with on-hand, allocated, and available totals."""
+
+    _ensure_inventory_movements_table(conn)
+    return list(conn.execute(_inventory_balance_query()))
+
+
+def get_inventory_balance(
+    conn: sqlite3.Connection, inventory_item_id: int
+) -> sqlite3.Row | None:
+    """Return a single inventory balance row by item id."""
+
+    _ensure_inventory_movements_table(conn)
+    rows = conn.execute(
+        _inventory_balance_query("WHERE i.id = ?"), (inventory_item_id,)
+    ).fetchall()
+    return rows[0] if rows else None
+
+
+def record_inventory_movement(
+    conn: sqlite3.Connection,
+    *,
+    inventory_item_id: int,
+    shipment_id: int | None = None,
+    change_on_hand: int = 0,
+    change_allocated: int = 0,
+    reason: str | None = None,
+    commit: bool = True,
+) -> sqlite3.Row:
+    """Insert an inventory movement entry and return the stored row."""
+
+    _ensure_inventory_movements_table(conn)
+    timestamp = datetime.now(UTC).isoformat()
+    conn.execute(
+        """
+        INSERT INTO inventory_movements (
+            inventory_item_id,
+            shipment_id,
+            change_on_hand,
+            change_allocated,
+            reason,
+            created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            inventory_item_id,
+            shipment_id,
+            int(change_on_hand),
+            int(change_allocated),
+            reason or "",
+            timestamp,
+        ),
+    )
+    if commit:
+        conn.commit()
+    return conn.execute(
+        "SELECT * FROM inventory_movements WHERE id = last_insert_rowid()"
     ).fetchone()
 
 
@@ -910,49 +1056,92 @@ def create_shipment(
     job_id: int | None = None,
     historical_job_id: int | None = None,
     inventory_item_id: int | None = None,
+    quantity: int = 1,
     truck_id: str | None = None,
     worker_id: int | None = None,
     status: str = "planned",
     scheduled_date: str | None = None,
     delivered_at: str | None = None,
+    reserve_in_transit: bool = True,
 ) -> sqlite3.Row:
-    """Insert a shipment linked to a job or historical job."""
+    """Insert a shipment linked to a job or historical job.
+
+    If ``inventory_item_id`` is provided, ensure the requested ``quantity`` is
+    available before creating the shipment and recording an inventory movement.
+    When ``reserve_in_transit`` is True, the quantity is tracked as allocated in
+    transit rather than deducted from on-hand stock.
+    """
 
     if job_id is None and historical_job_id is None:
         raise ValueError("Shipments must reference a job or historical job")
 
+    if inventory_item_id is not None and quantity <= 0:
+        raise ValueError("Shipment quantities must be positive when inventory is set")
+
     timestamp = datetime.now(UTC).isoformat()
-    conn.execute(
-        """
-        INSERT INTO shipments (
-            job_id,
-            historical_job_id,
-            inventory_item_id,
-            truck_id,
-            worker_id,
-            status,
-            scheduled_date,
-            delivered_at,
-            created_at,
-            updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            job_id,
-            historical_job_id,
-            inventory_item_id,
-            truck_id,
-            worker_id,
-            status,
-            scheduled_date,
-            delivered_at,
-            timestamp,
-            timestamp,
-        ),
-    )
-    conn.commit()
+    try:
+        conn.execute("SAVEPOINT create_shipment_sp")
+
+        if inventory_item_id is not None:
+            balance = get_inventory_balance(conn, inventory_item_id)
+            if balance is None:
+                raise ValueError("Inventory item not found for shipment")
+
+            available = int(balance["available_quantity"])
+            if available < quantity:
+                raise ValueError("Insufficient available inventory for shipment")
+
+        conn.execute(
+            """
+            INSERT INTO shipments (
+                job_id,
+                historical_job_id,
+                inventory_item_id,
+                truck_id,
+                worker_id,
+                status,
+                scheduled_date,
+                delivered_at,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                job_id,
+                historical_job_id,
+                inventory_item_id,
+                truck_id,
+                worker_id,
+                status,
+                scheduled_date,
+                delivered_at,
+                timestamp,
+                timestamp,
+            ),
+        )
+        shipment_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+        if inventory_item_id is not None and quantity:
+            change_on_hand = 0 if reserve_in_transit else -quantity
+            change_allocated = quantity if reserve_in_transit else 0
+            record_inventory_movement(
+                conn,
+                inventory_item_id=inventory_item_id,
+                shipment_id=shipment_id,
+                change_on_hand=change_on_hand,
+                change_allocated=change_allocated,
+                reason="Shipment allocation",
+                commit=False,
+            )
+
+        conn.execute("RELEASE SAVEPOINT create_shipment_sp")
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT create_shipment_sp")
+        conn.execute("RELEASE SAVEPOINT create_shipment_sp")
+        raise
+
     return conn.execute(
-        "SELECT * FROM shipments WHERE id = last_insert_rowid()"
+        "SELECT * FROM shipments WHERE id = ?", (shipment_id,)
     ).fetchone()
 
 
