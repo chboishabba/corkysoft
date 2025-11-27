@@ -189,23 +189,6 @@ CREATE TABLE IF NOT EXISTS containers (
     FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL
 );
 
-CREATE TABLE IF NOT EXISTS container_allocations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    allocation_reference TEXT NOT NULL,
-    container_id INTEGER,
-    booking_id INTEGER,
-    job_id INTEGER,
-    worker_id INTEGER,
-    status TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT,
-    UNIQUE(allocation_reference),
-    FOREIGN KEY(container_id) REFERENCES containers(id) ON DELETE SET NULL,
-    FOREIGN KEY(booking_id) REFERENCES container_bookings(id) ON DELETE SET NULL,
-    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL,
-    FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE SET NULL
-);
-
 CREATE TABLE IF NOT EXISTS trucks (
     truck_id TEXT PRIMARY KEY,
     name TEXT,
@@ -361,7 +344,7 @@ CREATE TABLE IF NOT EXISTS job_container_allocations (
     UNIQUE(job_id, booking_id, segment_id),
     FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE,
     FOREIGN KEY(booking_id) REFERENCES container_bookings(id) ON DELETE CASCADE,
-    FOREIGN KEY(segment_id) REFERENCES shipments(id) ON DELETE SET NULL
+    FOREIGN KEY(segment_id) REFERENCES job_segments(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS container_movements (
@@ -1831,51 +1814,47 @@ def upsert_container(
     ).fetchone()
 
 
-def upsert_container_allocation(
+def upsert_job_container_allocation(
     conn: sqlite3.Connection,
     *,
-    allocation_reference: str,
-    container_id: int | None = None,
-    booking_id: int | None = None,
-    job_id: int | None = None,
-    worker_id: int | None = None,
-    status: str | None = None,
-    created_at: str | None = None,
-    updated_at: str | None = None,
+    job_id: int,
+    booking_id: int,
+    segment_id: int | None = None,
+    volume_share: float | None = None,
+    weight_share: float | None = None,
 ) -> sqlite3.Row:
-    """Insert or update a container allocation keyed by reference."""
+    """Insert or update a job container allocation keyed by job, booking, and segment."""
 
-    timestamp = updated_at or datetime.now(UTC).isoformat()
-    created_timestamp = created_at or timestamp
+    if segment_id is not None:
+        segment_row = conn.execute(
+            "SELECT job_id FROM job_segments WHERE id = ?", (segment_id,)
+        ).fetchone()
+        if segment_row is None:
+            raise ValueError(f"Job segment {segment_id} does not exist")
+        if segment_row[0] != job_id:
+            raise ValueError("Segment does not belong to the specified job")
+
     conn.execute(
         """
-        INSERT INTO container_allocations (
-            allocation_reference, container_id, booking_id, job_id, worker_id, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(allocation_reference) DO UPDATE SET
-            container_id = COALESCE(excluded.container_id, container_allocations.container_id),
-            booking_id = COALESCE(excluded.booking_id, container_allocations.booking_id),
-            job_id = COALESCE(excluded.job_id, container_allocations.job_id),
-            worker_id = COALESCE(excluded.worker_id, container_allocations.worker_id),
-            status = excluded.status,
-            updated_at = excluded.updated_at,
-            created_at = COALESCE(container_allocations.created_at, excluded.created_at)
+        INSERT INTO job_container_allocations (
+            job_id, booking_id, segment_id, volume_share, weight_share
+        ) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(job_id, booking_id, segment_id) DO UPDATE SET
+            volume_share = excluded.volume_share,
+            weight_share = excluded.weight_share
         """,
-        (
-            allocation_reference,
-            container_id,
-            booking_id,
-            job_id,
-            worker_id,
-            status,
-            created_timestamp,
-            timestamp,
-        ),
+        (job_id, booking_id, segment_id, volume_share, weight_share),
     )
     conn.commit()
     return conn.execute(
-        "SELECT * FROM container_allocations WHERE allocation_reference = ?",
-        (allocation_reference,),
+        """
+        SELECT job_id, booking_id, segment_id, volume_share, weight_share
+        FROM job_container_allocations
+        WHERE job_id = ? AND booking_id = ? AND (
+            (segment_id IS NULL AND ? IS NULL) OR segment_id = ?
+        )
+        """,
+        (job_id, booking_id, segment_id, segment_id),
     ).fetchone()
 
 
