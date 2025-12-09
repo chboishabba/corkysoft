@@ -109,12 +109,33 @@ def _extract_sheet_row(workbook: pd.ExcelFile, sheet_name: str) -> Mapping[str, 
     return row
 
 
+def _extract_tabular_sheet(workbook: pd.ExcelFile, sheet_name: str) -> pd.DataFrame:
+    """Return a DataFrame of vehicle rows from a tabular worksheet."""
+
+    table = workbook.parse(sheet_name)
+    table = table.dropna(axis=0, how="all").dropna(axis=1, how="all")
+    if table.empty or table.shape[0] < 1:
+        return pd.DataFrame()
+
+    mapping = _canonical_column_mapping(table.columns)
+    if not mapping:
+        return pd.DataFrame()
+
+    return table.rename(columns=mapping)
+
+
 def _collect_vehicle_rows_from_workbook(workbook: pd.ExcelFile) -> pd.DataFrame:
     """Gather vehicle rows from multi-sheet VEHICLE_DETAIL workbooks."""
 
+    frames: list[pd.DataFrame] = []
     rows: list[Mapping[str, object]] = []
     for sheet_name in workbook.sheet_names:
         if sheet_name.strip().lower() in {"index", "log", "init"}:
+            continue
+
+        table = _extract_tabular_sheet(workbook, sheet_name)
+        if not table.empty:
+            frames.append(table)
             continue
 
         row = _extract_sheet_row(workbook, sheet_name)
@@ -129,6 +150,11 @@ def _collect_vehicle_rows_from_workbook(workbook: pd.ExcelFile) -> pd.DataFrame:
             row["REGO"] = sheet_name
 
         rows.append(row)
+
+    if frames:
+        if rows:
+            frames.append(pd.DataFrame(rows))
+        return pd.concat(frames, ignore_index=True)
 
     return pd.DataFrame(rows)
 
