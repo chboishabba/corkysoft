@@ -87,6 +87,52 @@ def _coerce_bool(value: object) -> bool | None:
     return text in {"y", "yes", "true", "1"}
 
 
+def _extract_sheet_row(workbook: pd.ExcelFile, sheet_name: str) -> Mapping[str, object]:
+    """Return a mapping of column labels to values from a two-row vehicle sheet.
+
+    VEHICLE_DETAIL workbooks store each vehicle's metadata on its own worksheet
+    with headers on the first row and values on the second. Columns are often
+    offset (e.g., starting at column B) and may contain trailing blank columns.
+    """
+
+    sheet = workbook.parse(sheet_name, header=None)
+    sheet = sheet.dropna(axis=0, how="all").dropna(axis=1, how="all")
+    if sheet.shape[0] < 2:
+        return {}
+
+    headers = sheet.iloc[0]
+    values = sheet.iloc[1]
+    row: dict[str, object] = {}
+    for header, value in zip(headers, values):
+        if isinstance(header, str) and header.strip():
+            row[header] = value
+    return row
+
+
+def _collect_vehicle_rows_from_workbook(workbook: pd.ExcelFile) -> pd.DataFrame:
+    """Gather vehicle rows from multi-sheet VEHICLE_DETAIL workbooks."""
+
+    rows: list[Mapping[str, object]] = []
+    for sheet_name in workbook.sheet_names:
+        if sheet_name.strip().lower() in {"index", "log", "init"}:
+            continue
+
+        row = _extract_sheet_row(workbook, sheet_name)
+        if not row:
+            continue
+
+        mapping = _canonical_column_mapping(row.keys())
+        if not mapping:
+            continue
+
+        if "rego" not in mapping.values():
+            row["REGO"] = sheet_name
+
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
 def _canonical_column_mapping(columns: Iterable[str]) -> Mapping[str, str]:
     mapping = {}
     for column in columns:
@@ -169,6 +215,26 @@ def import_vehicle_details_from_dataframe(
     return inserted
 
 
+def import_vehicle_details_from_workbook(
+    conn,
+    workbook: pd.ExcelFile,
+    *,
+    sheet_hints: Sequence[str] = DEFAULT_VEHICLE_SHEET_HINTS,
+) -> int:
+    """Ingest vehicle metadata from a downloaded workbook."""
+
+    try:
+        sheet_name = _resolve_sheet_name(workbook.sheet_names, sheet_hints)
+    except ValueError:
+        vehicle_rows = _collect_vehicle_rows_from_workbook(workbook)
+        if vehicle_rows.empty:
+            raise
+        return import_vehicle_details_from_dataframe(conn, vehicle_rows)
+
+    worksheet = workbook.parse(sheet_name)
+    return import_vehicle_details_from_dataframe(conn, worksheet)
+
+
 def import_vehicle_details_from_google_sheet(
     conn,
     *,
@@ -179,13 +245,12 @@ def import_vehicle_details_from_google_sheet(
 
     workbook_url = GOOGLE_SHEET_EXPORT.format(sheet_id=sheet_id)
     workbook = pd.ExcelFile(workbook_url, engine="openpyxl")
-    sheet_name = _resolve_sheet_name(workbook.sheet_names, sheet_hints)
-    worksheet = workbook.parse(sheet_name)
-    return import_vehicle_details_from_dataframe(conn, worksheet)
+    return import_vehicle_details_from_workbook(conn, workbook, sheet_hints=sheet_hints)
 
 
 __all__ = [
     "import_vehicle_details_from_dataframe",
+    "import_vehicle_details_from_workbook",
     "import_vehicle_details_from_google_sheet",
     "GOOGLE_SHEET_EXPORT",
     "DEFAULT_VEHICLE_SHEET_HINTS",

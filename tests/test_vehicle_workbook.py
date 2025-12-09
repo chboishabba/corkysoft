@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
@@ -10,11 +11,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from analytics.db import ensure_dashboard_tables
 from analytics.live_data import _ensure_live_tables, load_truck_positions
-from analytics.vehicle_workbook import import_vehicle_details_from_dataframe
+from analytics.vehicle_workbook import (
+    import_vehicle_details_from_dataframe,
+    import_vehicle_details_from_workbook,
+)
 
 
 def test_import_vehicle_details_from_dataframe_populates_tables() -> None:
     conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
     ensure_dashboard_tables(conn)
 
     df = pd.DataFrame(
@@ -56,6 +61,7 @@ def test_import_vehicle_details_from_dataframe_populates_tables() -> None:
 
 def test_load_truck_positions_includes_vehicle_metadata() -> None:
     conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
     ensure_dashboard_tables(conn)
     _ensure_live_tables(conn)
 
@@ -79,3 +85,41 @@ def test_load_truck_positions_includes_vehicle_metadata() -> None:
     assert "present_driver" in frame.columns
     assert frame.loc[0, "present_driver"] == "Jamie"
     assert frame.loc[0, "next_service"] == "2024-02-02"
+
+
+def test_import_vehicle_details_from_multisheet_workbook() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    ensure_dashboard_tables(conn)
+
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        pd.DataFrame({"REGO": ["INDEX"], "GIDs (sheet ID)": [123]}).to_excel(
+            writer, sheet_name="INDEX", index=False
+        )
+        pd.DataFrame(
+            [
+                [None, "STATE", "REGO", "MAKE", "MODEL", "YEAR"],
+                [None, "QLD", "ABC123", "Volvo", "FH", 2020],
+            ]
+        ).to_excel(writer, sheet_name="ABC123", header=False, index=False)
+        pd.DataFrame(
+            [
+                [None, "STATE", "REGO EXPIRY DATE ", "DESCRIPTION"],
+                [None, "NSW", "2025-12-31", "Vacuum truck"],
+            ]
+        ).to_excel(writer, sheet_name="DEF456", header=False, index=False)
+
+    buffer.seek(0)
+    workbook = pd.ExcelFile(buffer)
+
+    inserted = import_vehicle_details_from_workbook(conn, workbook)
+    assert inserted == 2
+
+    vehicles = conn.execute(
+        "SELECT truck_id, state, make, rego_expiry FROM vehicle_details ORDER BY truck_id"
+    ).fetchall()
+    assert vehicles[0][0] == "ABC123"
+    assert vehicles[0][2] == "Volvo"
+    assert vehicles[1][0] == "DEF456"
+    assert vehicles[1][3] == "2025-12-31"
