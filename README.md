@@ -4,6 +4,11 @@
 [Price History](docs/price_history.md)
 [Positioning](docs/positioning.md)
 [Integration Staging Schema](docs/integration_staging_schema.md)
+[Corridor Detection](docs/corridor_detection.md)
+[Corridor Schema Plan](docs/corridor_schema_plan.md)
+[Corridor Defaults](docs/corridor_defaults.md)
+[AU Cluster Template](docs/cluster_template_au.md)
+[Corridor Opportunity Report](docs/corridor_opportunity_report.md)
 [Roadmap](ROADMAP.md)
 
 
@@ -63,6 +68,11 @@ Explore the main dashboard workflows currently deployable locally.
   - [Media ingest workflow](docs/media_ingest.md)
   - [Ingest, inventory, and logistics](docs/ingest_inventory_logistics.md)
   - [Integration staging schema](docs/integration_staging_schema.md)
+  - [Corridor detection](docs/corridor_detection.md)
+  - [Corridor schema plan](docs/corridor_schema_plan.md)
+  - [Corridor defaults](docs/corridor_defaults.md)
+  - [AU cluster template](docs/cluster_template_au.md)
+  - [Corridor opportunity report](docs/corridor_opportunity_report.md)
 - [Roadmap](#roadmap)
 
 ## Overview

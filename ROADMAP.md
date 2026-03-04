@@ -11,6 +11,10 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Add analytics documentation once the historical import and lane model ship.
 - Add a system architecture diagram (truck ↔ server ↔ cloud).
 - Keep `docs/positioning.md` aligned with supported integrations and product focus.
+- Maintain `docs/corridor_detection.md` alongside corridor model updates.
+- Keep `docs/corridor_schema_plan.md` aligned with corridor table changes.
+- Maintain `docs/corridor_defaults.md` and `docs/cluster_template_au.md` when thresholds or clusters change.
+- Maintain `docs/corridor_opportunity_report.md` alongside opportunity scoring changes.
 
 ---
 
@@ -28,7 +32,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 | **CSV import/export**                 |    ✅   | Batch job ingestion.                               |
 | **Folium route visualisation**        |    ✅   | Produces full-route HTML maps.                     |
 | **README.md**                         |    ✅   | Complete and public-ready.                         |
-| **Unit tests**                        |   🔜   | To be added for DB + API logic.                    |
+| **Unit tests**                        |   🧩   | Core suites exist; expand DB/API coverage.         |
 
 ---
 
@@ -38,9 +42,9 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 | ------------------------------------- | :----: | ------------------------------------------- |
 | **Multi-route Folium map**            |    ✅   | Working map output.                         |
 | **CustomIcon fix**                    |    ✅   | Bug resolved.                               |
-| **Break-even / margin overlays**      |   🔜   | Add markers for ±10–50 % profit.            |
-| **Interactive dashboard (Streamlit)** |   🧩   | Core components exist; full dashboard wiring, continuous map colour scaling, and cost vs price overlays still in progress. |
-| **Profit & volume heatmaps**          |   🔜   | Highlight high-margin or frequent routes.   |
+| **Break-even / margin overlays**      |   🧩   | Present in analytics; confirm full dashboard wiring. |
+| **Interactive dashboard (Streamlit)** |   🧩   | Core components exist; dashboard wiring and polish still in progress. |
+| **Profit & volume heatmaps**          |   🧩   | Heatmap tabs exist; validate lane profitability overlays. |
 
 ---
 
@@ -51,10 +55,10 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 | **Jobs + geocode tables**    |    ✅   | Implemented.                      |
 | **Schema migration support** |    ✅   | Handles new columns.              |
 | **Client registry & dedupe** |    ✅   | Quote builder stores clients, flags duplicates, and allows quotes without forcing a client record. |
-| **Historical job import**    |   🔜   | From MoveWare CSV/sheets or operator exports. |
-| **$ per m³ calculation**     |   🔜   | Derived metric for profitability. |
-| **Corridor / lane table**    |   🔜   | Define recurring routes.          |
-| **Modifier tables**          |   🔜   | Access, packing, season, etc.     |
+| **Historical job import**    |   🧩   | MoveWare helpers and CSV flows exist; expand coverage. |
+| **$ per m³ calculation**     |   🧩   | Derived metrics exist; validate ingest consistency. |
+| **Corridor / lane table**    |   🧩   | Lane base rates exist; formalize directional corridors + corridor groups. |
+| **Modifier tables**          |    ✅   | Access, packing, seasonal rules in schema. |
 | **Integration staging schema** |   🔜 | Minimal fields for CRM/dispatch/accounting sync. |
 | **CSV/API connectors**       |   🔜   | Sync from CRM, dispatch, accounting, and fleet systems. |
 
@@ -65,9 +69,9 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 | Deliverable                                              | Status | Description                            |
 | -------------------------------------------------------- | :----: | -------------------------------------- |
 | **Metro vs regional logic (≤100 km)**                    |    ✅   | Rule defined.                          |
-| **Base-rate schedule (Sunshine Coast 120 → Cairns 185)** |   🧩   | Exists verbally, needs table encoding. |
-| **Packing / bad-access fees**                            |   🔜   | Add fixed-fee modifiers.               |
-| **Seasonal margin uplift (20–80 %)**                     |   🔜   | Add seasonal coefficient.              |
+| **Base-rate schedule (Sunshine Coast 120 → Cairns 185)** |    ✅   | Encoded in lane base rate table. |
+| **Packing / bad-access fees**                            |    ✅   | Modifier tables include packing + access fees. |
+| **Seasonal margin uplift (20–80 %)**                     |   🧩   | Seasonal uplifts table exists; validate usage. |
 | **Backhaul / container sharing**                         |   🔜   | Handle under-/over-utilisation.        |
 | **Truck / driver cost baselines**                        |    ✅   | Base fuel/driver/maintenance + overhead parameters drive break-even engine. |
 | **Private cost component ledger**                        |    ✅   | Record crew, truck, fuel and other cost inputs per job inside SQLite.       |
@@ -108,7 +112,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 | Deliverable                              | Status | Description                                |
 | ---------------------------------------- | :----: | ------------------------------------------ |
 | **CLI report (`list`)**                  |    ✅   | Clean console output.                      |
-| **Streamlit dashboard (MVP)**            |   🔜   | Route map + distribution + summary.        |
+| **Streamlit dashboard (MVP)**            |   🧩   | Route map + distribution + summary exist; end-to-end wiring still in progress. |
 | **Insurance / audit bundles (PDF)**      |   🔜   | One-click job evidence packs.              |
 | **Automated CSV / Google Sheets export** |   🧩   | Helpers produce CSV-ready profitability summaries. |
 | **API endpoints**                        |   🔜   | JSON / REST for ERP + insurer integration. |
@@ -166,9 +170,13 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 
 ## Next Phase Blockers (2026-03-04)
 
-- Historical job ingestion pipeline (analytics cannot mature without real data).
-- Corridor / lane data model (required for benchmarking and optimisation).
-- Full dashboard implementation (lane heatmaps, margin overlays, operator views).
+- Historical job ingestion coverage and validation (analytics need reliable data).
+- Corridor/lane model formalization (directional + bidirectional grouping).
+- Quote recommendation + benchmarking logic (market medians, confidence, $/m3 distribution buckets, break-even overlays).
+- Backhaul detection logic.
+- End-to-end dashboard wiring (ensure all tabs use the latest analytics outputs).
+- Phantom corridor detection + gravity model exploration.
+- Opportunity scoring that combines gravity demand with $/m3 distributions.
 
 ## High-Leverage Near-Term Features
 
