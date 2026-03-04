@@ -1,10 +1,16 @@
-Excellent — here’s the **complete, unified deliverables map** from the entire conversation history.
-This merges everything from:
+Unified deliverables map for Corkysoft, aligning current implementation status with the planned roadmap.
 
-* 🧠 your data-model / routing work (Corkysoft core),
-* 🚛 operational logic (removals pricing + lanes),
-* 📸 RFID / camera-audit architecture, and
-* 📊 GM-facing analytics and dashboards.
+---
+
+## Documentation TODOs
+
+- Validate the deliverable status tables against the current code and tests.
+- Decide whether `corkysoft/src/dashboard` remains a packaging stub or should be wired to the main Streamlit entry point.
+- Add a short contributor note on how to keep README and docs in sync with new features.
+- Keep `docs/modules.md` updated when module responsibilities or entry points change.
+- Add analytics documentation once the historical import and lane model ship.
+- Add a system architecture diagram (truck ↔ server ↔ cloud).
+- Keep `docs/positioning.md` aligned with supported integrations and product focus.
 
 ---
 
@@ -33,7 +39,7 @@ This merges everything from:
 | **Multi-route Folium map**            |    ✅   | Working map output.                         |
 | **CustomIcon fix**                    |    ✅   | Bug resolved.                               |
 | **Break-even / margin overlays**      |   🔜   | Add markers for ±10–50 % profit.            |
-| **Interactive dashboard (Streamlit)** |   🧩   | Sidebar initialisation workflow stable; continuous map colour scaling, Cost vs Price (%) view and enhanced tooltips verified while wider dashboard build continues. |
+| **Interactive dashboard (Streamlit)** |   🧩   | Core components exist; full dashboard wiring, continuous map colour scaling, and cost vs price overlays still in progress. |
 | **Profit & volume heatmaps**          |   🔜   | Highlight high-margin or frequent routes.   |
 
 ---
@@ -45,10 +51,12 @@ This merges everything from:
 | **Jobs + geocode tables**    |    ✅   | Implemented.                      |
 | **Schema migration support** |    ✅   | Handles new columns.              |
 | **Client registry & dedupe** |    ✅   | Quote builder stores clients, flags duplicates, and allows quotes without forcing a client record. |
-| **Historical job import**    |   🔜   | From MoveWare CSV/screenshots.    |
+| **Historical job import**    |   🔜   | From MoveWare CSV/sheets or operator exports. |
 | **$ per m³ calculation**     |   🔜   | Derived metric for profitability. |
 | **Corridor / lane table**    |   🔜   | Define recurring routes.          |
 | **Modifier tables**          |   🔜   | Access, packing, season, etc.     |
+| **Integration staging schema** |   🔜 | Minimal fields for CRM/dispatch/accounting sync. |
+| **CSV/API connectors**       |   🔜   | Sync from CRM, dispatch, accounting, and fleet systems. |
 
 ---
 
@@ -88,6 +96,7 @@ This merges everything from:
 | **Data-model integration (PEC/media)** |   🧩   | Fields drafted; implementation pending. |
 | **Pre-Existing-Condition capture**     |   🔜   | Two-photo workflow + customer sign-off. |
 | **Event-based bodycam clips**          |   🔜   | Short triggered recordings.             |
+| **Video/call processing (Frigate/Whisper + SFM)** |   🔜   | Stub: use Frigate for video detection, Whisper for call transcripts, and SFM to assess access constraints. |
 | **Claim-risk scoring**                 |   🔜   | Use dispute data to adjust pricing.     |
 | **Hash-verified storage**              |   🔜   | SHA-256 for insurer integrity.          |
 | **Privacy & consent controls**         |   🔜   | Face-blur + role-based access.          |
@@ -152,3 +161,22 @@ This merges everything from:
 2. Implement lane / modifier tables.
 3. Build Streamlit dashboard with histogram + margin bands.
 4. Add audit media integration & privacy layer.
+
+---
+
+## Next Phase Blockers (2026-03-04)
+
+- Historical job ingestion pipeline (analytics cannot mature without real data).
+- Corridor / lane data model (required for benchmarking and optimisation).
+- Full dashboard implementation (lane heatmaps, margin overlays, operator views).
+
+## High-Leverage Near-Term Features
+
+- Historical job import pipeline (CSV + MoveWare exports).
+- Corridor / lane detection and rollups.
+- $/m³ market benchmarking overlays (median, percentile, break-even lines).
+- Quote recommendation engine (corridor median + modifiers).
+- Backhaul detection and discount suggestions.
+- Job profitability scoring and risk tags.
+- Corridor profitability heatmap layer.
+- Automated corridor pricing adjustments.

@@ -41,3 +41,39 @@ Every upload payload must include:
 - `item_id`/`asset_tag` links keep PEC evidence bound to specific inventory lines; if absent, the media is treated as job-level context.
 - Queries should include a `correlation_id` to group a burst (e.g., pre-load PEC set), and expose hashes/timestamps so auditors can cross-check integrity.
 - When a movement event is updated (e.g., corrected arrival time), the `media` rows remain immutable; the event table holds the revised timing while the digest + storage URI stay fixed.
+
+## Stub: video/call processing roadmap
+- **Video detection (Frigate)**: detect objects/rooms and generate event notes so staff can see what's present and where; register derived clips into the same media pipeline.
+- **Call transcripts (Whisper)**: capture packing/move details from calls and attach conversation notes to the job timeline for quick review.
+- **Spatial model (SFM)**: build a 3D house model to estimate access constraints and drive waypoint navigation/optimal pathing.
+
+## Pseudocode: transcript-guided video processing pipeline
+```text
+inputs:
+  - call_audio (job_id, device_id, captured_at)
+  - video_streams (job_id, camera_id, start_ts, end_ts)
+  - movement_events (job_id, event_ts, event_type)
+
+process:
+  1) transcript = whisper.transcribe(call_audio)
+  2) segments = extract_segments(transcript)
+     - each segment has (start_ts, end_ts, text, tags)
+  3) timeline = build_timeline(segments, movement_events)
+     - align transcript segments to job timeline and call start time
+  4) for each segment in timeline:
+       - derive target_window = map_to_video_window(segment, video_streams)
+       - hints = parse_object_hints(segment.text)
+       - frigate.request_detect(video_streams, target_window, hints)
+  5) detections = collect_frigate_events(job_id)
+  6) notes = build_staff_notes(segments, detections)
+     - include "what/where" inventory cues + related timestamps
+  7) persist:
+       - media rows for derived clips + detection metadata
+       - transcript_notes rows for staff review
+       - cross-links: note_id <-> media_id <-> movement_event_id
+
+outputs:
+  - staff-facing notes with timestamps and locations
+  - detection events with linked transcript excerpts
+  - derived clips stored in media pipeline
+```

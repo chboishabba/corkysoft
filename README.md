@@ -2,12 +2,35 @@
 [Live Network](docs/live_network_overview.md)
 [Telemetry](docs/mock_telemetry_workflow.md)
 [Price History](docs/price_history.md)
+[Positioning](docs/positioning.md)
+[Integration Staging Schema](docs/integration_staging_schema.md)
 [Roadmap](ROADMAP.md)
 
 
 Route profitability tooling for removals operators. The project couples a command-line workflow for distance lookups and cost capture with a Streamlit dashboard that surfaces price distribution, lane performance, and live telemetry overlays.
 
 Run `./start_app.sh` or `start_app.bat` to run the app.
+
+## Current Status (2026-03-04)
+
+Core routing + costing are stable, while analytics and the Streamlit UI are partially implemented.
+
+Main blockers to reach the next phase:
+- Historical job ingestion pipeline (to unlock analytics).
+- Corridor / lane data model (for benchmarking and optimisation).
+- Full dashboard implementation (lane heatmaps, margin overlays, operator views).
+
+High-leverage next features:
+- Historical job import pipeline (CSV + MoveWare exports).
+- Corridor / lane detection + rollups.
+- $/m³ market benchmarking overlays.
+- Quote recommendation engine.
+- Backhaul detection and discount suggestions.
+- Job profitability scoring.
+- Corridor profitability heatmap layer.
+- Automated corridor pricing adjustments.
+
+Note: `Crusader.xlsx` is a placeholder for Google Sheets connectors that map to the equivalent tables.
 
 
 ## Dashboard Preview
@@ -39,6 +62,7 @@ Explore the main dashboard workflows currently deployable locally.
 - [Documentation](#documentation)
   - [Media ingest workflow](docs/media_ingest.md)
   - [Ingest, inventory, and logistics](docs/ingest_inventory_logistics.md)
+  - [Integration staging schema](docs/integration_staging_schema.md)
 - [Roadmap](#roadmap)
 
 ## Overview
@@ -47,6 +71,11 @@ Explore the main dashboard workflows currently deployable locally.
 - Routing via [OpenRouteService](https://openrouteservice.org) with caching, address normalisation, and SQLite persistence.
 - A Streamlit dashboard for exploring $/m³ distribution, lane margins, profitability overlays, and historical trends.
 - Batch import/export helpers, mock telemetry ingestion, and a simplex-based profit optimiser to support planning exercises.
+
+Positioning:
+- Corkysoft is a pricing intelligence layer for removals operators, not a full operational CRM.
+- The goal is to integrate with incumbents (MoveWare, SmartMoving, fleet trackers, accounting) and provide profitability, pricing, and lane analytics on top.
+See `docs/positioning.md` for the competitive landscape and integration strategy.
 
 ## Project Layout
 
@@ -58,7 +87,8 @@ tree highlights the directories you will touch most often:
 ├── analytics/              # Data access, pricing insights, telemetry ingestion
 │   ├── db.py               # SQLite helpers and schema bootstrap
 │   ├── ingest_live_data.py # Mock truck/route streamer backing the dashboard map
-│   └── price_distribution/ # Corridor rollups, exports, and optimiser prep
+│   └── price_distribution.py # Corridor rollups, exports, and optimiser prep
+├── corkysoft/              # Core routing, pricing, and quote helpers
 ├── dashboard/              # Streamlit entry point and reusable widgets
 │   ├── app.py              # Main Streamlit application
 │   └── components/         # Leafy widgets shared across tabs
@@ -95,7 +125,7 @@ dashboard screenshots and `MIGRATE_AWAY_FROM_streamlit_price_distribution.py` fo
 - Estimate billable costs using hourly and per-km rates with private cost ledgers per job.
 - Cache geocodes and resolved addresses to minimise API calls.
 - Normalise Australian street abbreviations and persist results in SQLite (`routes.db` by default).
-- Import/export CSV datasets, including MoveWare-style history.
+- Import/export CSV datasets, including MoveWare-style history (see `Crusader.xlsx` placeholder for Google Sheets equivalents).
 
 ## Mindmap
 
@@ -150,13 +180,13 @@ Isochrones are requested from the active provider when available. Google connect
 
 #### OpenRouteService setup
 
-- `ORS_API_KEY` (**required**): authenticate API calls used by the CLI and dashboard helpers.【F:routes_to_sqlite.py†L1-L60】【F:corkysoft/routing.py†L31-L60】
-- `ORS_COUNTRY` (optional): hint Pelias geocoding with a default country (defaults to `Australia`).【F:routes_to_sqlite.py†L9-L13】
+- `ORS_API_KEY` (**required**): authenticate API calls used by the CLI and dashboard helpers.
+- `ORS_COUNTRY` (optional): hint Pelias geocoding with a default country (defaults to `Australia`).
 
 Usage notes:
 
 - ORS free tiers throttle by request volume—review the [pricing and quota documentation](https://openrouteservice.org/pricing/) before running large batch jobs.
-- CLI commands that avoid external lookups (`add`, `add-csv`, `list`, `cost`, `map` with cached geometry) still work without a key because they only touch the local SQLite database.【F:routes_to_sqlite.py†L714-L963】
+- CLI commands that avoid external lookups (`add`, `add-csv`, `list`, `cost`, `map` with cached geometry) still work without a key because they only touch the local SQLite database.
 
 #### Google Maps setup
 
@@ -170,20 +200,20 @@ Usage notes:
 
 #### Shared environment variables
 
-- `ROUTES_DB`: Path to the SQLite database (default `routes.db`).【F:routes_to_sqlite.py†L9-L13】
-- `CORKYSOFT_DB`: Alternate variable for pointing the dashboard at another SQLite database (overrides `ROUTES_DB` for analytics views).【F:analytics/db.py†L9-L15】
+- `ROUTES_DB`: Path to the SQLite database (default `routes.db`).
+- `CORKYSOFT_DB`: Alternate variable for pointing the dashboard at another SQLite database (overrides `ROUTES_DB` for analytics views).
 
 Use `.env.example` as a template when sharing configuration between teammates or CI runs.
 
 ### Running both providers
 
-`routes_to_sqlite.py` and the dashboard reuse the same SQLite schema regardless of provider. Job rows and the `geocode_cache` table are populated from whichever routing service answered the request.【F:routes_to_sqlite.py†L32-L139】【F:routes_to_sqlite.py†L635-L711】【F:corkysoft/routing.py†L83-L146】 When you toggle providers:
+`routes_to_sqlite.py` and the dashboard reuse the same SQLite schema regardless of provider. Job rows and the `geocode_cache` table are populated from whichever routing service answered the request. When you toggle providers:
 
 1. Decide whether to share or separate caches.
-   - Shared cache: keep `ROUTES_DB` pointing at the same file. The most recent provider wins if coordinates differ because cache entries are keyed by the normalised address and country only.【F:corkysoft/routing.py†L83-L140】
+   - Shared cache: keep `ROUTES_DB` pointing at the same file. The most recent provider wins if coordinates differ because cache entries are keyed by the normalised address and country only.
    - Separate caches: export/import the database or point `ROUTES_DB` (and `CORKYSOFT_DB` for the dashboard) at provider-specific files before running batch jobs.
-2. Re-run `routes_to_sqlite.py run` for any pending jobs so the new provider can populate `distance_km`, `duration_hr`, and `route_geojson` fields using its own routing engine.【F:routes_to_sqlite.py†L635-L711】【F:routes_to_sqlite.py†L856-L963】【F:corkysoft/routing.py†L412-L507】
-3. Review downstream dashboards: all analytics charts read the same tables, so switching providers updates KPIs automatically once the CLI refreshes cached distances.【F:analytics/db.py†L9-L75】
+2. Re-run `routes_to_sqlite.py run` for any pending jobs so the new provider can populate `distance_km`, `duration_hr`, and `route_geojson` fields using its own routing engine.
+3. Review downstream dashboards: all analytics charts read the same tables, so switching providers updates KPIs automatically once the CLI refreshes cached distances.
 
 For operators alternating between providers, consider scripting dedicated CLI entry points (e.g., `routes_to_sqlite.py run --provider google`) that export the correct environment variables and database paths to avoid accidental cross-pollination.
 
@@ -310,6 +340,7 @@ Target a specific area via `pytest tests/test_price_distribution.py` or similar 
 - `docs/price_history.md`: Reference for the price history analytics and lane comparisons.
 - `docs/mock_telemetry_workflow.md`: Details of the telemetry ingestion harness.
 - `docs/architecture.md`: High-level architecture outline covering how the Streamlit shell composes analytics modules and supporting services.
+- `docs/modules.md`: Module-by-module ownership and entry point summary.
 - `ROADMAP.md`: Active deliverables, progress snapshot, and upcoming work.
 
 PEC photos and bodycam clips follow a capture → queue → upload → storage pipeline with on-device hashing, server-side verification, and foreign-key links back to movement events and tagged items for auditability.
