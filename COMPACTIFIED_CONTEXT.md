@@ -163,3 +163,15 @@ Docs updated:
 
 Implementation changes:
 - None. Documentation-only updates.
+
+## 2026-03-05 (Corridor Opportunity View)
+
+Added a docs-only SQL view definition for the corridor opportunity report.
+
+Docs updated:
+- README.md
+- ROADMAP.md
+- docs/corridor_opportunity_view.md
+
+Implementation changes:
+- None. Documentation-only updates.

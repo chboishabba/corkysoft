@@ -15,6 +15,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Keep `docs/corridor_schema_plan.md` aligned with corridor table changes.
 - Maintain `docs/corridor_defaults.md` and `docs/cluster_template_au.md` when thresholds or clusters change.
 - Maintain `docs/corridor_opportunity_report.md` alongside opportunity scoring changes.
+- Maintain `docs/corridor_opportunity_view.md` alongside the report schema.
 
 ---
 

@@ -9,6 +9,7 @@
 [Corridor Defaults](docs/corridor_defaults.md)
 [AU Cluster Template](docs/cluster_template_au.md)
 [Corridor Opportunity Report](docs/corridor_opportunity_report.md)
+[Corridor Opportunity View](docs/corridor_opportunity_view.md)
 [Roadmap](ROADMAP.md)
 
 
@@ -73,6 +74,7 @@ Explore the main dashboard workflows currently deployable locally.
   - [Corridor defaults](docs/corridor_defaults.md)
   - [AU cluster template](docs/cluster_template_au.md)
   - [Corridor opportunity report](docs/corridor_opportunity_report.md)
+  - [Corridor opportunity view](docs/corridor_opportunity_view.md)
 - [Roadmap](#roadmap)
 
 ## Overview
