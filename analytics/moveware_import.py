@@ -14,6 +14,10 @@ from analytics.db import (
     upsert_worker,
 )
 from analytics.operational_signals import upsert_job_operational_signal
+from analytics.kent_ams_import import (
+    evaluate_kent_profitability_policy,
+    get_kent_tender_policy_config,
+)
 
 
 def _first_present(
@@ -71,6 +75,11 @@ def _coerce_timestamp(value: object | None) -> str | None:
     return parsed.isoformat()
 
 
+def _table_has_column(conn, table: str, column: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any((row["name"] if hasattr(row, "keys") else row[1]) == column for row in rows)
+
+
 def _job_id_from_number(conn, job_number: str) -> int:
     row = conn.execute(
         "SELECT id FROM jobs WHERE job_number = ?", (job_number,),
@@ -90,10 +99,18 @@ def import_jobs(conn, records: Sequence[Mapping[str, object]], *, dry_run: bool 
         if not job_number:
             raise ValueError("MoveWare job record missing job_number")
 
-        existing = conn.execute(
-            "SELECT id FROM jobs WHERE job_number = ?", (job_number,)
-        ).fetchone()
+        existing = None
+        can_query_existing = _table_has_column(conn, "jobs", "job_number")
+        if not dry_run and can_query_existing:
+            existing = conn.execute(
+                "SELECT id FROM jobs WHERE job_number = ?", (job_number,)
+            ).fetchone()
         if not dry_run:
+            profitability_policy = evaluate_kent_profitability_policy(
+                expected_revenue=_coerce_float(_first_present(record, "revenue_total", "revenueTotal")),
+                estimated_cost=_coerce_float(_first_present(record, "final_cost", "finalCost")),
+                policy_config=get_kent_tender_policy_config(conn),
+            )
             upsert_job_by_number(
                 conn,
                 job_number=job_number,
@@ -133,9 +150,17 @@ def import_jobs(conn, records: Sequence[Mapping[str, object]], *, dry_run: bool 
                 estimated_volume_m3=_coerce_float(
                     _first_present(record, "volume_m3", "volumeM3")
                 ),
+                profitability_rule_mode=profitability_policy["ruleMode"],
+                absolute_margin_threshold=profitability_policy["absoluteMarginThreshold"],
+                margin_percent_threshold=profitability_policy["marginPercentThreshold"],
+                policy_matched=profitability_policy["matched"],
+                policy_fail_reasons=list(profitability_policy["failReasons"]),
+                loss_alert=profitability_policy["lossAlert"],
+                estimated_margin=profitability_policy["marginAmount"],
+                estimated_margin_pct=profitability_policy["marginPercent"],
                 source="moveware_import",
             )
-        if existing is None:
+        if dry_run or existing is None:
             inserted += 1
         else:
             updated += 1

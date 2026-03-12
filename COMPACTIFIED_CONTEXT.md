@@ -363,3 +363,205 @@ Implementation changes:
   creation, and override history.
 - Added a Streamlit `Kent tenders` tab for queue review, config updates, reason
   management, and override capture/history.
+
+## 2026-03-12 (Kent Validation + Shared Policy Signals)
+
+Completed three follow-up actions after the policy workflow landed:
+
+- ran the Kent API suite successfully under the existing project `venv`
+- added fixture-backed Kent tender payload validation for local smoke coverage
+- pushed profitability policy semantics into quote creation and job ingest
+  operational signals so pricing/dispatch share the same pass/fail/loss model
+
+## 2026-03-12 (Docs/Governance/Kent Reliability Remediation)
+
+Executed the remediation milestone from the repo audit to align project truth,
+complete missing product/governance docs, and harden brittle Kent behavior.
+
+Planning state added:
+- spec.md
+- plan.md
+- status.json
+- devlog.md
+
+Docs aligned:
+- README.md
+- ROADMAP.md
+- docs/positioning.md
+- docs/kent_ams_integration.md
+- docs/kent_ams_integration_roadmap.md
+- docs/live_network_overview.md
+- docs/multi_truck_route_load_optimization.md
+- docs/ingest_inventory_logistics.md
+- docs/fleet_tables.md
+- docs/heatmap_logic.md
+- docs/operator_user_stories.md
+- docs/commercial_workflow_lifecycle.md
+
+Implementation changes:
+- added internal mutating API auth via `X-Corkysoft-Api-Key` validated against
+  `CORKYSOFT_API_TOKEN`
+- made API `dry_run` execution side-effect free by running imports against an
+  in-memory shadow database
+- fixed Kent prioritized queue correctness so top-N is selected after final
+  ranking rather than before it
+- restricted hard-block handling to governed safety/legal/compliance categories
+- split Streamlit Kent operator workflow from Kent admin/config workflow
+- added UX handling for the "no active override reasons" case
+- relabeled quote workflow output as a quote-policy preview rather than silent
+  equivalence with tender policy
+
+Validation:
+- `py_compile` passed on touched Python files
+- targeted tests passed under local `venv`:
+  `tests/test_dashboard_app.py`, `tests/test_api.py`,
+  `tests/test_kent_ams_fixtures.py`
+
+## 2026-03-12 (Crusader Workbook Fleet Import Hardening)
+
+Closed a local-data reliability gap around the `Crusader.xlsx` placeholder
+workbook so it can actually seed fleet state used by pricing and Kent triage.
+
+Implementation changes:
+- fixed Fleet tab uploaded-XLSX handling to use the workbook-aware importer
+  instead of blindly reading only the first worksheet
+- fixed `analytics.vehicle_workbook` so sheet-per-vehicle workbooks without an
+  explicit `REGO` column inherit the sheet name as the truck identifier using a
+  canonical column path
+- added regression coverage against the real repo workbook
+
+Code updated:
+- analytics/vehicle_workbook.py
+- dashboard/components/maintenance.py
+- tests/test_vehicle_workbook.py
+
+Validation:
+- targeted local `venv` tests passed:
+  `tests/test_vehicle_workbook.py`, `tests/test_dashboard_app.py`,
+  `tests/test_api.py`, `tests/test_kent_ams_fixtures.py`
+
+## 2026-03-12 (Google Sheets-First Operations Workbook Migration Start)
+
+Started moving operational data refresh away from the local `Crusader.xlsx`
+placeholder and toward the live Google Sheets setup already used by the
+business. The private sheet URLs were used for inspection only and were not
+recorded in repo docs.
+
+Observed live workbook shape:
+- one shared operations workbook contains fleet/staff/supplier tabs
+- a separate workbook contains sheet-per-vehicle maintenance history plus
+  repairs history/index tabs
+
+Docs updated:
+- README.md
+- ROADMAP.md
+
+Implementation changes:
+- added shared Google Sheets ID/URL resolution helpers
+- added Google Sheets staff import using the shared operations workbook
+- added supplier import UI for Google Sheets-backed `SUPPLIERS`
+- updated fleet import UI defaults to prefer the shared operations workbook env
+- kept local `.xlsx` upload paths as fallback rather than the primary workflow
+
+Code updated:
+- analytics/google_sheets.py
+- analytics/db/fleet.py
+- analytics/db/inventory.py
+- analytics/driver_shifts.py
+- analytics/vehicle_workbook.py
+- dashboard/app.py
+- dashboard/components/maintenance.py
+- tests/test_google_sheets_imports.py
+
+Validation:
+- targeted local `venv` tests passed:
+  `tests/test_google_sheets_imports.py`, `tests/test_vehicle_workbook.py`,
+  `tests/test_dashboard_app.py`, `tests/test_api.py`,
+  `tests/test_kent_ams_fixtures.py`
+
+## 2026-03-12 (Shared Operations Workbook Sync)
+
+Implemented a coordinated sync path for the shared operations workbook so fleet,
+staff, and suppliers can be refreshed together from one workbook reference.
+
+Docs updated:
+- README.md
+- ROADMAP.md
+
+Implementation changes:
+- added `analytics.operations_workbook.sync_operations_workbook`
+- added a Fleet-tab dashboard action to sync the shared operations workbook in
+  one step
+- added optional env-based per-tab overrides for shared-workbook `STAFF` and
+  `SUPPLIERS` sheet names while keeping defaults simple
+
+Code updated:
+- analytics/operations_workbook.py
+- dashboard/components/maintenance.py
+- tests/test_operations_workbook.py
+
+Validation:
+- targeted local `venv` tests passed:
+  `tests/test_operations_workbook.py`, `tests/test_google_sheets_imports.py`,
+  `tests/test_vehicle_workbook.py`, `tests/test_dashboard_app.py`,
+  `tests/test_api.py`, `tests/test_kent_ams_fixtures.py`
+
+## 2026-03-12 (Spreadsheet-First Operations Planning)
+
+Implemented the next integration layer for spreadsheet cooperation so
+Corkysoft can plan trucks/workers/jobs internally while continuing to ingest
+Google Sheets as operational inputs.
+
+Decisions locked:
+- spreadsheets are import-only for now; no write-back
+- Corkysoft internal state is the planning truth
+- `job_segments` are the canonical assignment unit
+- maintenance/rego/COI/compliance readiness is evaluated as part of assignment,
+  not as a detached dashboard-only concern
+
+Docs updated:
+- README.md
+- ROADMAP.md
+- docs/fleet_tables.md
+- docs/commercial_workflow_lifecycle.md
+
+Implementation changes:
+- added source provenance fields for workers, suppliers, and vehicle details
+- added `analytics.operations_assignment` for policy, readiness, assignment,
+  conflicts, and segment bootstrap/update behavior
+- added `/operations/*` API endpoints for policy, sync, segment creation,
+  readiness listing, assignment, and conflicts
+- added dashboard `Operations` tab for segment planning and assignment
+- added readiness policy controls in Fleet/admin workflow
+- updated shipments wrapper to use the richer legacy segment-aware shipment path
+- fixed `ensure_segment` so backfilled default segments can actually be updated
+  with planned windows, which restores overlap/conflict detection
+- normalized vehicle workbook provenance timestamps to UTC
+
+Tests added/updated:
+- tests/test_operations_assignment.py
+- tests/test_api.py
+- tests/test_dashboard_app.py
+- tests/test_google_sheets_imports.py
+- tests/test_vehicle_workbook.py
+
+Validation:
+- targeted local `venv` tests passed:
+  `tests/test_operations_assignment.py`, `tests/test_google_sheets_imports.py`,
+  `tests/test_vehicle_workbook.py`, `tests/test_dashboard_app.py`,
+  `tests/test_api.py`, `tests/test_kent_ams_fixtures.py`,
+  `tests/test_operations_workbook.py`
+
+Follow-up implementation completed the next workflow step:
+- Staff tab now shows planned segment assignments, planned trucks/jobs, and next
+  planned work separately from imported sheet truck context and recent shifts
+- Fleet tab now shows planned segment/job/worker context for each truck and a
+  per-truck planned segment detail view
+- added `docs/spreadsheet_replacement_plan.md` to define full spreadsheet
+  replacement by workflow rather than by raw table
+
+Validation:
+- local `venv` tests passed after Staff/Fleet integration updates:
+  `tests/test_operations_assignment.py`, `tests/test_dashboard_app.py`,
+  `tests/test_api.py`, `tests/test_google_sheets_imports.py`,
+  `tests/test_vehicle_workbook.py`, `tests/test_operations_workbook.py`

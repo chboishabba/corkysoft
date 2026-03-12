@@ -14,6 +14,9 @@
 [Kent AMS Integration Spec](docs/kent_ams_integration.md)
 [Kent AMS Integration Roadmap](docs/kent_ams_integration_roadmap.md)
 [Multi-Truck Route/Load Optimization](docs/multi_truck_route_load_optimization.md)
+[Operator User Stories](docs/operator_user_stories.md)
+[Quote to Award Lifecycle](docs/commercial_workflow_lifecycle.md)
+[Spreadsheet Replacement Plan](docs/spreadsheet_replacement_plan.md)
 [Roadmap](ROADMAP.md)
 
 
@@ -21,27 +24,39 @@ Route profitability tooling for removals operators. The project couples a comman
 
 Run `./start_app.sh` or `start_app.bat` to run the app.
 
-## Current Status (2026-03-04)
+## Start Here
 
-Core routing + costing are stable, while analytics and the Streamlit UI are partially implemented.
+- Estimator / quoting flow: [Quote to Award Lifecycle](docs/commercial_workflow_lifecycle.md)
+- Dispatch / tender triage flow: [Kent AMS Integration Spec](docs/kent_ams_integration.md)
+- Product and actor intent: [Operator User Stories](docs/operator_user_stories.md)
+- Current delivery status: [Roadmap](ROADMAP.md)
+
+## Current Status (2026-03-12)
+
+Core routing + costing are stable. The Streamlit dashboard is implemented and
+usable, but some workflows remain provisional or governance-light:
+
+- quote builder is implemented and persists quotes
+- Kent tender triage is implemented for internal/provisional use
+- profitability and route analytics are implemented across multiple tabs
+- live network, corridor, and optimization docs still describe more than the
+  current MVP guarantees
 
 Main blockers to reach the next phase:
-- Historical job ingestion pipeline (to unlock analytics).
-- Corridor / lane data model (for benchmarking and optimisation).
-- Full dashboard implementation (lane heatmaps, margin overlays, operator views).
+- historical job ingestion validation (to unlock reliable analytics)
+- corridor / lane data model formalization
+- operator workflow and governance completion
+- Kent contract validation against real payloads and real operator usage
 
 High-leverage next features:
-- Historical job import pipeline (CSV + MoveWare exports).
-- Corridor / lane detection + rollups.
-- $/m³ market benchmarking overlays.
-- Quote recommendation engine.
-- Kent AMS tender queue with profitability rule-mode prioritization and override audit.
-- Backhaul detection and discount suggestions.
-- Job profitability scoring.
-- Corridor profitability heatmap layer.
-- Automated corridor pricing adjustments.
+- historical job import hardening (CSV + MoveWare exports)
+- corridor / lane detection + rollups
+- route and tender calibration against live operator feedback
+- Kent admin/operator workflow split
+- backhaul detection and discount suggestions
+- multi-truck transfer and split policy definition before solver work
 
-Note: `Crusader.xlsx` is a placeholder for Google Sheets connectors that map to the equivalent tables.
+Note: `Crusader.xlsx` remains a local fallback/fixture, but the intended source of truth for fleet/staff/supplier operational data is Google Sheets.
 
 
 ## Dashboard Preview
@@ -142,7 +157,7 @@ dashboard screenshots and `MIGRATE_AWAY_FROM_streamlit_price_distribution.py` fo
 - Estimate billable costs using hourly and per-km rates with private cost ledgers per job.
 - Cache geocodes and resolved addresses to minimise API calls.
 - Normalise Australian street abbreviations and persist results in SQLite (`routes.db` by default).
-- Import/export CSV datasets, including MoveWare-style history (see `Crusader.xlsx` placeholder for Google Sheets equivalents).
+- Import/export CSV datasets, including MoveWare-style history and Google Sheets-backed operational workbook imports.
 
 ## Mindmap
 
@@ -162,7 +177,8 @@ The dashboard surfaces:
 - Profitability tabs comparing $/m³, $/km, quoted versus cost-derived margins, and outlier tables.
 - Interactive Mapbox map with corridor colouring, isochrone shading, lane filters, and density heatmaps.
 - Live network view that highlights active trucks, lane profitability, and telemetry clusters.
-- Quote builder with client dedupe, optional attachments, and quick-quote support without forcing customer records.
+- Quote builder with client dedupe, profitability policy preview, and quick-quote support without forcing customer records.
+- Kent tender queue with profitability-rule prioritization, override capture, and audit history.
 - Optimiser tab recommending corridor price uplifts and exportable action lists.
 - Price history traces with daily/weekly/monthly resampling, prior-year comparisons, and lane box plots (see `docs/price_history.md`).
 
@@ -219,6 +235,13 @@ Usage notes:
 
 - `ROUTES_DB`: Path to the SQLite database (default `routes.db`).
 - `CORKYSOFT_DB`: Alternate variable for pointing the dashboard at another SQLite database (overrides `ROUTES_DB` for analytics views).
+- `CORKYSOFT_API_TOKEN`: Required for mutating internal API routes such as importer writes, Kent policy changes, and override recording.
+- `OPERATIONS_WORKBOOK_SHEET_ID` or `OPERATIONS_WORKBOOK_URL`: Shared Google Sheets workbook for `FLEET`, `STAFF`, and `SUPPLIERS` imports.
+- `OPERATIONS_STAFF_SHEET_NAME` (optional): Defaults to `STAFF` for shared-workbook staff sync.
+- `OPERATIONS_SUPPLIERS_SHEET_NAME` (optional): Defaults to `SUPPLIERS` for shared-workbook supplier sync.
+- `VEHICLE_DRIVER_SHEET_ID`: Google Sheet ID/URL for the `VEHICLE_DRIVER`/shift sheet.
+- `SUPPLIERS_SHEET_ID` or `SUPPLIERS_SHEET_URL`: Optional supplier-specific override when suppliers do not live in the shared operations workbook.
+- `VEHICLE_REPAIRS_SHEET_URL` or `VEHICLE_REPAIRS_SHEET`: Vehicle repairs Google Sheet source.
 
 Use `.env.example` as a template when sharing configuration between teammates or CI runs.
 
@@ -283,7 +306,14 @@ Common commands:
 - Use the historical CSV uploader to ingest data mirroring the CLI headers (`date`, `origin`, `destination`, `m3`, `quoted_price`, `client`).
 - Switch datasets between historical jobs, saved quick quotes, and live telemetry samples.
 - Expand **Client details** in the quote builder for dedupe suggestions across name, phone, and address.
-- Enable the live profitability view to expose corridor colour balancing, margin overlays, and hover diagnostics.
+- Review profitability policy pass/fail state in the quote builder before persisting a quote.
+- Use the Kent tender queue to prioritize work, inspect flags, and record overrides with reason codes.
+- Use Google Sheets-backed imports for `FLEET`, `STAFF`, and `SUPPLIERS` before falling back to ad hoc local workbook uploads.
+- Use the shared operations-workbook sync in Fleet when you want `FLEET`, `STAFF`, and `SUPPLIERS` refreshed together from the same workbook reference.
+- Treat Corkysoft as the planning source of truth for truck/staff/job-segment assignments; current spreadsheets are import-only operational inputs.
+- Plan work at the `job_segments` level so one job can span multiple legs, trucks, and workers with readiness checks.
+- Use the Staff and Fleet tabs to review planned segment assignments alongside imported sheet context and recent shift history.
+- Treat the current live profitability/network views as MVP analytics surfaces; advanced drill-down and auto-refresh behavior remain future work unless explicitly documented elsewhere.
 
 ### Telemetry & Live Data
 
@@ -358,6 +388,8 @@ Target a specific area via `pytest tests/test_price_distribution.py` or similar 
 - `docs/mock_telemetry_workflow.md`: Details of the telemetry ingestion harness.
 - `docs/architecture.md`: High-level architecture outline covering how the Streamlit shell composes analytics modules and supporting services.
 - `docs/modules.md`: Module-by-module ownership and entry point summary.
+- `docs/operator_user_stories.md`: Actor-based product workflows and decisions.
+- `docs/commercial_workflow_lifecycle.md`: Quote -> tender -> override -> awarded-work lifecycle.
 - `ROADMAP.md`: Active deliverables, progress snapshot, and upcoming work.
 
 PEC photos and bodycam clips follow a capture → queue → upload → storage pipeline with on-device hashing, server-side verification, and foreign-key links back to movement events and tagged items for auditability.

@@ -48,11 +48,24 @@ def test_import_vehicle_details_from_dataframe_populates_tables() -> None:
     assert inserted == 1
 
     detail = conn.execute(
-        "SELECT rego_expiry, nhv_code, daily_check_complete FROM vehicle_details WHERE truck_id='ABC123'"
+        """
+        SELECT
+            rego_expiry,
+            nhv_code,
+            daily_check_complete,
+            source_system,
+            source_sheet,
+            source_imported_at
+        FROM vehicle_details
+        WHERE truck_id='ABC123'
+        """
     ).fetchone()
     assert detail[0] == "2025-12-31"
     assert detail[1] == "HVC"
     assert detail[2] == 1
+    assert detail[3] == "google_sheets"
+    assert detail[4] == "VEHICLE"
+    assert detail[5].endswith("+00:00")
 
     truck = conn.execute("SELECT truck_id, name FROM trucks WHERE truck_id='ABC123'").fetchone()
     assert truck is not None
@@ -123,3 +136,27 @@ def test_import_vehicle_details_from_multisheet_workbook() -> None:
     assert vehicles[0][2] == "Volvo"
     assert vehicles[1][0] == "DEF456"
     assert vehicles[1][3] == "2025-12-31"
+
+
+def test_import_vehicle_details_from_crusader_workbook() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    ensure_dashboard_tables(conn)
+
+    workbook_path = Path(__file__).resolve().parents[1] / "Crusader.xlsx"
+    workbook = pd.ExcelFile(workbook_path, engine="openpyxl")
+
+    inserted = import_vehicle_details_from_workbook(conn, workbook)
+    assert inserted >= 1
+
+    vehicle = conn.execute(
+        """
+        SELECT truck_id, state, make, model, body_type
+        FROM vehicle_details
+        WHERE truck_id = '670LC4'
+        """
+    ).fetchone()
+    assert vehicle is not None
+    assert vehicle["state"] == "QLD"
+    assert vehicle["make"] == "HINO"
+    assert vehicle["body_type"] == "TRUCK"

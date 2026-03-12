@@ -1,114 +1,109 @@
 # Kent AMS Integration Roadmap
 
-Date baseline: 2026-03-11
+Date baseline: 2026-03-12
 
-This roadmap plans Corkysoft integration with Kent AMS in delivery phases with
-clear acceptance gates.
+This roadmap reflects the current implemented Kent AMS surface and the
+remaining work needed before the adapter should be treated as production-ready.
 
-## Objectives
+## Current State
 
-- Build a reliable inbound Kent -> Corkysoft sync for moves, assignees, and
-  shipment context.
-- Produce stable outbound quote recommendation payloads with auditability.
-- Ensure idempotency, replay safety, and testable contracts.
+Implemented now:
 
-## Phase Plan
+- internal importer route: `POST /importers/kent-ams/{resource}`
+- supported resources: `jobs`, `subcontractors`/`vendors`, `tenders`, `bids`,
+  `awards`
+- ranked tender queue: `GET /kent-ams/tenders/prioritized`
+- calibration endpoint: `GET /kent-ams/tenders/calibration`
+- policy config and override/audit endpoints for internal use
+- Streamlit Kent operator queue with ranking and override capture
+- fixture-backed contract smoke tests
 
-### Phase 0: Discovery and Contract Lock (target: 2026-03-11 to 2026-03-18)
+Still provisional:
 
-Deliverables:
-- Real Kent sample payload corpus (happy path + edge cases).
-- Final field dictionary and enum catalog.
-- Auth method and environment contract.
+- field names and enums are based on expected Kent payloads, not a locked live
+  export corpus
+- current workflow is internal and governance-led, not production-rolled-out
+- admin/operator separation, auth hardening, and live-payload validation remain
+  incomplete
 
-Acceptance gate:
-- `docs/kent_ams_integration.md` mapping table validated against real payloads.
-- Unknown/optional fields explicitly marked.
+## Remaining Milestones
 
-### Phase 1: Inbound Foundation (target: 2026-03-18 to 2026-04-01)
-
-Deliverables:
-- Ingest adapter for Kent payload normalization.
-- Idempotent upsert by external identifiers.
-- External link mapping table design and migration plan.
-
-Acceptance gate:
-- Repeat ingest of the same payload produces zero duplicate logical entities.
-- Schema validation failures are actionable and logged.
-
-### Phase 2: Core Entity Sync (target: 2026-04-01 to 2026-04-15)
+### Milestone 1: Contract Lock
 
 Deliverables:
-- Client/assignee sync into `clients`.
-- Move/job sync into `jobs` and/or `historical_jobs`.
-- Shipment and vendor sync with status enum mapping.
+- 20-30 anonymized Kent payloads covering key lifecycle states
+- final field dictionary and enum catalog
+- documented auth and deployment contract
 
 Acceptance gate:
-- Contract tests pass for entity creation/update/deletion-safe behavior.
-- Enum translation table documented and versioned.
+- `docs/kent_ams_integration.md` is validated against live payloads rather than
+  only fixtures
+- unknown fields and unsupported enums have explicit handling rules
 
-### Phase 3: Pricing and Outbound Contract (target: 2026-04-15 to 2026-04-29)
+### Milestone 2: Governance and Workflow Hardening
 
 Deliverables:
-- Quote recommendation payload builder from Corkysoft outputs.
-- Reason code and component breakdown support.
-- Outbound retry + dead-letter behavior.
+- operator/admin workflow split
+- override governance and review cadence
+- governed hard-block categories
+- side-effect-free `dry_run` semantics
 
 Acceptance gate:
-- Golden payload tests for outbound format and required fields.
-- End-to-end scenario from inbound move update to outbound quote recommendation.
+- operator flow is decision-focused and admin settings are separated
+- hard-block behavior is restricted to approved categories
+- `dry_run` matches the documented contract
 
-### Phase 4: Operational Hardening (target: 2026-04-29 to 2026-05-13)
+### Milestone 3: Entity and State Hardening
 
 Deliverables:
-- Sync observability (success/error counts, lag, replay count).
-- Replay and backfill runbook.
-- On-call troubleshooting guide.
+- external ID bridge/link strategy
+- enum translation tables
+- replay-safe entity updates
+- actionable validation failures
 
 Acceptance gate:
-- Simulated failure drills demonstrate safe recovery and replay.
-- SLA dashboard indicates freshness and failure rates.
+- repeat ingest of identical payloads produces no duplicate logical entities
+- validation failures are explicit and logged for review
 
-### Phase 5: Pilot and Rollout (target: 2026-05-13 to 2026-05-27)
+### Milestone 4: Outbound and Operational Readiness
 
 Deliverables:
-- Controlled pilot with selected Kent workflows.
-- Production rollout checklist and go/no-go criteria.
-- Post-launch monitoring and issue triage plan.
+- outbound quote recommendation contract
+- dead-letter/replay runbook
+- freshness and calibration review workflow
+- deployment auth model
 
 Acceptance gate:
-- Pilot sign-off from business and technical stakeholders.
-- No unresolved P1 data-integrity defects.
+- inbound change -> outbound recommendation path is testable
+- operators and reviewers can explain why work was accepted or overridden
 
 ## Workstreams
 
-1. Data contracts: field mappings, enum mappings, payload versioning.
-2. Integration runtime: adapter, scheduler/webhook path, retries, dead-letter.
-3. Persistence and audit: idempotent upsert, external ID links, change logs.
-4. Quality: contract tests, fixture library, replay tests.
-5. Operations: dashboards, alerting, runbooks.
+1. Data contracts
+- field mappings
+- enum mappings
+- payload versioning
 
-## Risks and Mitigations
+2. Governance
+- override policy
+- review cadence
+- admin/operator boundaries
 
-- Risk: Kent payload shape drift.
-  - Mitigation: versioned schemas + strict validator with compatibility layer.
-- Risk: enum mismatch creates workflow regressions.
-  - Mitigation: explicit translation table + unknown-status quarantine.
-- Risk: duplicate writes from retries or replay.
-  - Mitigation: external-id idempotency keys + deterministic upsert rules.
-- Risk: stale quotes after upstream changes.
-  - Mitigation: freshness SLA monitor + forced reprice trigger on key fields.
+3. Runtime hardening
+- auth
+- validation
+- replay safety
+- `dry_run` correctness
 
-## Test Strategy Gates
-
-1. Unit: field transforms and enum mapping logic.
-2. Contract: inbound/outbound schema conformance using fixture payloads.
-3. Integration: local DB upsert idempotency and replay tests.
-4. E2E: simulated Kent move update -> Corkysoft processing -> outbound payload.
+4. Quality
+- fixture coverage
+- contract tests
+- dashboard regression coverage
 
 ## Immediate Next Actions
 
-1. Acquire 20-30 anonymized Kent payload samples spanning move lifecycle states.
-2. Finalize external ID bridge schema and migration.
-3. Implement mapping validator to fail fast on unknown required fields.
-4. Add CI job that runs contract and replay tests on every integration change.
+1. Validate the current provisional mapping against live Kent payloads.
+2. Separate Kent admin controls from the operator queue in both docs and UI.
+3. Finish auth and hard-block governance for mutating/internal endpoints.
+4. Review calibration and override history with real operator usage before any
+   deeper solver work.

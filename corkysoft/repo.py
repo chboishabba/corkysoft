@@ -83,6 +83,14 @@ CREATE TABLE IF NOT EXISTS quote_operational_signals (
   quote_id INTEGER PRIMARY KEY,
   spare_capacity_score REAL,
   spare_capacity_label TEXT,
+  profitability_rule_mode TEXT,
+  absolute_margin_threshold REAL,
+  margin_percent_threshold REAL,
+  policy_matched INTEGER,
+  policy_fail_reasons TEXT,
+  loss_alert INTEGER,
+  estimated_margin REAL,
+  estimated_margin_pct REAL,
   created_at TEXT NOT NULL,
   FOREIGN KEY(quote_id) REFERENCES quotes(id) ON DELETE CASCADE
 );
@@ -714,19 +722,52 @@ def persist_quote(
     )
     quote_rowid = int(cursor.lastrowid)
     if result.spare_capacity_score is not None:
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(quote_operational_signals)").fetchall()
+        }
+        optional_columns = {
+            "profitability_rule_mode": "TEXT",
+            "absolute_margin_threshold": "REAL",
+            "margin_percent_threshold": "REAL",
+            "policy_matched": "INTEGER",
+            "policy_fail_reasons": "TEXT",
+            "loss_alert": "INTEGER",
+            "estimated_margin": "REAL",
+            "estimated_margin_pct": "REAL",
+        }
+        for column, ddl in optional_columns.items():
+            if column not in columns:
+                conn.execute(f"ALTER TABLE quote_operational_signals ADD COLUMN {column} {ddl}")
         conn.execute(
             """
             INSERT OR REPLACE INTO quote_operational_signals (
                 quote_id,
                 spare_capacity_score,
                 spare_capacity_label,
+                profitability_rule_mode,
+                absolute_margin_threshold,
+                margin_percent_threshold,
+                policy_matched,
+                policy_fail_reasons,
+                loss_alert,
+                estimated_margin,
+                estimated_margin_pct,
                 created_at
-            ) VALUES (?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 quote_rowid,
                 float(result.spare_capacity_score),
                 result.spare_capacity_label,
+                result.profit_rule_mode,
+                result.absolute_margin_threshold,
+                result.margin_percent_threshold,
+                None if result.policy_matched is None else int(result.policy_matched),
+                ",".join(result.policy_fail_reasons or []),
+                int(bool(result.loss_alert)),
+                result.estimated_margin,
+                result.estimated_margin_pct,
                 created_at,
             ),
         )

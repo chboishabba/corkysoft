@@ -5,10 +5,13 @@ import os
 import sqlite3
 from datetime import UTC, datetime
 from typing import Sequence
-from urllib.parse import quote_plus
 
 import pandas as pd
 
+from analytics.google_sheets import (
+    build_google_sheet_csv_url,
+    resolve_google_sheet_reference,
+)
 from .schema import ensure_suppliers_table
 
 INVENTORY_STATES: Sequence[str] = (
@@ -270,6 +273,9 @@ def upsert_supplier(
     contact_number: str | None = None,
     email: str | None = None,
     notes: str | None = None,
+    source_system: str | None = None,
+    source_sheet: str | None = None,
+    source_imported_at: str | None = None,
 ) -> sqlite3.Row:
     """Create or update a supplier record by company name."""
 
@@ -280,13 +286,17 @@ def upsert_supplier(
     conn.execute(
         """
         INSERT INTO suppliers (
-            company_name, contact_name, contact_number, email, notes, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            company_name, contact_name, contact_number, email, notes,
+            source_system, source_sheet, source_imported_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(company_name) DO UPDATE SET
             contact_name = excluded.contact_name,
             contact_number = excluded.contact_number,
             email = excluded.email,
             notes = excluded.notes,
+            source_system = COALESCE(excluded.source_system, suppliers.source_system),
+            source_sheet = COALESCE(excluded.source_sheet, suppliers.source_sheet),
+            source_imported_at = COALESCE(excluded.source_imported_at, suppliers.source_imported_at),
             updated_at = excluded.updated_at
         """,
         (
@@ -295,6 +305,9 @@ def upsert_supplier(
             _clean_optional_str(contact_number),
             _clean_optional_str(email),
             _clean_optional_str(notes),
+            _clean_optional_str(source_system),
+            _clean_optional_str(source_sheet),
+            _clean_optional_str(source_imported_at),
             timestamp,
             timestamp,
         ),
@@ -359,6 +372,9 @@ def import_suppliers_from_google_sheet(
             contact_number=contact_number,
             email=email,
             notes=notes,
+            source_system="google_sheets",
+            source_sheet=sheet_name,
+            source_imported_at=datetime.now(UTC).isoformat(),
         )
         imported += 1
     return imported
@@ -539,14 +555,20 @@ def _build_suppliers_sheet_url(
     *,
     env_var: str = "SUPPLIERS_SHEET_ID",
 ) -> str | None:
-    resolved_id = sheet_id or os.environ.get(env_var)
-    if not resolved_id:
-        explicit_url = os.environ.get("SUPPLIERS_SHEET_URL")
-        return explicit_url
-    return (
-        f"https://docs.google.com/spreadsheets/d/{resolved_id}/gviz/tq?tqx=out:csv"
-        f"&sheet={quote_plus(sheet_name)}"
+    resolved_reference = resolve_google_sheet_reference(
+        sheet_id,
+        env_keys=(
+            env_var,
+            "SUPPLIERS_SHEET_URL",
+            "OPERATIONS_WORKBOOK_SHEET_ID",
+            "OPERATIONS_WORKBOOK_URL",
+        ),
     )
+    if not resolved_reference:
+        return None
+    if resolved_reference.startswith("http") and "gviz/tq" in resolved_reference:
+        return resolved_reference
+    return build_google_sheet_csv_url(resolved_reference, sheet_name)
 
 
 __all__ = [

@@ -35,6 +35,8 @@ from analytics.db import (
     ensure_dashboard_tables,
     import_inventory_items_from_dataframe,
     import_inventory_movements_from_dataframe,
+    import_suppliers_from_google_sheet,
+    import_workers_from_google_sheet,
     import_workers_from_staff_sheet,
     list_inventory_balances,
     list_inventory_exceptions,
@@ -103,6 +105,11 @@ from analytics.kent_ams_import import (
     update_kent_tender_policy_config,
     upsert_kent_override_reason_code,
 )
+from analytics.operations_assignment import (
+    list_segments_for_worker,
+    list_worker_assignment_summary,
+)
+from dashboard.components.operations import render_operations_tab
 from corkysoft.pricing import DEFAULT_MODIFIERS
 from corkysoft.quote_service import (
     COUNTRY_DEFAULT,
@@ -152,10 +159,12 @@ PRICE_DASHBOARD_TABS = [
     "Profitability insights",
     "Live network overview",
     "Route maps",
+    "Operations",
     "Fleet",
     "Vehicle maintenance",
     "Quote builder",
     "Kent tenders",
+    "Kent admin",
     "Optimizer",
     "Inventory",
     "Staff",
@@ -1104,6 +1113,10 @@ def render_price_distribution_dashboard():
             )
 
 
+        with tab_map["Operations"]:
+            render_operations_tab(conn)
+
+
         with tab_map["Fleet"]:
             render_fleet_tab(conn)
 
@@ -1933,6 +1946,21 @@ def render_price_distribution_dashboard():
                     )
                 else:
                     st.markdown("**Margin:** Not applied.")
+                if quote_result.profit_rule_mode:
+                    policy_line = (
+                        f"**Quote policy preview:** `{quote_result.profit_rule_mode}` | "
+                        f"pass={bool(quote_result.policy_matched)} | "
+                        f"thresholds ${float(quote_result.absolute_margin_threshold or 0.0):,.0f} / "
+                        f"{float(quote_result.margin_percent_threshold or 0.0):.1f}%"
+                    )
+                    st.markdown(policy_line)
+                if quote_result.policy_fail_reasons:
+                    st.warning(
+                        "Profitability policy fail reasons: "
+                        + ", ".join(quote_result.policy_fail_reasons)
+                    )
+                if quote_result.loss_alert:
+                    st.error("Loss alert: expected margin is below the configured floor.")
 
                 with st.expander("Base calculation details"):
                     base_rows = [
@@ -2131,6 +2159,9 @@ def render_price_distribution_dashboard():
         with tab_map["Kent tenders"]:
             render_kent_tenders_tab(conn)
 
+        with tab_map["Kent admin"]:
+            render_kent_admin_tab(conn)
+
         with tab_map["Optimizer"]:
 
             with st.popover("❓ How to use the Optimiser", width='stretch'):
@@ -2271,71 +2302,7 @@ def render_kent_tenders_tab(conn: sqlite3.Connection) -> None:
         value=st.session_state.get("kent_tender_operator_id", ""),
         key="kent_tender_operator_id",
     )
-    st.session_state["kent_tender_operator_id"] = operator_id
     queue_cols[3].metric("Rule mode", policy["ruleMode"])
-
-    with st.expander("Policy defaults", expanded=False):
-        with st.form("kent_tender_policy_form"):
-            config_cols = st.columns(4)
-            rule_mode = config_cols[0].selectbox(
-                "Rule mode",
-                options=["ABS_ONLY", "PCT_ONLY", "EITHER", "BOTH"],
-                index=["ABS_ONLY", "PCT_ONLY", "EITHER", "BOTH"].index(policy["ruleMode"]),
-            )
-            abs_threshold = config_cols[1].number_input(
-                "Abs margin threshold",
-                value=float(policy["absoluteMarginThreshold"]),
-                step=100.0,
-            )
-            pct_threshold = config_cols[2].number_input(
-                "Margin % threshold",
-                value=float(policy["marginPercentThreshold"]),
-                step=1.0,
-            )
-            loss_floor = config_cols[3].number_input(
-                "Loss alert floor",
-                value=float(policy["lossAlertFloor"]),
-                step=100.0,
-            )
-            if st.form_submit_button("Save policy defaults"):
-                try:
-                    update_kent_tender_policy_config(
-                        conn,
-                        rule_mode=rule_mode,
-                        absolute_margin_threshold=float(abs_threshold),
-                        margin_percent_threshold=float(pct_threshold),
-                        loss_alert_floor=float(loss_floor),
-                    )
-                except ValueError as exc:
-                    st.error(str(exc))
-                else:
-                    st.success("Kent tender policy defaults updated.")
-                    st.rerun()
-
-    with st.expander("Override reasons", expanded=False):
-        reasons = list_kent_override_reason_codes(conn)
-        if reasons:
-            st.dataframe(pd.DataFrame(reasons), use_container_width=True, hide_index=True)
-        with st.form("kent_override_reason_form"):
-            reason_cols = st.columns(4)
-            new_code = reason_cols[0].text_input("Code")
-            new_label = reason_cols[1].text_input("Label")
-            new_description = reason_cols[2].text_input("Description")
-            new_active = reason_cols[3].checkbox("Active", value=True)
-            if st.form_submit_button("Save reason"):
-                try:
-                    upsert_kent_override_reason_code(
-                        conn,
-                        code=new_code,
-                        label=new_label,
-                        description=new_description,
-                        active=new_active,
-                    )
-                except ValueError as exc:
-                    st.error(str(exc))
-                else:
-                    st.success("Override reason saved.")
-                    st.rerun()
 
     rows = list_prioritized_tenders(conn, status=status_filter, limit=limit_value)
     if not rows:
@@ -2347,6 +2314,10 @@ def render_kent_tenders_tab(conn: sqlite3.Connection) -> None:
         for row in list_kent_override_reason_codes(conn)
         if row["active"]
     }
+    if not reason_options:
+        st.warning(
+            "No active override reasons are configured. Operators can review the queue, but overrides are disabled until an admin activates at least one reason."
+        )
 
     summary_rows = [
         {
@@ -2405,7 +2376,7 @@ def render_kent_tenders_tab(conn: sqlite3.Connection) -> None:
                 )
                 reason_code = st.selectbox(
                     "Reason code",
-                    options=list(reason_options.keys()),
+                    options=list(reason_options.keys()) or ["<no-active-reasons>"],
                     format_func=lambda code: reason_options.get(code, code),
                     key=f"kent_override_reason_{row['tenderExternalId']}",
                 )
@@ -2414,7 +2385,11 @@ def render_kent_tenders_tab(conn: sqlite3.Connection) -> None:
                     key=f"kent_override_note_{row['tenderExternalId']}",
                     height=80,
                 )
-                submit_disabled = bool(row["hardBlockFlags"]) or not operator_id.strip()
+                submit_disabled = (
+                    bool(row["hardBlockFlags"])
+                    or not operator_id.strip()
+                    or not reason_options
+                )
                 if st.form_submit_button("Record override", disabled=submit_disabled):
                     try:
                         record_kent_tender_override(
@@ -2432,6 +2407,76 @@ def render_kent_tenders_tab(conn: sqlite3.Connection) -> None:
                         st.rerun()
                 if not operator_id.strip():
                     st.caption("Enter an operator ID to record override actions.")
+
+
+def render_kent_admin_tab(conn: sqlite3.Connection) -> None:
+    st.subheader("Kent AMS admin")
+    st.caption(
+        "Use this surface for policy defaults, override reason governance, and review. Operators should work from the Kent tenders tab."
+    )
+
+    policy = get_kent_tender_policy_config(conn)
+    with st.form("kent_tender_policy_form"):
+        config_cols = st.columns(4)
+        rule_mode = config_cols[0].selectbox(
+            "Rule mode",
+            options=["ABS_ONLY", "PCT_ONLY", "EITHER", "BOTH"],
+            index=["ABS_ONLY", "PCT_ONLY", "EITHER", "BOTH"].index(policy["ruleMode"]),
+        )
+        abs_threshold = config_cols[1].number_input(
+            "Abs margin threshold",
+            value=float(policy["absoluteMarginThreshold"]),
+            step=100.0,
+        )
+        pct_threshold = config_cols[2].number_input(
+            "Margin % threshold",
+            value=float(policy["marginPercentThreshold"]),
+            step=1.0,
+        )
+        loss_floor = config_cols[3].number_input(
+            "Loss alert floor",
+            value=float(policy["lossAlertFloor"]),
+            step=100.0,
+        )
+        if st.form_submit_button("Save policy defaults"):
+            try:
+                update_kent_tender_policy_config(
+                    conn,
+                    rule_mode=rule_mode,
+                    absolute_margin_threshold=float(abs_threshold),
+                    margin_percent_threshold=float(pct_threshold),
+                    loss_alert_floor=float(loss_floor),
+                )
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                st.success("Kent tender policy defaults updated.")
+                st.rerun()
+
+    reasons = list_kent_override_reason_codes(conn)
+    if reasons:
+        st.dataframe(pd.DataFrame(reasons), use_container_width=True, hide_index=True)
+
+    with st.form("kent_override_reason_form"):
+        reason_cols = st.columns(4)
+        new_code = reason_cols[0].text_input("Code")
+        new_label = reason_cols[1].text_input("Label")
+        new_description = reason_cols[2].text_input("Description")
+        new_active = reason_cols[3].checkbox("Active", value=True)
+        if st.form_submit_button("Save reason"):
+            try:
+                upsert_kent_override_reason_code(
+                    conn,
+                    code=new_code,
+                    label=new_label,
+                    description=new_description,
+                    active=new_active,
+                )
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                st.success("Override reason saved.")
+                st.rerun()
 
             history = list_kent_tender_override_history(
                 conn, tender_external_id=row["tenderExternalId"]
@@ -2518,6 +2563,36 @@ def render_inventory_tab(conn: sqlite3.Connection) -> None:
                 st.error(f"Failed to import inventory items: {exc}")
             else:
                 st.success(f"Imported or refreshed {imported} inventory rows.")
+                st.experimental_rerun()
+
+    with st.expander("Import suppliers from Google Sheets", expanded=False):
+        suppliers_sheet_reference = st.text_input(
+            "Operations workbook ID or URL",
+            value=_default_operations_sheet_reference(),
+            help="Shared operations workbook containing the SUPPLIERS tab.",
+            key="suppliers_sheet_reference",
+        )
+        suppliers_sheet_name = st.text_input(
+            "Supplier tab name",
+            value="SUPPLIERS",
+            key="suppliers_sheet_name",
+        )
+        if st.button(
+            "Import suppliers",
+            type="primary",
+            disabled=not suppliers_sheet_reference.strip(),
+            key="suppliers_import_button",
+        ):
+            try:
+                imported = import_suppliers_from_google_sheet(
+                    conn,
+                    sheet_id=suppliers_sheet_reference.strip(),
+                    sheet_name=suppliers_sheet_name.strip() or "SUPPLIERS",
+                )
+            except Exception as exc:  # pragma: no cover - surfaced in UI
+                st.error(f"Failed to import suppliers: {exc}")
+            else:
+                st.success(f"Imported or refreshed {imported} suppliers.")
                 st.experimental_rerun()
 
     with st.expander("Import movement events", expanded=False):
@@ -2661,6 +2736,14 @@ def _format_truck_list(truck_string: str | float | None) -> str:
     return ", ".join(sorted(trucks))
 
 
+def _default_operations_sheet_reference() -> str:
+    return (
+        os.environ.get("OPERATIONS_WORKBOOK_URL")
+        or os.environ.get("OPERATIONS_WORKBOOK_SHEET_ID")
+        or ""
+    )
+
+
 def _prepare_staff_export(workers_df: pd.DataFrame) -> bytes:
     export_df = workers_df.copy()
     first_names: list[str] = []
@@ -2698,10 +2781,34 @@ def render_staff_tab(conn: sqlite3.Connection) -> None:
     )
 
     ensure_dashboard_tables(conn)
+    assignment_summary = list_worker_assignment_summary(conn)
 
     import_feedback: Optional[tuple[str, str]] = None
     with st.expander("Import/export STAFF worksheet", expanded=False):
-        import_col, export_col = st.columns(2)
+        google_col, import_col, export_col = st.columns(3)
+        with google_col:
+            staff_sheet_reference = st.text_input(
+                "Google Sheets ID or URL",
+                value=_default_operations_sheet_reference(),
+                help="Shared operations workbook containing the STAFF tab.",
+                key="staff_sheet_reference",
+            )
+            if st.button("Import STAFF from Google Sheet", key="staff_google_import_button"):
+                try:
+                    inserted, updated = import_workers_from_google_sheet(
+                        conn,
+                        sheet_id_or_url=staff_sheet_reference.strip() or None,
+                    )
+                except Exception as exc:  # pragma: no cover - surfaced in UI
+                    import_feedback = (
+                        "error",
+                        f"Failed to import staff from Google Sheets: {exc}",
+                    )
+                else:
+                    import_feedback = (
+                        "success",
+                        f"Imported {inserted} new staff and updated {updated} existing records from Google Sheets.",
+                    )
         with import_col:
             staff_upload = st.file_uploader(
                 "Upload STAFF workbook (.xlsx)",
@@ -2802,14 +2909,34 @@ def render_staff_tab(conn: sqlite3.Connection) -> None:
             workers_df["last_shift_date"], errors="coerce"
         ).dt.date
         workers_df["shift_trucks"] = workers_df["shift_trucks"].apply(_format_truck_list)
-        workers_df["assigned_trucks"] = workers_df["name"].map(vehicle_assignments).fillna("")
+        workers_df["imported_trucks"] = workers_df["name"].map(vehicle_assignments).fillna("")
+        workers_df["planned_segment_count"] = workers_df["id"].map(
+            lambda worker_id: assignment_summary.get(int(worker_id), {}).get("plannedSegmentCount", 0)
+        )
+        workers_df["planned_job_count"] = workers_df["id"].map(
+            lambda worker_id: assignment_summary.get(int(worker_id), {}).get("plannedJobCount", 0)
+        )
+        workers_df["planned_trucks"] = workers_df["id"].map(
+            lambda worker_id: ", ".join(
+                assignment_summary.get(int(worker_id), {}).get("plannedTrucks", [])
+            )
+        )
+        workers_df["next_planned_start"] = pd.to_datetime(
+            workers_df["id"].map(
+                lambda worker_id: assignment_summary.get(int(worker_id), {}).get("nextPlannedStart")
+            ),
+            errors="coerce",
+        ).dt.date
         workers_df["shift_count"] = workers_df["shift_count"].fillna(0).astype(int)
 
     summary_cols = st.columns(3)
     summary_cols[0].metric("Total workers", int(len(workers_df)))
     active_count = int(workers_df[workers_df["active"]].shape[0]) if not workers_df.empty else 0
     summary_cols[1].metric("Active workers", active_count)
-    summary_cols[2].metric("Workers with shifts", int((workers_df["shift_count"] > 0).sum()))
+    summary_cols[2].metric(
+        "Workers on planned segments",
+        int((workers_df["planned_segment_count"] > 0).sum()) if not workers_df.empty else 0,
+    )
 
     filter_cols = st.columns(3)
     name_filter = filter_cols[0].text_input("Search by name", key="staff_name_filter")
@@ -2852,8 +2979,12 @@ def render_staff_tab(conn: sqlite3.Connection) -> None:
         "active",
         "last_shift_date",
         "shift_count",
+        "planned_segment_count",
+        "planned_job_count",
+        "next_planned_start",
+        "planned_trucks",
         "shift_trucks",
-        "assigned_trucks",
+        "imported_trucks",
     ]
     present_columns = [col for col in display_columns if col in filtered_df.columns]
     edited_df = st.data_editor(
@@ -2871,9 +3002,13 @@ def render_staff_tab(conn: sqlite3.Connection) -> None:
             "active": st.column_config.CheckboxColumn("Active"),
             "last_shift_date": st.column_config.DateColumn("Last shift", disabled=True),
             "shift_count": st.column_config.NumberColumn("Shift count", disabled=True),
+            "planned_segment_count": st.column_config.NumberColumn("Planned segments", disabled=True),
+            "planned_job_count": st.column_config.NumberColumn("Planned jobs", disabled=True),
+            "next_planned_start": st.column_config.DateColumn("Next planned start", disabled=True),
+            "planned_trucks": st.column_config.Column("Planned trucks", disabled=True),
             "shift_trucks": st.column_config.Column("Recent trucks", disabled=True),
-            "assigned_trucks": st.column_config.Column(
-                "Vehicle assignments", disabled=True
+            "imported_trucks": st.column_config.Column(
+                "Imported sheet trucks", disabled=True
             ),
         },
     )
@@ -2953,6 +3088,31 @@ def render_staff_tab(conn: sqlite3.Connection) -> None:
         key="staff_worker_review",
     )
     if worker_choice:
+        worker_row = workers_df.loc[workers_df["name"] == worker_choice].iloc[0]
+        planned_segments = list_segments_for_worker(conn, worker_id=int(worker_row["id"]))
+        if planned_segments:
+            planned_df = pd.DataFrame(
+                [
+                    {
+                        "Job": row["jobId"],
+                        "Segment": row["segmentSequence"],
+                        "From": row["fromLocation"] or row["jobOrigin"],
+                        "To": row["toLocation"] or row["jobDestination"],
+                        "Planned start": row["plannedStart"],
+                        "Planned end": row["plannedEnd"],
+                        "Status": row["assignmentStatus"],
+                        "Trucks": ", ".join(
+                            assignment["truckId"]
+                            for assignment in row["truckAssignments"]
+                            if assignment.get("truckId")
+                        ),
+                    }
+                    for row in planned_segments
+                ]
+            )
+            st.markdown("#### Planned segment assignments")
+            st.dataframe(planned_df, width='stretch', hide_index=True)
+
         shift_df = load_driver_shifts_dataframe(conn, workers=[worker_choice])
         if not shift_df.empty:
             shift_df = shift_df.copy()
@@ -2978,13 +3138,13 @@ def render_staff_tab(conn: sqlite3.Connection) -> None:
         else:
             st.caption("No driver shifts linked to this worker yet.")
 
-        assigned_trucks = vehicle_assignments.get(worker_choice)
-        if assigned_trucks:
-            st.info(f"Vehicle assignments: {assigned_trucks}")
+        imported_trucks = vehicle_assignments.get(worker_choice)
+        if imported_trucks:
+            st.info(f"Imported sheet truck context: {imported_trucks}")
         elif not shift_df.empty:
-            st.caption("No vehicles directly assigned; trucks only appear on recorded shifts.")
+            st.caption("No imported sheet truck assignment; trucks only appear in recorded shifts.")
         else:
-            st.caption("No recorded vehicles for this worker.")
+            st.caption("No imported sheet truck assignment recorded for this worker.")
 
 
 def render_driver_shifts_tab(conn: sqlite3.Connection) -> None:

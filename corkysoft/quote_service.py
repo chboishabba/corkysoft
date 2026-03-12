@@ -9,6 +9,10 @@ from typing import Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
 from corkysoft.au_address import GeocodeResult
 from analytics.operational_signals import compute_route_spare_capacity_signal
+from analytics.kent_ams_import import (
+    evaluate_kent_profitability_policy,
+    get_kent_tender_policy_config,
+)
 from corkysoft.pricing import (
     DEFAULT_MODIFIERS,
     PRICING_MODELS,
@@ -100,6 +104,14 @@ class QuoteResult:
     manual_quote: Optional[float] = None
     spare_capacity_score: Optional[float] = None
     spare_capacity_label: Optional[str] = None
+    profit_rule_mode: Optional[str] = None
+    absolute_margin_threshold: Optional[float] = None
+    margin_percent_threshold: Optional[float] = None
+    policy_matched: Optional[bool] = None
+    policy_fail_reasons: List[str] = field(default_factory=list)
+    loss_alert: bool = False
+    estimated_margin: Optional[float] = None
+    estimated_margin_pct: Optional[float] = None
 
 
 def format_currency(amount: float) -> str:
@@ -205,6 +217,26 @@ def build_summary(inputs: QuoteInput, result: QuoteResult) -> str:
         lines.append(
             f"Operational signal: {result.spare_capacity_label} ({result.spare_capacity_score:.1f}/100)"
         )
+    if result.profit_rule_mode:
+        lines.append(
+            "Quote policy preview: "
+            f"{result.profit_rule_mode} | pass={bool(result.policy_matched)} | "
+            f"thresholds=${(result.absolute_margin_threshold or 0.0):,.2f} / "
+            f"{(result.margin_percent_threshold or 0.0):.1f}%"
+        )
+    if result.estimated_margin is not None:
+        pct_text = (
+            "n/a"
+            if result.estimated_margin_pct is None
+            else f"{result.estimated_margin_pct:.1f}%"
+        )
+        lines.append(
+            f"Estimated margin: {format_currency(result.estimated_margin)} ({pct_text})"
+        )
+    if result.policy_fail_reasons:
+        lines.append("Policy fail reasons: " + ", ".join(result.policy_fail_reasons))
+    if result.loss_alert:
+        lines.append("Loss alert: expected margin below configured floor")
     _append_section(
         lines,
         "Origin corrections & suggestions",
@@ -455,6 +487,20 @@ def calculate_quote(
     )
     result.spare_capacity_score = float(spare_capacity_signal["score"])
     result.spare_capacity_label = str(spare_capacity_signal["label"])
+    policy = get_kent_tender_policy_config(conn)
+    profitability_policy = evaluate_kent_profitability_policy(
+        expected_revenue=final_quote,
+        estimated_cost=total_before_margin,
+        policy_config=policy,
+    )
+    result.profit_rule_mode = profitability_policy["ruleMode"]
+    result.absolute_margin_threshold = profitability_policy["absoluteMarginThreshold"]
+    result.margin_percent_threshold = profitability_policy["marginPercentThreshold"]
+    result.policy_matched = bool(profitability_policy["matched"])
+    result.policy_fail_reasons = list(profitability_policy["failReasons"])
+    result.loss_alert = bool(profitability_policy["lossAlert"])
+    result.estimated_margin = profitability_policy["marginAmount"]
+    result.estimated_margin_pct = profitability_policy["marginPercent"]
     result.summary_text = build_summary(inputs, result)
     return result
 

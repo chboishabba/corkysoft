@@ -11,8 +11,16 @@ from analytics.vehicle_repairs import (
     import_vehicle_repairs_from_sheet,
     load_vehicle_repairs,
 )
+from analytics.operations_workbook import sync_operations_workbook
+from analytics.operations_assignment import (
+    get_operations_policy,
+    list_segments_for_truck,
+    list_truck_assignment_summary,
+    update_operations_policy,
+)
 from analytics.vehicle_workbook import (
     import_vehicle_details_from_dataframe,
+    import_vehicle_details_from_workbook,
     import_vehicle_details_from_google_sheet,
 )
 
@@ -244,11 +252,112 @@ def render_fleet_tab(conn) -> None:
 
     ensure_dashboard_tables(conn)
     vehicle_df = load_vehicle_overview(conn)
+    assignment_summary = list_truck_assignment_summary(conn)
+    if not vehicle_df.empty:
+        vehicle_df = vehicle_df.copy()
+        vehicle_df["planned_segment_count"] = vehicle_df["truck_id"].map(
+            lambda truck_id: assignment_summary.get(str(truck_id), {}).get("plannedSegmentCount", 0)
+        )
+        vehicle_df["planned_job_count"] = vehicle_df["truck_id"].map(
+            lambda truck_id: assignment_summary.get(str(truck_id), {}).get("plannedJobCount", 0)
+        )
+        vehicle_df["next_planned_start"] = vehicle_df["truck_id"].map(
+            lambda truck_id: assignment_summary.get(str(truck_id), {}).get("nextPlannedStart")
+        )
+        vehicle_df["planned_workers"] = vehicle_df["truck_id"].map(
+            lambda truck_id: ", ".join(
+                assignment_summary.get(str(truck_id), {}).get("plannedWorkers", [])
+            )
+        )
+
+    with st.expander("Sync shared operations workbook", expanded=False):
+        shared_reference = st.text_input(
+            "Operations workbook ID or URL",
+            value=(
+                os.environ.get("OPERATIONS_WORKBOOK_URL")
+                or os.environ.get("OPERATIONS_WORKBOOK_SHEET_ID")
+                or ""
+            ),
+            help="Refresh FLEET, STAFF, and SUPPLIERS from the shared operations workbook.",
+            key="operations_workbook_reference",
+        )
+        if st.button(
+            "Sync operations workbook",
+            key="operations_workbook_sync_button",
+            disabled=not shared_reference.strip(),
+        ):
+            try:
+                summary = sync_operations_workbook(
+                    conn,
+                    sheet_id_or_url=shared_reference.strip(),
+                )
+            except Exception as exc:  # pragma: no cover - UI feedback only
+                st.error(f"Failed to sync operations workbook: {exc}")
+            else:
+                st.success(
+                    "Synced operations workbook: "
+                    f"{summary['fleetImported']} fleet rows, "
+                    f"{summary['staffInserted']} staff inserted, "
+                    f"{summary['staffUpdated']} staff updated, "
+                    f"{summary['suppliersImported']} suppliers."
+                )
+                _trigger_rerun()
+
+    with st.expander("Assignment readiness policy", expanded=False):
+        policy = get_operations_policy(conn)
+        policy_cols_1 = st.columns(4)
+        rego_warning_days = int(
+            policy_cols_1[0].number_input("Rego warning days", min_value=0, value=policy["regoWarningDays"])
+        )
+        coi_warning_days = int(
+            policy_cols_1[1].number_input("COI warning days", min_value=0, value=policy["coiWarningDays"])
+        )
+        service_warning_days = int(
+            policy_cols_1[2].number_input("Service warning days", min_value=0, value=policy["serviceWarningDays"])
+        )
+        compliance_warning_days = int(
+            policy_cols_1[3].number_input("Compliance warning days", min_value=0, value=policy["complianceWarningDays"])
+        )
+        policy_cols_2 = st.columns(4)
+        service_overdue_blocks = policy_cols_2[0].checkbox(
+            "Service overdue blocks",
+            value=policy["serviceOverdueBlocks"],
+        )
+        conflict_blocks = policy_cols_2[1].checkbox(
+            "Conflicts block assignment",
+            value=policy["conflictBlocks"],
+        )
+        service_override_allowed = policy_cols_2[2].checkbox(
+            "Allow service override",
+            value=policy["serviceOverrideAllowed"],
+        )
+        conflict_override_allowed = policy_cols_2[3].checkbox(
+            "Allow conflict override",
+            value=policy["conflictOverrideAllowed"],
+        )
+        if st.button("Save readiness policy", key="operations_policy_save_button"):
+            update_operations_policy(
+                conn,
+                rego_warning_days=rego_warning_days,
+                coi_warning_days=coi_warning_days,
+                service_warning_days=service_warning_days,
+                compliance_warning_days=compliance_warning_days,
+                service_overdue_blocks=service_overdue_blocks,
+                conflict_blocks=conflict_blocks,
+                service_override_allowed=service_override_allowed,
+                conflict_override_allowed=conflict_override_allowed,
+            )
+            st.success("Readiness policy updated.")
+            _trigger_rerun()
 
     with st.expander("Import/Export VEHICLE_DETAILS", expanded=False):
         sheet_input = st.text_input(
             "Google Sheets ID or URL",
-            value="",
+            value=(
+                os.environ.get("OPERATIONS_WORKBOOK_URL")
+                or os.environ.get("OPERATIONS_WORKBOOK_SHEET_ID")
+                or ""
+            ),
             help="Paste the spreadsheet ID or full link for the VEHICLE_DETAILS workbook.",
         )
         upload = st.file_uploader(
@@ -273,9 +382,12 @@ def render_fleet_tab(conn) -> None:
                 try:
                     if upload.name.endswith(".csv"):
                         frame = pd.read_csv(upload)
+                        imported = import_vehicle_details_from_dataframe(conn, frame)
                     else:
-                        frame = pd.read_excel(upload)
-                    imported = import_vehicle_details_from_dataframe(conn, frame)
+                        if hasattr(upload, "seek"):
+                            upload.seek(0)
+                        workbook = pd.ExcelFile(upload, engine="openpyxl")
+                        imported = import_vehicle_details_from_workbook(conn, workbook)
                 except Exception as exc:  # pragma: no cover - UI feedback only
                     st.error(f"Failed to import uploaded workbook: {exc}")
                 else:
@@ -431,6 +543,32 @@ def render_fleet_tab(conn) -> None:
             _trigger_rerun()
 
     if selected_vehicle != "New vehicle" and selected_vehicle in existing_ids:
+        planned_segments = list_segments_for_truck(conn, truck_id=selected_vehicle)
+        st.markdown("#### Planned segment assignments")
+        if planned_segments:
+            planned_df = pd.DataFrame(
+                [
+                    {
+                        "Job": row["jobId"],
+                        "Segment": row["segmentSequence"],
+                        "From": row["fromLocation"] or row["jobOrigin"],
+                        "To": row["toLocation"] or row["jobDestination"],
+                        "Planned start": row["plannedStart"],
+                        "Planned end": row["plannedEnd"],
+                        "Status": row["assignmentStatus"],
+                        "Workers": ", ".join(
+                            assignment["workerName"]
+                            for assignment in row["workerAssignments"]
+                            if assignment.get("workerName")
+                        ),
+                    }
+                    for row in planned_segments
+                ]
+            )
+            st.dataframe(planned_df, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No planned job segments currently assign this vehicle.")
+
         if st.button("Delete vehicle", type="secondary"):
             conn.execute("DELETE FROM trucks WHERE truck_id = ?", (selected_vehicle,))
             conn.commit()

@@ -7,6 +7,8 @@ from typing import Optional, Sequence
 
 from .fleet import upsert_worker
 from .legacy import (
+    create_shipment as legacy_create_shipment,
+    fetch_shipments_with_context as legacy_fetch_shipments_with_context,
     upsert_container,
     upsert_container_booking,
     upsert_job_by_number,
@@ -206,6 +208,13 @@ def create_shipment(
     inventory_item_id: int | None = None,
     truck_id: str | None = None,
     worker_id: int | None = None,
+    segment_id: int | None = None,
+    segment_sequence: int | None = None,
+    worker_role_id: int | None = None,
+    worker_start_time: str | None = None,
+    worker_end_time: str | None = None,
+    required_compliance_ids: Sequence[int] | None = None,
+    vehicle_requirement_met: bool | None = None,
     quantity: float | None = None,
     from_location: str | None = None,
     to_location: str | None = None,
@@ -222,55 +231,28 @@ def create_shipment(
     transit rather than deducted from on-hand stock.
     """
 
-    if job_id is None and historical_job_id is None:
-        raise ValueError("Shipments must reference a job or historical job")
-
-    resolved_from, resolved_to = _resolve_shipment_locations(
+    return legacy_create_shipment(
         conn,
         job_id=job_id,
         historical_job_id=historical_job_id,
+        inventory_item_id=inventory_item_id,
+        truck_id=truck_id,
+        worker_id=worker_id,
+        segment_id=segment_id,
+        segment_sequence=segment_sequence,
+        worker_role_id=worker_role_id,
+        worker_start_time=worker_start_time,
+        worker_end_time=worker_end_time,
+        required_compliance_ids=required_compliance_ids,
+        vehicle_requirement_met=vehicle_requirement_met,
+        quantity=quantity,
         from_location=from_location,
         to_location=to_location,
+        status=status,
+        scheduled_date=scheduled_date,
+        delivered_at=delivered_at,
+        reserve_in_transit=reserve_in_transit,
     )
-
-    quantity_value = 1 if quantity is None else float(quantity)
-    timestamp = datetime.now(UTC).isoformat()
-    conn.execute(
-        """
-        INSERT INTO shipments (
-            job_id,
-            historical_job_id,
-            inventory_item_id,
-            truck_id,
-            worker_id,
-            quantity,
-            from_location,
-            to_location,
-            status,
-            scheduled_date,
-            delivered_at,
-            created_at,
-            updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            job_id,
-            historical_job_id,
-            inventory_item_id,
-            truck_id,
-            worker_id,
-            quantity_value,
-            resolved_from,
-            resolved_to,
-            status,
-            scheduled_date,
-            delivered_at,
-            timestamp,
-            timestamp,
-        ),
-    )
-    conn.commit()
-    return conn.execute("SELECT * FROM shipments WHERE id = last_insert_rowid()").fetchone()
 
 
 def fetch_driver_shifts(
@@ -354,44 +336,7 @@ def rollup_driver_shift_costs_by_job(
 
 def fetch_shipments_with_context(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Return shipments joined with job, inventory, and assignment context."""
-
-    query = """
-        SELECT
-            s.id,
-            s.quantity,
-            s.from_location,
-            s.to_location,
-            s.status,
-            s.scheduled_date,
-            s.delivered_at,
-            s.job_id,
-            s.historical_job_id,
-            j.origin AS job_origin,
-            j.destination AS job_destination,
-            h.origin AS historical_origin,
-            h.destination AS historical_destination,
-            i.name AS inventory_name,
-            i.quantity AS inventory_quantity,
-            sup.company_name AS supplier_company_name,
-            sup.contact_name AS supplier_contact_name,
-            sup.contact_number AS supplier_contact_number,
-            sup.email AS supplier_email,
-            t.truck_id,
-            t.name AS truck_name,
-            w.name AS worker_name,
-            w.role AS worker_role,
-            w.rate AS worker_rate,
-            w.tickets AS worker_tickets
-        FROM shipments AS s
-        LEFT JOIN jobs AS j ON s.job_id = j.id
-        LEFT JOIN historical_jobs AS h ON s.historical_job_id = h.id
-        LEFT JOIN inventory_items AS i ON s.inventory_item_id = i.id
-        LEFT JOIN suppliers AS sup ON i.supplier_id = sup.id
-        LEFT JOIN trucks AS t ON s.truck_id = t.truck_id
-        LEFT JOIN workers AS w ON s.worker_id = w.id
-        ORDER BY s.id
-    """
-    return list(conn.execute(query))
+    return legacy_fetch_shipments_with_context(conn)
 
 
 __all__ = [

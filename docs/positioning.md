@@ -75,6 +75,26 @@ Integration paths:
 - API sync where available.
 - Webhooks for incremental updates.
 
+## Primary Users
+
+The current product should be understood through the decisions it supports:
+
+- **Estimator**
+  - decides whether a quote is commercially acceptable
+  - uses quote pricing outputs plus profitability policy state
+- **Dispatcher**
+  - decides which tenders and jobs deserve immediate effort
+  - uses ranked queues, hard-blocks, overrideable flags, and route-fit signals
+- **Fleet / operations manager**
+  - decides whether operator policy defaults and override governance remain appropriate
+  - uses override history, loss-alert volume, and capacity pressure
+- **Commercial owner**
+  - decides whether thresholds, calibration, and corridor strategy are working
+  - uses margin quality, conversion, and calibration outcomes
+
+See `docs/operator_user_stories.md` for the actor-level workflows and
+`docs/commercial_workflow_lifecycle.md` for the end-to-end lifecycle.
+
 ## Minimum Data Needed for Core Intelligence
 
 Required fields:

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Path, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 
 from analytics.db import fetch_driver_shifts
@@ -22,6 +23,15 @@ from analytics.kent_ams_import import (
     upsert_kent_override_reason_code,
 )
 from analytics.moveware_import import import_moveware_records
+from analytics.operations_assignment import (
+    assign_segment_resources,
+    ensure_segment,
+    get_operations_policy,
+    list_operational_conflicts,
+    list_segment_readiness,
+    update_operations_policy,
+)
+from analytics.operations_workbook import sync_operations_workbook
 
 
 def _current_db_path() -> str:
@@ -32,6 +42,46 @@ def _current_db_path() -> str:
         or os.environ.get("ROUTES_DB")
         or "routes.db"
     )
+
+
+def _required_internal_api_token() -> str:
+    token = os.environ.get("CORKYSOFT_API_TOKEN")
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail="CORKYSOFT_API_TOKEN is not configured for mutating API routes",
+        )
+    return token
+
+
+def require_internal_api_token(
+    x_corkysoft_api_key: Optional[str] = Header(
+        default=None, alias="X-Corkysoft-Api-Key"
+    ),
+) -> None:
+    expected = _required_internal_api_token()
+    if x_corkysoft_api_key != expected:
+        raise HTTPException(status_code=401, detail="Invalid internal API token")
+
+
+def _run_import_with_optional_dry_run(
+    importer,
+    resource: str,
+    records: List[Dict[str, Any]],
+    *,
+    dry_run: bool,
+) -> None:
+    with connection_scope(_current_db_path()) as conn:
+        if not dry_run:
+            importer(conn, resource, records, dry_run=False)
+            return
+        shadow = sqlite3.connect(":memory:")
+        shadow.row_factory = sqlite3.Row
+        try:
+            conn.backup(shadow)
+            importer(shadow, resource, records, dry_run=True)
+        finally:
+            shadow.close()
 
 
 class JobType(BaseModel):
@@ -341,6 +391,109 @@ class KentTenderCalibrationResponse(BaseModel):
     bands: List[KentTenderCalibrationBandResponse]
 
 
+class OperationsPolicyResponse(BaseModel):
+    regoWarningDays: int
+    coiWarningDays: int
+    serviceWarningDays: int
+    complianceWarningDays: int
+    serviceOverdueBlocks: bool
+    conflictBlocks: bool
+    serviceOverrideAllowed: bool
+    conflictOverrideAllowed: bool
+
+
+class OperationsPolicyUpdateRequest(BaseModel):
+    regoWarningDays: int
+    coiWarningDays: int
+    serviceWarningDays: int
+    complianceWarningDays: int
+    serviceOverdueBlocks: bool
+    conflictBlocks: bool
+    serviceOverrideAllowed: bool
+    conflictOverrideAllowed: bool
+
+
+class SegmentWorkerAssignmentRequest(BaseModel):
+    workerId: int
+    roleId: Optional[int] = None
+    requiredComplianceIds: List[int] = Field(default_factory=list)
+    startTime: Optional[str] = None
+    endTime: Optional[str] = None
+
+
+class SegmentAssignmentRequest(BaseModel):
+    truckIds: List[str] = Field(default_factory=list)
+    workerAssignments: List[SegmentWorkerAssignmentRequest] = Field(default_factory=list)
+    override: bool = False
+    overrideReasonCode: Optional[str] = None
+    overrideNote: Optional[str] = None
+
+
+class SegmentEnsureRequest(BaseModel):
+    jobId: int
+    segmentSequence: int
+    fromLocation: Optional[str] = None
+    toLocation: Optional[str] = None
+    plannedStart: Optional[str] = None
+    plannedEnd: Optional[str] = None
+
+
+class SegmentTruckAssignmentResponse(BaseModel):
+    truckId: str
+    truckName: Optional[str] = None
+    sourceImportedAt: Optional[str] = None
+
+
+class SegmentWorkerAssignmentResponse(BaseModel):
+    workerId: int
+    workerName: Optional[str] = None
+    roleId: Optional[int] = None
+    requiredComplianceIds: List[str] = Field(default_factory=list)
+    sourceImportedAt: Optional[str] = None
+
+
+class SegmentReadinessResponse(BaseModel):
+    segmentId: int
+    jobId: int
+    jobClient: Optional[str] = None
+    jobOrigin: Optional[str] = None
+    jobDestination: Optional[str] = None
+    segmentSequence: int
+    fromLocation: Optional[str] = None
+    toLocation: Optional[str] = None
+    plannedStart: Optional[str] = None
+    plannedEnd: Optional[str] = None
+    assignmentStatus: str
+    warningFlags: List[str] = Field(default_factory=list)
+    blockingFlags: List[str] = Field(default_factory=list)
+    overrideableFlags: List[str] = Field(default_factory=list)
+    overrideRequired: bool = False
+    overrideReasonCode: Optional[str] = None
+    overrideNote: Optional[str] = None
+    truckAssignments: List[SegmentTruckAssignmentResponse] = Field(default_factory=list)
+    workerAssignments: List[SegmentWorkerAssignmentResponse] = Field(default_factory=list)
+
+
+class OperationalConflictResponse(BaseModel):
+    segmentId: int
+    jobId: int
+    assignmentStatus: str
+    flag: str
+
+
+class OperationsSyncResponse(BaseModel):
+    fleetImported: int
+    staffInserted: int
+    staffUpdated: int
+    suppliersImported: int
+    staffSheetName: str
+    suppliersSheetName: str
+
+
+class OperationsSyncRequest(BaseModel):
+    reference: Optional[str] = None
+
+
 app = FastAPI(title="Corkysoft API", version="0.1.0")
 
 
@@ -412,11 +565,16 @@ def _build_job_response(row: Any) -> JobResponse:
 def import_moveware_resource(
     resource: str = Path(..., description="MoveWare resource identifier"),
     payload: MovewareImportRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
 ) -> ImportSummary:
     """Return a summary for an incoming MoveWare import request."""
 
-    with connection_scope(_current_db_path()) as conn:
-        import_moveware_records(conn, resource, payload.records, dry_run=payload.dry_run)
+    _run_import_with_optional_dry_run(
+        import_moveware_records,
+        resource,
+        payload.records,
+        dry_run=payload.dry_run,
+    )
     return ImportSummary(
         resource=resource,
         imported=len(payload.records),
@@ -432,11 +590,16 @@ def import_moveware_resource(
 def import_kent_ams_resource(
     resource: str = Path(..., description="Kent AMS resource identifier"),
     payload: MovewareImportRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
 ) -> ImportSummary:
     """Return a summary for an incoming Kent AMS adapter import request."""
 
-    with connection_scope(_current_db_path()) as conn:
-        import_kent_ams_records(conn, resource, payload.records, dry_run=payload.dry_run)
+    _run_import_with_optional_dry_run(
+        import_kent_ams_records,
+        resource,
+        payload.records,
+        dry_run=payload.dry_run,
+    )
     return ImportSummary(
         resource=resource,
         imported=len(payload.records),
@@ -488,6 +651,7 @@ def get_kent_tender_policy() -> KentTenderPolicyConfigResponse:
 )
 def put_kent_tender_policy(
     payload: KentTenderPolicyConfigUpdateRequest,
+    _auth: None = Depends(require_internal_api_token),
 ) -> KentTenderPolicyConfigResponse:
     """Persist the default Kent tender policy configuration in global parameters."""
 
@@ -523,6 +687,7 @@ def get_kent_tender_override_reasons() -> List[KentTenderOverrideReasonCodeRespo
 def put_kent_tender_override_reason(
     code: str = Path(..., description="Reason code identifier"),
     payload: KentTenderOverrideReasonCodeUpsertRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
 ) -> KentTenderOverrideReasonCodeResponse:
     """Upsert an admin-manageable Kent tender override reason code."""
 
@@ -550,6 +715,7 @@ def put_kent_tender_override_reason(
 def post_kent_tender_override(
     tender_external_id: str = Path(..., description="Kent tender external id"),
     payload: KentTenderOverrideRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
 ) -> KentTenderOverrideResponse:
     """Persist an operator override event for a tender."""
 
@@ -603,6 +769,147 @@ def get_kent_tender_calibration(
     with connection_scope(_current_db_path()) as conn:
         payload = get_tender_calibration(conn, lookback_days=lookback_days)
     return KentTenderCalibrationResponse(**payload)
+
+
+@app.get(
+    "/operations/policy",
+    response_model=OperationsPolicyResponse,
+    summary="Get operational readiness policy defaults",
+)
+def get_operations_assignment_policy() -> OperationsPolicyResponse:
+    with connection_scope(_current_db_path()) as conn:
+        payload = get_operations_policy(conn)
+    return OperationsPolicyResponse(**payload)
+
+
+@app.put(
+    "/operations/policy",
+    response_model=OperationsPolicyResponse,
+    summary="Update operational readiness policy defaults",
+)
+def put_operations_assignment_policy(
+    payload: OperationsPolicyUpdateRequest,
+    _auth: None = Depends(require_internal_api_token),
+) -> OperationsPolicyResponse:
+    with connection_scope(_current_db_path()) as conn:
+        updated = update_operations_policy(
+            conn,
+            rego_warning_days=payload.regoWarningDays,
+            coi_warning_days=payload.coiWarningDays,
+            service_warning_days=payload.serviceWarningDays,
+            compliance_warning_days=payload.complianceWarningDays,
+            service_overdue_blocks=payload.serviceOverdueBlocks,
+            conflict_blocks=payload.conflictBlocks,
+            service_override_allowed=payload.serviceOverrideAllowed,
+            conflict_override_allowed=payload.conflictOverrideAllowed,
+        )
+    return OperationsPolicyResponse(**updated)
+
+
+@app.post(
+    "/operations/sync",
+    response_model=OperationsSyncResponse,
+    summary="Sync the shared operations workbook",
+)
+def post_operations_sync(
+    payload: OperationsSyncRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> OperationsSyncResponse:
+    with connection_scope(_current_db_path()) as conn:
+        summary = sync_operations_workbook(conn, sheet_id_or_url=payload.reference)
+    return OperationsSyncResponse(**summary)
+
+
+@app.post(
+    "/operations/segments",
+    response_model=SegmentReadinessResponse,
+    summary="Create or update a job segment for planning",
+)
+def post_operations_segment(
+    payload: SegmentEnsureRequest,
+    _auth: None = Depends(require_internal_api_token),
+) -> SegmentReadinessResponse:
+    with connection_scope(_current_db_path()) as conn:
+        segment = ensure_segment(
+            conn,
+            job_id=payload.jobId,
+            segment_sequence=payload.segmentSequence,
+            from_location=payload.fromLocation,
+            to_location=payload.toLocation,
+            planned_start=payload.plannedStart,
+            planned_end=payload.plannedEnd,
+        )
+        row = next(
+            item
+            for item in list_segment_readiness(conn, job_id=payload.jobId)
+            if item["segmentId"] == int(segment["id"])
+        )
+    return SegmentReadinessResponse(**row)
+
+
+@app.get(
+    "/operations/segments/readiness",
+    response_model=List[SegmentReadinessResponse],
+    summary="List segment readiness and assignments",
+)
+def get_operations_segment_readiness(
+    job_id: Optional[int] = Query(default=None, description="Optional job filter"),
+    assignment_status: Optional[str] = Query(
+        default=None,
+        description="Optional assignment status filter",
+    ),
+) -> List[SegmentReadinessResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_segment_readiness(
+            conn,
+            job_id=job_id,
+            assignment_status=assignment_status,
+        )
+    return [SegmentReadinessResponse(**row) for row in rows]
+
+
+@app.post(
+    "/operations/segments/{segment_id}/assign",
+    response_model=SegmentReadinessResponse,
+    summary="Assign trucks and workers to a job segment",
+)
+def post_operations_segment_assignment(
+    segment_id: int = Path(..., description="Segment identifier"),
+    payload: SegmentAssignmentRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> SegmentReadinessResponse:
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            assign_segment_resources(
+                conn,
+                segment_id=segment_id,
+                truck_ids=payload.truckIds,
+                worker_assignments=[item.model_dump() for item in payload.workerAssignments],
+                override=payload.override,
+                override_reason_code=payload.overrideReasonCode,
+                override_note=payload.overrideNote,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        row = next(
+            item
+            for item in list_segment_readiness(conn)
+            if item["segmentId"] == segment_id
+        )
+    return SegmentReadinessResponse(**row)
+
+
+@app.get(
+    "/operations/conflicts",
+    response_model=List[OperationalConflictResponse],
+    summary="List operational conflicts across planned segments",
+)
+def get_operations_conflicts(
+    job_id: Optional[int] = Query(default=None, description="Optional job filter"),
+) -> List[OperationalConflictResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_operational_conflicts(conn, job_id=job_id)
+    return [OperationalConflictResponse(**row) for row in rows]
 
 
 @app.get(

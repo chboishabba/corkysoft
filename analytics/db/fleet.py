@@ -7,9 +7,15 @@ from typing import IO
 
 import pandas as pd
 
+from analytics.google_sheets import (
+    build_google_sheet_xlsx_url,
+    resolve_google_sheet_reference,
+)
 from .schema import _ensure_vehicle_details_table
 
 __all__ = [
+    "import_workers_from_dataframe",
+    "import_workers_from_google_sheet",
     "upsert_truck",
     "upsert_vehicle_details",
     "upsert_worker",
@@ -69,6 +75,9 @@ def upsert_vehicle_details(
     coi_due: str | None = None,
     present_driver: str | None = None,
     daily_check_complete: bool | None = None,
+    source_system: str | None = None,
+    source_sheet: str | None = None,
+    source_imported_at: str | None = None,
 ) -> sqlite3.Row:
     """Create or update vehicle metadata for the given ``truck_id``."""
 
@@ -93,8 +102,11 @@ def upsert_vehicle_details(
             coi_number,
             coi_due,
             present_driver,
-            daily_check_complete
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            daily_check_complete,
+            source_system,
+            source_sheet,
+            source_imported_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(truck_id) DO UPDATE SET
             state = excluded.state,
             rego = excluded.rego,
@@ -112,7 +124,10 @@ def upsert_vehicle_details(
             coi_number = excluded.coi_number,
             coi_due = excluded.coi_due,
             present_driver = excluded.present_driver,
-            daily_check_complete = excluded.daily_check_complete
+            daily_check_complete = excluded.daily_check_complete,
+            source_system = COALESCE(excluded.source_system, vehicle_details.source_system),
+            source_sheet = COALESCE(excluded.source_sheet, vehicle_details.source_sheet),
+            source_imported_at = COALESCE(excluded.source_imported_at, vehicle_details.source_imported_at)
         """,
         (
             truck_id,
@@ -133,6 +148,9 @@ def upsert_vehicle_details(
             coi_due,
             present_driver,
             None if daily_check_complete is None else int(bool(daily_check_complete)),
+            source_system,
+            source_sheet,
+            source_imported_at,
         ),
     )
     conn.commit()
@@ -150,6 +168,9 @@ def upsert_worker(
     rate: float | None = None,
     tickets: int | None = None,
     active: bool = True,
+    source_system: str | None = None,
+    source_sheet: str | None = None,
+    source_imported_at: str | None = None,
 ) -> sqlite3.Row:
     """Create or update a worker record based on the unique name."""
 
@@ -158,14 +179,20 @@ def upsert_worker(
     tickets_value = int(tickets) if tickets is not None else None
     conn.execute(
         """
-        INSERT INTO workers (name, role, phone, rate, tickets, active, hired_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO workers (
+            name, role, phone, rate, tickets, active,
+            source_system, source_sheet, source_imported_at, hired_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(name) DO UPDATE SET
             role = excluded.role,
             phone = excluded.phone,
             rate = excluded.rate,
             tickets = excluded.tickets,
             active = excluded.active,
+            source_system = COALESCE(excluded.source_system, workers.source_system),
+            source_sheet = COALESCE(excluded.source_sheet, workers.source_sheet),
+            source_imported_at = COALESCE(excluded.source_imported_at, workers.source_imported_at),
             updated_at = excluded.updated_at
         """,
         (
@@ -175,6 +202,9 @@ def upsert_worker(
             rate_value,
             tickets_value,
             int(active),
+            source_system,
+            source_sheet,
+            source_imported_at,
             timestamp,
             timestamp,
         ),
@@ -191,28 +221,18 @@ def _coalesce_name(first_name: str | float | None, last_name: str | float | None
     return " ".join(part for part in parts if part)
 
 
-def import_workers_from_staff_sheet(
+def import_workers_from_dataframe(
     conn: sqlite3.Connection,
-    workbook: str | bytes | IO[bytes],
+    dataframe: pd.DataFrame,
     *,
-    sheet_name: str = "STAFF",
+    source_sheet: str = "STAFF",
 ) -> tuple[int, int]:
-    """Import or update worker records from a STAFF worksheet.
+    """Import or update worker records from a normalised STAFF dataframe."""
 
-    Returns a ``(inserted, updated)`` tuple.
-    """
-
-    if hasattr(workbook, "seek"):
-        try:
-            workbook.seek(0)
-        except Exception:
-            pass
-
-    df = pd.read_excel(workbook, sheet_name=sheet_name)
     inserted = 0
     updated = 0
 
-    for _, row in df.iterrows():
+    for _, row in dataframe.iterrows():
         name = _coalesce_name(row.get("FIRST NAME"), row.get("LAST NAME"))
         if not name:
             continue
@@ -242,6 +262,9 @@ def import_workers_from_staff_sheet(
             rate=rate_value,
             tickets=tickets_value,
             active=str(row.get("ACTIVE") or "Yes").strip().lower() != "no",
+            source_system="google_sheets",
+            source_sheet=source_sheet,
+            source_imported_at=datetime.now(UTC).isoformat(),
         )
 
         if existing:
@@ -252,7 +275,56 @@ def import_workers_from_staff_sheet(
     return inserted, updated
 
 
+def import_workers_from_staff_sheet(
+    conn: sqlite3.Connection,
+    workbook: str | bytes | IO[bytes],
+    *,
+    sheet_name: str = "STAFF",
+) -> tuple[int, int]:
+    """Import or update worker records from a STAFF worksheet.
+
+    Returns a ``(inserted, updated)`` tuple.
+    """
+
+    if hasattr(workbook, "seek"):
+        try:
+            workbook.seek(0)
+        except Exception:
+            pass
+
+    df = pd.read_excel(workbook, sheet_name=sheet_name)
+    return import_workers_from_dataframe(conn, df, source_sheet=sheet_name)
+
+
+def import_workers_from_google_sheet(
+    conn: sqlite3.Connection,
+    *,
+    sheet_id_or_url: str | None = None,
+    sheet_name: str = "STAFF",
+) -> tuple[int, int]:
+    """Import staff from a Google Sheets workbook via XLSX export."""
+
+    reference = resolve_google_sheet_reference(
+        sheet_id_or_url,
+        env_keys=(
+            "STAFF_SHEET_ID",
+            "STAFF_SHEET_URL",
+            "OPERATIONS_WORKBOOK_SHEET_ID",
+            "OPERATIONS_WORKBOOK_URL",
+        ),
+    )
+    if not reference:
+        raise ValueError(
+            "Provide a STAFF sheet/workbook reference or set OPERATIONS_WORKBOOK_SHEET_ID/URL."
+        )
+    workbook_url = build_google_sheet_xlsx_url(reference)
+    df = pd.read_excel(workbook_url, sheet_name=sheet_name)
+    return import_workers_from_dataframe(conn, df, source_sheet=sheet_name)
+
+
 __all__ = [
+    "import_workers_from_dataframe",
+    "import_workers_from_google_sheet",
     "upsert_truck",
     "upsert_vehicle_details",
     "upsert_worker",

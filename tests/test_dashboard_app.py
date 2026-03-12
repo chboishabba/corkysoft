@@ -17,6 +17,9 @@ def test_dashboard_app_module_importable() -> None:
     assert hasattr(module, "render_price_distribution_dashboard")
     tabs = getattr(module, "PRICE_DASHBOARD_TABS", [])
     assert "Price history" in tabs
+    assert "Operations" in tabs
+    assert "Kent tenders" in tabs
+    assert "Kent admin" in tabs
 
 
 def test_streamlit_entrypoint_exposed() -> None:

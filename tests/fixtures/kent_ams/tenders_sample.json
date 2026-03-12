@@ -1,0 +1,20 @@
+[
+  {
+    "tenderId": "FIXTURE-T-1001",
+    "moveId": "FIXTURE-J-1001",
+    "clientName": "Fixture Client",
+    "origin": "Brisbane QLD",
+    "destination": "Cairns QLD",
+    "expectedRevenue": 14250.0,
+    "estimatedCost": 11840.0,
+    "estimatedDistanceKm": 1675.0,
+    "estimatedVolumeM3": 31.0,
+    "requiredTrucks": 1,
+    "requiredWorkers": 2,
+    "dueAt": "2026-03-20T06:00:00+00:00",
+    "moveDate": "2026-03-24",
+    "transferRuleViolated": true,
+    "slaRiskIncreased": false,
+    "capacityReliefAchieved": true
+  }
+]

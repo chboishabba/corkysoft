@@ -137,6 +137,46 @@ This optimization concept should align with current components:
 - Quote workflow operational signal (`quote_operational_signals`) for day-of quoting context.
 - Ingest workflow signal (`job_operational_signals`) so imported jobs carry operational fit metadata.
 
+## V1 Policy Decisions
+
+### Transfer Eligibility
+
+Solver may recommend transfers only when:
+
+- transfer occurs at an approved depot/cross-dock location
+- no safety/legal/compliance rule is violated
+- expected commercial outcome improves or a manager-approved capacity policy applies
+- resulting plan remains explainable to an operator
+
+Solver may not recommend transfers when:
+
+- hazardous/special-item handling forbids it
+- transfer count exceeds the configured job limit
+- route/service risk rises without a documented commercial justification
+
+### Job Split Rules
+
+Job splitting is allowed only when:
+
+- the job is explicitly marked split-eligible
+- all resulting legs preserve pickup-before-delivery precedence
+- the operator can see which load portion is on which truck
+
+Job splitting is not allowed by default for:
+
+- special-handling jobs
+- jobs where customer/SLA rules require single-custody transport
+
+### Explainability Requirements
+
+Any future solver output must expose:
+
+- why this plan was chosen
+- which constraints were binding
+- whether transfer or split rules were invoked
+- expected margin/cost impact
+- operator-visible risk flags
+
 ## Near-Term Documentation Deliverables
 
 1. Define transfer policy and allowed nodes.

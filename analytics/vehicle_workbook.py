@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Iterable, Mapping, Sequence
 
 import pandas as pd
 
 from analytics.db import ensure_dashboard_tables, upsert_truck, upsert_vehicle_details
+from analytics.google_sheets import build_google_sheet_xlsx_url
 
-GOOGLE_SHEET_EXPORT = "https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
 DEFAULT_VEHICLE_SHEET_HINTS: Sequence[str] = ("vehicle", "fleet")
 
 _COLUMN_ALIASES: Mapping[str, str] = {
@@ -135,6 +135,9 @@ def _collect_vehicle_rows_from_workbook(workbook: pd.ExcelFile) -> pd.DataFrame:
 
         table = _extract_tabular_sheet(workbook, sheet_name)
         if not table.empty:
+            if "rego" not in table.columns:
+                table = table.copy()
+                table["rego"] = sheet_name
             frames.append(table)
             continue
 
@@ -235,6 +238,9 @@ def import_vehicle_details_from_dataframe(
             coi_due=_coerce_date(row.get("coi_due")),
             present_driver=(row.get("present_driver") or None),
             daily_check_complete=_coerce_bool(row.get("daily_check_complete")),
+            source_system="google_sheets",
+            source_sheet="VEHICLE",
+            source_imported_at=datetime.now(UTC).isoformat(),
         )
         inserted += 1
 
@@ -269,7 +275,7 @@ def import_vehicle_details_from_google_sheet(
 ) -> int:
     """Download and ingest the VEHICLE worksheet from a Google Sheets workbook."""
 
-    workbook_url = GOOGLE_SHEET_EXPORT.format(sheet_id=sheet_id)
+    workbook_url = build_google_sheet_xlsx_url(sheet_id)
     workbook = pd.ExcelFile(workbook_url, engine="openpyxl")
     return import_vehicle_details_from_workbook(conn, workbook, sheet_hints=sheet_hints)
 
@@ -278,6 +284,5 @@ __all__ = [
     "import_vehicle_details_from_dataframe",
     "import_vehicle_details_from_workbook",
     "import_vehicle_details_from_google_sheet",
-    "GOOGLE_SHEET_EXPORT",
     "DEFAULT_VEHICLE_SHEET_HINTS",
 ]

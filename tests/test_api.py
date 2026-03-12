@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import corkysoft.api as api
+from analytics.db import ensure_dashboard_tables, upsert_truck, upsert_vehicle_details, upsert_worker
 
 
 @pytest.fixture()
@@ -20,6 +21,7 @@ def isolated_db(tmp_path, monkeypatch):
 
     db_path = tmp_path / "api.db"
     monkeypatch.setenv("CORKYSOFT_DB", str(db_path))
+    monkeypatch.setenv("CORKYSOFT_API_TOKEN", "test-token")
     with sqlite3.connect(db_path) as conn:
         conn.executescript(
             """
@@ -45,6 +47,9 @@ def isolated_db(tmp_path, monkeypatch):
         )
         conn.commit()
     yield db_path
+
+
+AUTH_HEADERS = {"X-Corkysoft-Api-Key": "test-token"}
 
 
 def _create_job(conn: sqlite3.Connection) -> int:
@@ -122,6 +127,7 @@ def test_moveware_importer_returns_summary(isolated_db):
             ],
             "dry_run": True,
         },
+        headers=AUTH_HEADERS,
     )
     assert response.status_code == 200
     payload = response.json()
@@ -130,6 +136,145 @@ def test_moveware_importer_returns_summary(isolated_db):
         "imported": 2,
         "dry_run": True,
     }
+
+
+def test_mutating_internal_routes_require_api_token(isolated_db):
+    client = TestClient(api.app)
+    response = client.post(
+        "/importers/kent-ams/jobs",
+        json={
+            "records": [
+                {"moveId": "KENT-1001", "origin": "Brisbane", "destination": "Cairns"},
+            ],
+            "dry_run": True,
+        },
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid internal API token"
+
+
+def test_operations_policy_segment_assignment_and_conflicts(isolated_db):
+    with sqlite3.connect(isolated_db) as conn:
+        conn.row_factory = sqlite3.Row
+        ensure_dashboard_tables(conn)
+        job_id = _create_job(conn)
+        upsert_truck(conn, truck_id="TRK-OPS-1", name="Ops Truck")
+        upsert_vehicle_details(
+            conn,
+            truck_id="TRK-OPS-1",
+            rego="TRK-OPS-1",
+            rego_expiry="2099-12-31",
+            coi_due="2099-12-31",
+            next_service="2099-12-31",
+            daily_check_complete=True,
+            source_system="google_sheets",
+            source_sheet="FLEET",
+            source_imported_at="2026-03-12T00:00:00+00:00",
+        )
+        worker = upsert_worker(
+            conn,
+            name="Ops Worker",
+            source_system="google_sheets",
+            source_sheet="STAFF",
+            source_imported_at="2026-03-12T00:00:00+00:00",
+        )
+        conn.commit()
+
+    client = TestClient(api.app)
+
+    response = client.get("/operations/policy")
+    assert response.status_code == 200
+    assert response.json()["regoWarningDays"] == 30
+
+    response = client.put(
+        "/operations/policy",
+        json={
+            "regoWarningDays": 21,
+            "coiWarningDays": 14,
+            "serviceWarningDays": 10,
+            "complianceWarningDays": 7,
+            "serviceOverdueBlocks": True,
+            "conflictBlocks": True,
+            "serviceOverrideAllowed": True,
+            "conflictOverrideAllowed": True,
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["regoWarningDays"] == 21
+
+    response = client.post(
+        "/operations/segments",
+        json={
+            "jobId": job_id,
+            "segmentSequence": 1,
+            "fromLocation": "Brisbane",
+            "toLocation": "Townsville",
+            "plannedStart": "2026-03-12T08:00:00+00:00",
+            "plannedEnd": "2026-03-12T12:00:00+00:00",
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert response.status_code == 200
+    segment = response.json()
+    assert segment["assignmentStatus"] == "draft"
+    assert segment["warningFlags"] == [
+        "segment:no_truck_assigned",
+        "segment:no_worker_assigned",
+    ]
+
+    response = client.post(
+        f"/operations/segments/{segment['segmentId']}/assign",
+        json={
+            "truckIds": ["TRK-OPS-1"],
+            "workerAssignments": [{"workerId": int(worker['id'])}],
+            "override": False,
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert response.status_code == 200
+    assigned = response.json()
+    assert assigned["assignmentStatus"] == "planned"
+    assert assigned["truckAssignments"][0]["truckId"] == "TRK-OPS-1"
+    assert assigned["truckAssignments"][0]["sourceImportedAt"] == "2026-03-12T00:00:00+00:00"
+    assert assigned["workerAssignments"][0]["workerId"] == int(worker["id"])
+    assert assigned["workerAssignments"][0]["sourceImportedAt"] == "2026-03-12T00:00:00+00:00"
+
+    response = client.get(f"/operations/segments/readiness?job_id={job_id}")
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    assert rows[0]["assignmentStatus"] == "planned"
+
+    response = client.get("/operations/conflicts")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_operations_sync_route_dispatches_shared_workbook(monkeypatch, isolated_db):
+    client = TestClient(api.app)
+
+    def fake_sync(conn, *, sheet_id_or_url=None):
+        assert sheet_id_or_url == "ops-shared-sheet"
+        return {
+            "fleetImported": 5,
+            "staffInserted": 2,
+            "staffUpdated": 1,
+            "suppliersImported": 3,
+            "staffSheetName": "STAFF",
+            "suppliersSheetName": "SUPPLIERS",
+        }
+
+    monkeypatch.setattr(api, "sync_operations_workbook", fake_sync)
+
+    response = client.post(
+        "/operations/sync",
+        json={"reference": "ops-shared-sheet"},
+        headers=AUTH_HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["fleetImported"] == 5
+    assert response.json()["staffUpdated"] == 1
 
 
 def test_kent_ams_importer_returns_summary(isolated_db):
@@ -143,6 +288,7 @@ def test_kent_ams_importer_returns_summary(isolated_db):
             ],
             "dry_run": True,
         },
+        headers=AUTH_HEADERS,
     )
     assert response.status_code == 200
     payload = response.json()
@@ -180,6 +326,7 @@ def test_kent_ams_tender_importer_returns_summary(isolated_db):
             ],
             "dry_run": True,
         },
+        headers=AUTH_HEADERS,
     )
     assert response.status_code == 200
     payload = response.json()
@@ -277,6 +424,7 @@ def test_get_and_update_kent_tender_config(isolated_db):
             "marginPercentThreshold": 18.0,
             "lossAlertFloor": -250.0,
         },
+        headers=AUTH_HEADERS,
     )
     assert response.status_code == 200
     payload = response.json()
@@ -374,6 +522,7 @@ def test_kent_tender_override_reasons_and_history(isolated_db):
             "description": "Planner-led exception",
             "active": True,
         },
+        headers=AUTH_HEADERS,
     )
     assert response.status_code == 200
     assert response.json()["code"] == "manual_dispatch"
@@ -386,6 +535,7 @@ def test_kent_tender_override_reasons_and_history(isolated_db):
             "reasonCode": "retention",
             "note": "Needed for customer retention",
         },
+        headers=AUTH_HEADERS,
     )
     assert response.status_code == 200
     payload = response.json()
@@ -476,3 +626,208 @@ def test_get_kent_tender_calibration_returns_band_metrics(isolated_db):
     top_band = next(row for row in payload["bands"] if row["scoreBand"] == "90-100")
     assert top_band["tenders"] == 1
     assert top_band["wins"] == 1
+
+
+def test_kent_dry_run_does_not_persist_schema_or_config(isolated_db):
+    client = TestClient(api.app)
+    response = client.post(
+        "/importers/kent-ams/tenders",
+        json={
+            "records": [
+                {
+                    "tenderId": "T-DRY-1",
+                    "moveId": "JOB-DRY-1",
+                    "expectedRevenue": 4000,
+                    "estimatedCost": 3500,
+                }
+            ],
+            "dry_run": True,
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert response.status_code == 200
+
+    with sqlite3.connect(isolated_db) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='kent_job_tenders'"
+        ).fetchone()
+        assert row is None
+        params = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='global_parameters'"
+        ).fetchone()
+        assert params is None
+
+
+def test_prioritized_kent_tenders_ignores_unknown_hard_block_flags(isolated_db):
+    with sqlite3.connect(isolated_db) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS kent_job_tenders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tender_external_id TEXT NOT NULL UNIQUE,
+                job_number TEXT NOT NULL,
+                client_name TEXT,
+                origin TEXT,
+                destination TEXT,
+                expected_revenue REAL,
+                estimated_cost REAL,
+                required_trucks INTEGER,
+                required_workers INTEGER,
+                due_at TEXT,
+                move_date TEXT,
+                tender_status TEXT NOT NULL DEFAULT 'open',
+                score_total REAL NOT NULL DEFAULT 0,
+                score_profitability REAL NOT NULL DEFAULT 0,
+                score_capacity REAL NOT NULL DEFAULT 0,
+                score_urgency REAL NOT NULL DEFAULT 0,
+                score_seasonality REAL NOT NULL DEFAULT 0,
+                score_route_location REAL NOT NULL DEFAULT 0,
+                score_spare_capacity REAL NOT NULL DEFAULT 0,
+                overrideable_flags TEXT NOT NULL DEFAULT '[]',
+                hard_block_flags TEXT NOT NULL DEFAULT '[]',
+                recommended_action TEXT NOT NULL DEFAULT 'review',
+                created_at TEXT,
+                updated_at TEXT
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO kent_job_tenders (
+                tender_external_id, job_number, client_name, expected_revenue, estimated_cost,
+                tender_status, score_total, score_profitability, score_capacity, score_urgency,
+                score_seasonality, score_route_location, score_spare_capacity,
+                overrideable_flags, hard_block_flags, recommended_action, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "T-HARD",
+                "JOB-HARD",
+                "Client Hard",
+                2000.0,
+                1500.0,
+                "open",
+                80.0,
+                75.0,
+                75.0,
+                75.0,
+                75.0,
+                75.0,
+                75.0,
+                "[]",
+                '["not_a_real_hard_block"]',
+                "pursue_now",
+                "2026-03-12T00:00:00+00:00",
+                "2026-03-12T00:00:00+00:00",
+            ),
+        )
+        conn.commit()
+
+    client = TestClient(api.app)
+    response = client.get("/kent-ams/tenders/prioritized?status=open&limit=10")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["hardBlockFlags"] == []
+
+
+def test_prioritized_kent_tenders_returns_true_top_n_after_sort(isolated_db):
+    with sqlite3.connect(isolated_db) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS kent_job_tenders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tender_external_id TEXT NOT NULL UNIQUE,
+                job_number TEXT NOT NULL,
+                client_name TEXT,
+                origin TEXT,
+                destination TEXT,
+                expected_revenue REAL,
+                estimated_cost REAL,
+                required_trucks INTEGER,
+                required_workers INTEGER,
+                due_at TEXT,
+                move_date TEXT,
+                tender_status TEXT NOT NULL DEFAULT 'open',
+                score_total REAL NOT NULL DEFAULT 0,
+                score_profitability REAL NOT NULL DEFAULT 0,
+                score_capacity REAL NOT NULL DEFAULT 0,
+                score_urgency REAL NOT NULL DEFAULT 0,
+                score_seasonality REAL NOT NULL DEFAULT 0,
+                score_route_location REAL NOT NULL DEFAULT 0,
+                score_spare_capacity REAL NOT NULL DEFAULT 0,
+                overrideable_flags TEXT NOT NULL DEFAULT '[]',
+                hard_block_flags TEXT NOT NULL DEFAULT '[]',
+                recommended_action TEXT NOT NULL DEFAULT 'review',
+                created_at TEXT,
+                updated_at TEXT
+            );
+            """
+        )
+        for idx in range(10):
+            conn.execute(
+                """
+                INSERT INTO kent_job_tenders (
+                    tender_external_id, job_number, client_name, expected_revenue, estimated_cost,
+                    tender_status, score_total, score_profitability, score_capacity, score_urgency,
+                    score_seasonality, score_route_location, score_spare_capacity,
+                    overrideable_flags, hard_block_flags, recommended_action, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"T-LOW-{idx}",
+                    f"JOB-LOW-{idx}",
+                    "Low Client",
+                    1000.0,
+                    950.0,
+                    "open",
+                    20.0 + idx,
+                    20.0,
+                    20.0,
+                    20.0,
+                    20.0,
+                    20.0,
+                    20.0,
+                    "[]",
+                    "[]",
+                    "defer",
+                    "2026-03-12T00:00:00+00:00",
+                    "2026-03-12T00:00:00+00:00",
+                ),
+            )
+        conn.execute(
+            """
+            INSERT INTO kent_job_tenders (
+                tender_external_id, job_number, client_name, expected_revenue, estimated_cost,
+                tender_status, score_total, score_profitability, score_capacity, score_urgency,
+                score_seasonality, score_route_location, score_spare_capacity,
+                overrideable_flags, hard_block_flags, recommended_action, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "T-TOP",
+                "JOB-TOP",
+                "Top Client",
+                5000.0,
+                3000.0,
+                "open",
+                95.0,
+                95.0,
+                95.0,
+                95.0,
+                95.0,
+                95.0,
+                95.0,
+                "[]",
+                "[]",
+                "pursue_now",
+                "2026-03-12T00:00:00+00:00",
+                "2026-03-12T00:00:00+00:00",
+            ),
+        )
+        conn.commit()
+
+    client = TestClient(api.app)
+    response = client.get("/kent-ams/tenders/prioritized?status=open&limit=1")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["tenderExternalId"] == "T-TOP"

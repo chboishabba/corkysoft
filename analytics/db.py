@@ -23,6 +23,8 @@ from .db.inventory import (
     import_suppliers_from_google_sheet,
 )
 from .db.fleet import (
+    import_workers_from_dataframe,
+    import_workers_from_google_sheet,
     upsert_truck,
     upsert_vehicle_details,
     upsert_worker,
@@ -61,6 +63,8 @@ __all__ = [
     "upsert_supplier",
     "list_suppliers",
     "import_suppliers_from_google_sheet",
+    "import_workers_from_dataframe",
+    "import_workers_from_google_sheet",
     "upsert_truck",
     "upsert_vehicle_details",
     "upsert_worker",

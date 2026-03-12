@@ -39,6 +39,12 @@ KENT_OVERRIDE_REASON_SEED = (
     ("sla_recovery", "SLA recovery", "Accept a weaker tender to recover service commitments elsewhere."),
     ("other", "Other", "Operator-selected exception outside the standard categories."),
 )
+KENT_ALLOWED_HARD_BLOCK_FLAGS = {
+    "capacity_compliance_block",
+    "licensing_block",
+    "fatigue_block",
+    "dangerous_goods_block",
+}
 
 
 def _first_present(
@@ -162,6 +168,11 @@ def _deserialize_flag_list(value: object | None) -> list[str]:
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _table_has_column(conn, table: str, column: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any((row["name"] if hasattr(row, "keys") else row[1]) == column for row in rows)
 
 
 def _bootstrap_kent_policy(conn) -> None:
@@ -408,9 +419,6 @@ def _ensure_kent_tables(conn) -> None:
             updated_at TEXT NOT NULL
         );
 
-        CREATE INDEX IF NOT EXISTS idx_kent_job_tenders_status_score
-            ON kent_job_tenders(tender_status, score_total DESC, due_at);
-
         CREATE TABLE IF NOT EXISTS kent_job_bids (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             bid_external_id TEXT NOT NULL UNIQUE,
@@ -426,9 +434,6 @@ def _ensure_kent_tables(conn) -> None:
             updated_at TEXT NOT NULL
         );
 
-        CREATE INDEX IF NOT EXISTS idx_kent_job_bids_job_number
-            ON kent_job_bids(job_number);
-
         CREATE TABLE IF NOT EXISTS kent_job_awards (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             award_external_id TEXT NOT NULL UNIQUE,
@@ -443,9 +448,6 @@ def _ensure_kent_tables(conn) -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
-
-        CREATE INDEX IF NOT EXISTS idx_kent_job_awards_job_number
-            ON kent_job_awards(job_number);
 
         CREATE TABLE IF NOT EXISTS kent_tender_override_reason_codes (
             code TEXT PRIMARY KEY,
@@ -487,30 +489,57 @@ def _ensure_kent_tables(conn) -> None:
             FOREIGN KEY(tender_external_id) REFERENCES kent_job_tenders(tender_external_id),
             FOREIGN KEY(reason_code) REFERENCES kent_tender_override_reason_codes(code)
         );
-
-        CREATE INDEX IF NOT EXISTS idx_kent_tender_overrides_tender
-            ON kent_tender_overrides(tender_external_id, created_at DESC);
         """
     )
-    tender_columns = {
-        row[1] for row in conn.execute("PRAGMA table_info(kent_job_tenders)").fetchall()
+    tender_column_defaults = {
+        "origin": "TEXT",
+        "destination": "TEXT",
+        "estimated_volume_m3": "REAL",
+        "estimated_distance_km": "REAL",
+        "required_trucks": "INTEGER",
+        "required_workers": "INTEGER",
+        "due_at": "TEXT",
+        "move_date": "TEXT",
+        "notes": "TEXT",
+        "score_profitability": "REAL NOT NULL DEFAULT 0",
+        "score_capacity": "REAL NOT NULL DEFAULT 0",
+        "score_urgency": "REAL NOT NULL DEFAULT 0",
+        "score_seasonality": "REAL NOT NULL DEFAULT 0",
+        "score_route_location": "REAL NOT NULL DEFAULT 0",
+        "score_spare_capacity": "REAL NOT NULL DEFAULT 0",
+        "overrideable_flags": "TEXT NOT NULL DEFAULT '[]'",
+        "hard_block_flags": "TEXT NOT NULL DEFAULT '[]'",
+        "recommended_action": "TEXT NOT NULL DEFAULT 'review'",
+        "created_at": "TEXT NOT NULL DEFAULT ''",
+        "updated_at": "TEXT NOT NULL DEFAULT ''",
     }
-    if "score_route_location" not in tender_columns:
-        conn.execute(
-            "ALTER TABLE kent_job_tenders ADD COLUMN score_route_location REAL NOT NULL DEFAULT 0"
-        )
-    if "score_spare_capacity" not in tender_columns:
-        conn.execute(
-            "ALTER TABLE kent_job_tenders ADD COLUMN score_spare_capacity REAL NOT NULL DEFAULT 0"
-        )
-    if "overrideable_flags" not in tender_columns:
-        conn.execute(
-            "ALTER TABLE kent_job_tenders ADD COLUMN overrideable_flags TEXT NOT NULL DEFAULT '[]'"
-        )
-    if "hard_block_flags" not in tender_columns:
-        conn.execute(
-            "ALTER TABLE kent_job_tenders ADD COLUMN hard_block_flags TEXT NOT NULL DEFAULT '[]'"
-        )
+    for column, ddl in tender_column_defaults.items():
+        if not _table_has_column(conn, "kent_job_tenders", column):
+            conn.execute(f"ALTER TABLE kent_job_tenders ADD COLUMN {column} {ddl}")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_kent_job_tenders_status_score
+        ON kent_job_tenders(tender_status, score_total DESC, due_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_kent_job_bids_job_number
+        ON kent_job_bids(job_number)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_kent_job_awards_job_number
+        ON kent_job_awards(job_number)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_kent_tender_overrides_tender
+        ON kent_tender_overrides(tender_external_id, created_at DESC)
+        """
+    )
     _seed_override_reason_codes(conn)
     conn.commit()
 
@@ -622,6 +651,21 @@ def _evaluate_profitability_policy(
         "failReasons": fail_reasons,
         "lossAlert": bool(loss_alert),
     }
+
+
+def evaluate_kent_profitability_policy(
+    *,
+    expected_revenue: float | None,
+    estimated_cost: float | None,
+    policy_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Public wrapper for Kent profitability policy evaluation."""
+
+    return _evaluate_profitability_policy(
+        expected_revenue=expected_revenue,
+        estimated_cost=estimated_cost,
+        policy_config=policy_config,
+    )
 
 
 def _freshness_state(updated_at: str | None) -> tuple[str, float]:
@@ -859,11 +903,21 @@ def import_jobs(conn, records: Sequence[Mapping[str, object]], *, dry_run: bool 
         if not job_number:
             raise ValueError("Kent AMS job record missing job identifier")
 
-        existing = conn.execute(
-            "SELECT id FROM jobs WHERE job_number = ?", (job_number,)
-        ).fetchone()
+        existing = None
+        can_query_existing = _table_has_column(conn, "jobs", "job_number")
+        if not dry_run and can_query_existing:
+            existing = conn.execute(
+                "SELECT id FROM jobs WHERE job_number = ?", (job_number,)
+            ).fetchone()
 
         if not dry_run:
+            profitability_policy = evaluate_kent_profitability_policy(
+                expected_revenue=_coerce_float(
+                    _first_present(record, "revenue_total", "revenueTotal", "quoted_price")
+                ),
+                estimated_cost=_coerce_float(_first_present(record, "final_cost", "finalCost")),
+                policy_config=get_kent_tender_policy_config(conn),
+            )
             upsert_job_by_number(
                 conn,
                 job_number=job_number,
@@ -921,9 +975,17 @@ def import_jobs(conn, records: Sequence[Mapping[str, object]], *, dry_run: bool 
                 estimated_volume_m3=_coerce_float(
                     _first_present(record, "volume_m3", "volumeM3", "estimated_volume_m3")
                 ),
+                profitability_rule_mode=profitability_policy["ruleMode"],
+                absolute_margin_threshold=profitability_policy["absoluteMarginThreshold"],
+                margin_percent_threshold=profitability_policy["marginPercentThreshold"],
+                policy_matched=profitability_policy["matched"],
+                policy_fail_reasons=list(profitability_policy["failReasons"]),
+                loss_alert=profitability_policy["lossAlert"],
+                estimated_margin=profitability_policy["marginAmount"],
+                estimated_margin_pct=profitability_policy["marginPercent"],
                 source="kent_ams_import",
             )
-        if existing is None:
+        if dry_run or existing is None:
             inserted += 1
         else:
             updated += 1
@@ -1132,7 +1194,11 @@ def _extract_overrideable_flags(
 
 
 def _extract_hard_block_flags(record: Mapping[str, object]) -> list[str]:
-    flags = _parse_flag_list(_first_present(record, "hard_block_flags", "hardBlockFlags"))
+    flags = [
+        flag
+        for flag in _parse_flag_list(_first_present(record, "hard_block_flags", "hardBlockFlags"))
+        if flag in KENT_ALLOWED_HARD_BLOCK_FLAGS
+    ]
     if _coerce_bool(_first_present(record, "capacity_blocked", "capacityBlocked")):
         flags.append("capacity_compliance_block")
     if _coerce_bool(_first_present(record, "licensing_blocked", "licensingBlocked")):
@@ -1141,7 +1207,13 @@ def _extract_hard_block_flags(record: Mapping[str, object]) -> list[str]:
         flags.append("fatigue_block")
     if _coerce_bool(_first_present(record, "dangerous_goods_blocked", "dangerousGoodsBlocked")):
         flags.append("dangerous_goods_block")
-    return sorted({_clean_str(flag) for flag in flags if _clean_str(flag)})
+    return sorted(
+        {
+            _clean_str(flag)
+            for flag in flags
+            if _clean_str(flag) in KENT_ALLOWED_HARD_BLOCK_FLAGS
+        }
+    )
 
 
 def import_tenders(conn, records: Sequence[Mapping[str, object]], *, dry_run: bool = False) -> tuple[int, int]:
@@ -1326,6 +1398,10 @@ def list_prioritized_tenders(
     conn, *, status: str = "open", limit: int = 50
 ) -> list[dict[str, Any]]:
     policy_config = get_kent_tender_policy_config(conn)
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='kent_job_tenders'"
+    ).fetchone() is None:
+        return []
     rows = conn.execute(
         """
         SELECT
@@ -1354,9 +1430,8 @@ def list_prioritized_tenders(
             updated_at
         FROM kent_job_tenders
         WHERE (? = 'all' OR tender_status = ?)
-        LIMIT ?
         """,
-        (status, status, max(1, int(limit))),
+        (status, status),
     ).fetchall()
 
     prioritized: list[dict[str, Any]] = []
@@ -1369,7 +1444,11 @@ def list_prioritized_tenders(
             policy_config=policy_config,
         )
         freshness_state, confidence = _freshness_state(_clean_str(row["updated_at"]))
-        hard_block_flags = _deserialize_flag_list(row["hard_block_flags"])
+        hard_block_flags = [
+            flag
+            for flag in _deserialize_flag_list(row["hard_block_flags"])
+            if flag in KENT_ALLOWED_HARD_BLOCK_FLAGS
+        ]
         overrideable_flags = _deserialize_flag_list(row["overrideable_flags"])
         recommended_action = row["recommended_action"]
         if hard_block_flags:
@@ -1415,15 +1494,14 @@ def list_prioritized_tenders(
         )
     prioritized.sort(
         key=lambda item: (
-            0 if item["hardBlockFlags"] else 1,
-            1 if item["policyMatched"] else 0,
-            0 if item["lossAlert"] else 1,
-            float(item["scoreTotal"]),
-            item["estimatedMargin"] if item["estimatedMargin"] is not None else -10**9,
-            item["estimatedMarginPct"] if item["estimatedMarginPct"] is not None else -10**9,
-            item["dueAt"] or "",
+            1 if item["hardBlockFlags"] else 0,
+            0 if item["policyMatched"] else 1,
+            1 if item["lossAlert"] else 0,
+            -float(item["scoreTotal"]),
+            -(item["estimatedMargin"] if item["estimatedMargin"] is not None else -10**9),
+            -(item["estimatedMarginPct"] if item["estimatedMarginPct"] is not None else -10**9),
+            item["dueAt"] or "9999-12-31T23:59:59+00:00",
         ),
-        reverse=True,
     )
     return prioritized[: max(1, int(limit))]
 
@@ -1473,7 +1551,11 @@ def record_kent_tender_override(
         estimated_cost=_coerce_float(tender_row["estimated_cost"]),
         policy_config=policy_config,
     )
-    hard_block_flags = _deserialize_flag_list(tender_row["hard_block_flags"])
+    hard_block_flags = [
+        flag
+        for flag in _deserialize_flag_list(tender_row["hard_block_flags"])
+        if flag in KENT_ALLOWED_HARD_BLOCK_FLAGS
+    ]
     if hard_block_flags:
         raise ValueError("Hard-blocked tenders cannot be overridden through this workflow")
 
@@ -1598,7 +1680,11 @@ def list_kent_tender_override_history(
             "reasonLabel": row["reason_label"],
             "note": row["note"],
             "overrideableFlags": _deserialize_flag_list(row["overrideable_flags"]),
-            "hardBlockFlags": _deserialize_flag_list(row["hard_block_flags"]),
+            "hardBlockFlags": [
+                flag
+                for flag in _deserialize_flag_list(row["hard_block_flags"])
+                if flag in KENT_ALLOWED_HARD_BLOCK_FLAGS
+            ],
             "profitRuleMode": row["profitability_rule_mode"],
             "absoluteMarginThreshold": _coerce_float(row["absolute_margin_threshold"]),
             "marginPercentThreshold": _coerce_float(row["margin_percent_threshold"]),
@@ -1704,8 +1790,8 @@ def get_tender_calibration(
 
     def _assign_band(score: float) -> dict[str, Any]:
         for band in bands:
-            if band["min"] <= score < band["max"] or (
-                band["max"] == 100.0 and score <= 100.0
+            if band["min"] <= score and (
+                score < band["max"] or (band["max"] == 100.0 and score <= 100.0)
             ):
                 return band
         return bands[-1]
@@ -1814,6 +1900,7 @@ def import_kent_ams_records(
 
 
 __all__ = [
+    "evaluate_kent_profitability_policy",
     "get_kent_tender_policy_config",
     "import_kent_ams_records",
     "import_jobs",

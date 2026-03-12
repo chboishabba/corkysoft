@@ -136,6 +136,14 @@ def upsert_job_operational_signal(
     origin: str | None,
     destination: str | None,
     estimated_volume_m3: float | None = None,
+    profitability_rule_mode: str | None = None,
+    absolute_margin_threshold: float | None = None,
+    margin_percent_threshold: float | None = None,
+    policy_matched: bool | None = None,
+    policy_fail_reasons: list[str] | None = None,
+    loss_alert: bool | None = None,
+    estimated_margin: float | None = None,
+    estimated_margin_pct: float | None = None,
     source: str = "ingest",
 ) -> dict[str, Any]:
     """Compute and persist a route spare-capacity signal for a job record."""
@@ -152,11 +160,36 @@ def upsert_job_operational_signal(
             matching_spare_trucks INTEGER NOT NULL DEFAULT 0,
             destination_spare_trucks INTEGER NOT NULL DEFAULT 0,
             active_trucks INTEGER NOT NULL DEFAULT 0,
+            profitability_rule_mode TEXT,
+            absolute_margin_threshold REAL,
+            margin_percent_threshold REAL,
+            policy_matched INTEGER,
+            policy_fail_reasons TEXT,
+            loss_alert INTEGER,
+            estimated_margin REAL,
+            estimated_margin_pct REAL,
             source TEXT NOT NULL DEFAULT 'ingest',
             computed_at TEXT NOT NULL
         )
         """
     )
+    columns = {
+        row["name"] if hasattr(row, "keys") else row[1]
+        for row in conn.execute("PRAGMA table_info(job_operational_signals)").fetchall()
+    }
+    optional_columns = {
+        "profitability_rule_mode": "TEXT",
+        "absolute_margin_threshold": "REAL",
+        "margin_percent_threshold": "REAL",
+        "policy_matched": "INTEGER",
+        "policy_fail_reasons": "TEXT",
+        "loss_alert": "INTEGER",
+        "estimated_margin": "REAL",
+        "estimated_margin_pct": "REAL",
+    }
+    for column, ddl in optional_columns.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE job_operational_signals ADD COLUMN {column} {ddl}")
 
     signal = compute_route_spare_capacity_signal(
         conn,
@@ -175,15 +208,31 @@ def upsert_job_operational_signal(
             matching_spare_trucks,
             destination_spare_trucks,
             active_trucks,
+            profitability_rule_mode,
+            absolute_margin_threshold,
+            margin_percent_threshold,
+            policy_matched,
+            policy_fail_reasons,
+            loss_alert,
+            estimated_margin,
+            estimated_margin_pct,
             source,
             computed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(job_number) DO UPDATE SET
             signal_score = excluded.signal_score,
             signal_label = excluded.signal_label,
             matching_spare_trucks = excluded.matching_spare_trucks,
             destination_spare_trucks = excluded.destination_spare_trucks,
             active_trucks = excluded.active_trucks,
+            profitability_rule_mode = excluded.profitability_rule_mode,
+            absolute_margin_threshold = excluded.absolute_margin_threshold,
+            margin_percent_threshold = excluded.margin_percent_threshold,
+            policy_matched = excluded.policy_matched,
+            policy_fail_reasons = excluded.policy_fail_reasons,
+            loss_alert = excluded.loss_alert,
+            estimated_margin = excluded.estimated_margin,
+            estimated_margin_pct = excluded.estimated_margin_pct,
             source = excluded.source,
             computed_at = excluded.computed_at
         """,
@@ -194,6 +243,14 @@ def upsert_job_operational_signal(
             int(signal["matchingSpareTrucks"]),
             int(signal["destinationSpareTrucks"]),
             int(signal["activeTrucks"]),
+            profitability_rule_mode,
+            absolute_margin_threshold,
+            margin_percent_threshold,
+            None if policy_matched is None else int(policy_matched),
+            None if policy_fail_reasons is None else ",".join(policy_fail_reasons),
+            None if loss_alert is None else int(loss_alert),
+            estimated_margin,
+            estimated_margin_pct,
             source,
             timestamp,
         ),

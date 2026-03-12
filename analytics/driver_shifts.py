@@ -8,6 +8,7 @@ from typing import Iterable, Sequence
 import pandas as pd
 
 from analytics.db import fetch_driver_shifts, upsert_driver_shift
+from analytics.google_sheets import build_google_sheet_csv_url
 
 DEFAULT_DRIVER_SHEET_NAME = "VEHICLE_DRIVER"
 
@@ -165,15 +166,9 @@ def _prepare_shift_records(df: pd.DataFrame, *, source: str | None = None) -> li
 
 
 def _build_sheet_url(sheet_id_or_url: str, sheet_name: str) -> str:
-    if sheet_id_or_url.startswith("http"):
-        match = re.search(r"/spreadsheets/d/([\w-]+)", sheet_id_or_url)
-        sheet_id = match.group(1) if match else sheet_id_or_url
-    else:
-        sheet_id = sheet_id_or_url
-    return (
-        f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?"
-        f"tqx=out:csv&sheet={sheet_name}"
-    )
+    if sheet_id_or_url.startswith("http") and "gviz/tq" in sheet_id_or_url:
+        return sheet_id_or_url
+    return build_google_sheet_csv_url(sheet_id_or_url, sheet_name)
 
 
 def import_driver_shifts_from_sheet(

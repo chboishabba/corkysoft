@@ -83,6 +83,9 @@ CREATE TABLE IF NOT EXISTS suppliers (
     contact_number TEXT,
     email TEXT,
     notes TEXT,
+    source_system TEXT,
+    source_sheet TEXT,
+    source_imported_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(company_name)
@@ -112,6 +115,9 @@ CREATE TABLE IF NOT EXISTS workers (
     rate REAL,
     tickets INTEGER,
     active INTEGER NOT NULL DEFAULT 1,
+    source_system TEXT,
+    source_sheet TEXT,
+    source_imported_at TEXT,
     hired_at TEXT,
     updated_at TEXT,
     UNIQUE(name)
@@ -145,6 +151,9 @@ CREATE TABLE IF NOT EXISTS vehicle_details (
     coi_due TEXT,
     present_driver TEXT,
     daily_check_complete INTEGER,
+    source_system TEXT,
+    source_sheet TEXT,
+    source_imported_at TEXT,
     FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE CASCADE
 );
 
@@ -275,6 +284,9 @@ def ensure_suppliers_table(conn: sqlite3.Connection) -> None:
         "contact_number": "TEXT",
         "email": "TEXT",
         "notes": "TEXT",
+        "source_system": "TEXT",
+        "source_sheet": "TEXT",
+        "source_imported_at": "TEXT",
         "created_at": "TEXT",
         "updated_at": "TEXT",
     }
@@ -335,6 +347,9 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
     worker_declarations = {
         "rate": "REAL",
         "tickets": "INTEGER",
+        "source_system": "TEXT",
+        "source_sheet": "TEXT",
+        "source_imported_at": "TEXT",
     }
     for column, declaration in worker_declarations.items():
         if column not in worker_columns:
@@ -343,6 +358,8 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
     ensure_historical_job_routes_table(conn)
     _ensure_vehicle_details_table(conn)
     _ensure_shipment_columns(conn)
+    from .legacy import _ensure_job_segment_tables
+    _ensure_job_segment_tables(conn)
     conn.commit()
 
     for table_name in (
@@ -471,6 +488,9 @@ def _ensure_vehicle_details_table(conn: sqlite3.Connection) -> None:
             coi_due TEXT,
             present_driver TEXT,
             daily_check_complete INTEGER,
+            source_system TEXT,
+            source_sheet TEXT,
+            source_imported_at TEXT,
             FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE CASCADE
         )
         """
@@ -495,6 +515,9 @@ def _ensure_vehicle_details_table(conn: sqlite3.Connection) -> None:
         "coi_due": "TEXT",
         "present_driver": "TEXT",
         "daily_check_complete": "INTEGER",
+        "source_system": "TEXT",
+        "source_sheet": "TEXT",
+        "source_imported_at": "TEXT",
     }
     for column, declaration in column_types.items():
         if column not in columns:

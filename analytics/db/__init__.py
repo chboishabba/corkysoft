@@ -7,6 +7,8 @@ from .connection import (
     get_connection,
 )
 from .fleet import (
+    import_workers_from_dataframe,
+    import_workers_from_google_sheet,
     import_workers_from_staff_sheet,
     upsert_truck,
     upsert_vehicle_details,
@@ -71,6 +73,8 @@ __all__ = [
     "import_inventory_items_from_dataframe",
     "import_inventory_movements_from_dataframe",
     "import_suppliers_from_google_sheet",
+    "import_workers_from_dataframe",
+    "import_workers_from_google_sheet",
     "import_workers_from_staff_sheet",
     "list_inventory",
     "list_inventory_balances",

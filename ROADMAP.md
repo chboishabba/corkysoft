@@ -4,6 +4,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 
 ## Documentation TODOs
 
+- Keep `spec.md`, `plan.md`, `status.json`, and `devlog.md` current during the remediation milestone.
 - Validate the deliverable status tables against the current code and tests.
 - Decide whether `corkysoft/src/dashboard` remains a packaging stub or should be wired to the main Streamlit entry point.
 - Add a short contributor note on how to keep README and docs in sync with new features.
@@ -11,6 +12,8 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Add analytics documentation once the historical import and lane model ship.
 - Add a system architecture diagram (truck ↔ server ↔ cloud).
 - Keep `docs/positioning.md` aligned with supported integrations and product focus.
+- Maintain `docs/operator_user_stories.md` as the actor-based product truth.
+- Maintain `docs/commercial_workflow_lifecycle.md` as the quote -> tender -> awarded-work lifecycle truth.
 - Maintain `docs/corridor_detection.md` alongside corridor model updates.
 - Keep `docs/corridor_schema_plan.md` aligned with corridor table changes.
 - Maintain `docs/corridor_defaults.md` and `docs/cluster_template_au.md` when thresholds or clusters change.
@@ -28,6 +31,17 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Integrate en-route spare capacity signals into quote creation outputs and ingestion triage so operators can combine price and operational fit.
 - Maintain `docs/multi_truck_route_load_optimization.md` and align implementation milestones to its transfer/split/sequence constraints.
 - Validate Kent tender policy defaults and override workflow against live operator usage before adding any deeper async solver.
+- Separate operator Kent workflows from admin policy/reason-code management in both docs and dashboard UX.
+- Govern hard-block semantics so only safety/legal/compliance categories can block work.
+- Make importer `dry_run` behavior side-effect free and documented consistently.
+- Migrate `FLEET`, `STAFF`, and `SUPPLIERS` operational data flow to Google Sheets-first connectors and treat local `.xlsx` workbooks as fallback only.
+- Add a shared operations-workbook sync path so fleet/staff/supplier state can be refreshed together from one Google Sheets source.
+- Add per-tab override configuration for shared operations-workbook sync only if real workbook naming diverges from `STAFF` / `SUPPLIERS` defaults.
+- Make `job_segments` the canonical operational planning unit for assigning trucks and workers.
+- Build readiness evaluation for assignments covering rego, COI, service due dates, worker roles, and worker compliances.
+- Keep spreadsheet imports import-only in v1; do not write assignments back to production sheets.
+- Split operator assignment workflow from admin sync/policy workflow for operations planning.
+- Replace remaining Staff/Fleet reliance on `present_driver` as assignment truth with segment-based planning views and reconciliation.
 
 ---
 
@@ -56,8 +70,8 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 | **Multi-route Folium map**            |    ✅   | Working map output.                         |
 | **CustomIcon fix**                    |    ✅   | Bug resolved.                               |
 | **Break-even / margin overlays**      |   🧩   | Present in analytics; confirm full dashboard wiring. |
-| **Interactive dashboard (Streamlit)** |   🧩   | Core components exist; dashboard wiring and polish still in progress. |
-| **Profit & volume heatmaps**          |   🧩   | Heatmap tabs exist; validate lane profitability overlays. |
+| **Interactive dashboard (Streamlit)** |   🧩   | Implemented and usable; workflow polish, governance, and some specs still lag reality. |
+| **Profit & volume heatmaps**          |   🧩   | Implemented analytics surface; validate lane profitability overlays and current-state docs. |
 
 ---
 
@@ -72,8 +86,8 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 | **$ per m³ calculation**     |   🧩   | Derived metrics exist; validate ingest consistency. |
 | **Corridor / lane table**    |   🧩   | Lane base rates exist; formalize directional corridors + corridor groups. |
 | **Modifier tables**          |    ✅   | Access, packing, seasonal rules in schema. |
-| **Integration staging schema** |   🔜 | Minimal fields for CRM/dispatch/accounting sync. |
-| **CSV/API connectors**       |   🔜   | Sync from CRM, dispatch, accounting, and fleet systems. |
+| **Integration staging schema** |   🧩 | Contract exists; operational workflow and failure handling still need alignment. |
+| **CSV/API connectors**       |   🧩   | Internal API endpoints and importers exist; external-system hardening remains. |
 
 ---
 
@@ -125,10 +139,10 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 | Deliverable                              | Status | Description                                |
 | ---------------------------------------- | :----: | ------------------------------------------ |
 | **CLI report (`list`)**                  |    ✅   | Clean console output.                      |
-| **Streamlit dashboard (MVP)**            |   🧩   | Route map + distribution + summary exist; end-to-end wiring still in progress. |
+| **Streamlit dashboard (MVP)**            |   🧩   | Route map + distribution + quote + Kent triage exist; admin/operator separation and spec cleanup remain. |
 | **Insurance / audit bundles (PDF)**      |   🔜   | One-click job evidence packs.              |
 | **Automated CSV / Google Sheets export** |   🧩   | Helpers produce CSV-ready profitability summaries. |
-| **API endpoints**                        |   🔜   | JSON / REST for ERP + insurer integration. |
+| **API endpoints**                        |   🧩   | Internal JSON/REST endpoints exist; auth, governance, and external contracts remain incomplete. |
 
 ---
 
@@ -146,7 +160,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 
 | Deliverable                        | Status | Description                         |
 | ---------------------------------- | :----: | ----------------------------------- |
-| **README.md**                      |    ✅   | Current, clear.                     |
+| **README.md**                      |   🧩   | Current after remediation; keep product-centered and aligned with code reality. |
 | **GM summary**                     |    ✅   | Delivered (non-technical overview). |
 | **Architecture diagram**           |   🔜   | Truck ↔ server ↔ cloud schematic.   |
 | **Analytics README / docs folder** |   🔜   | Needed once dashboard built.        |
@@ -167,17 +181,18 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 
 ---
 
-### ✅ Fully Met
+### Current Truth
 
-* Routing, costing, caching, database schema, and core CLI.
-* Working maps + README + documentation foundation.
+- Routing, costing, caching, database schema, and core CLI are in place.
+- Streamlit dashboard is implemented and used as the main operator surface.
+- Kent tender triage exists internally with provisional governance and contract assumptions.
 
-### 🔜 Still Needed
+### Highest-Priority Remaining Work
 
-1. Import historical job data (+ $m³ calc).
-2. Implement lane / modifier tables.
-3. Build Streamlit dashboard with histogram + margin bands.
-4. Add audit media integration & privacy layer.
+1. Align docs, roadmap, and operator stories to one source of truth.
+2. Validate Kent against real payloads and real operator behavior.
+3. Tighten governance for overrides, hard-blocks, and policy review.
+4. Formalize corridor/lane and multi-truck policy before deeper optimization work.
 
 ---
 
@@ -187,7 +202,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Corridor/lane model formalization (directional + bidirectional grouping).
 - Quote recommendation + benchmarking logic (market medians, confidence, $/m3 distribution buckets, break-even overlays).
 - Backhaul detection logic.
-- End-to-end dashboard wiring (ensure all tabs use the latest analytics outputs).
+- End-to-end dashboard workflow clarity (ensure docs and UX use the same operator story).
 - Phantom corridor detection + gravity model exploration.
 - Opportunity scoring that combines gravity demand with $/m3 distributions.
 
@@ -201,3 +216,4 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Job profitability scoring and risk tags.
 - Corridor profitability heatmap layer.
 - Automated corridor pricing adjustments.
+- Kent ranking correctness, admin/operator separation, and governed hard-block handling.

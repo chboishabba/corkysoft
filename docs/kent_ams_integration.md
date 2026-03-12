@@ -20,6 +20,8 @@ exchange and pricing analytics handoff.
 - Corkysoft is a pricing intelligence layer and does not replace AMS workflow
   ownership.
 - Corkysoft persists derived analytics in its own SQLite-backed model.
+- Current status: internal/provisional workflow implemented, but live payload
+  validation and deployment hardening are still required before production use.
 
 ## Canonical Entity Mapping
 
@@ -127,7 +129,13 @@ The route returns:
 - `imported` (record count received)
 - `dry_run`
 
-Prioritization read endpoint:
+Internal API auth:
+
+- mutating internal endpoints are expected to use `X-Corkysoft-Api-Key`
+- the server validates this against `CORKYSOFT_API_TOKEN`
+- `dry_run` is intended to validate without persisting business/config changes
+
+Current internal API surface:
 
 - `GET /kent-ams/tenders/prioritized?status=open&limit=50`
 - `GET /kent-ams/config`
@@ -166,11 +174,21 @@ Policy behavior now implemented:
   - optional note
   - full score/policy snapshot in audit history
 
+Admin/operator split target:
+
+- operators should only see queue review, flags, and override capture
+- admins/managers should own threshold changes, reason-code management, and
+  override governance review
+- the current implementation is still transitioning toward that split
+
 Pipeline integration note:
 
 - The same route spare-capacity signal is now written into:
   - quote workflow (`quote_operational_signals`)
   - job ingest workflow (`job_operational_signals`) for Kent and MoveWare imports
+- the quote workflow currently uses the same profitability rule vocabulary as
+  Kent triage, but should be interpreted as a quote-policy preview rather than
+  as proof of tender economics
 
 Current ranking model:
 
@@ -194,9 +212,9 @@ Dashboard workflow now implemented:
 - operators can:
   - review ranked tenders
   - inspect policy fail reasons and flags
-  - update default rule mode / thresholds
-  - manage override reason codes
   - record override events and view tender-level audit history
+- current admin controls exist but should move out of the high-frequency
+  operator queue
 
 Calibration endpoint:
 
@@ -241,7 +259,10 @@ Practical guidance for Kent's peak-season context:
 ## Auth and Security
 
 - Use environment-managed secrets only (`.env`, never committed).
-- Require per-system service credentials and request signing where supported.
+- Current API surface is internal and should be treated as non-public.
+- Deployment expectation:
+  - mutating endpoints require service credentials or internal admin tokens
+  - network exposure should be restricted until that is enforced consistently
 - Audit all quote recommendation pushes with timestamp and source version.
 
 ## Failure Handling
@@ -258,6 +279,32 @@ Practical guidance for Kent's peak-season context:
 - Confirm authoritative timezone and currency precision rules.
 - Decide bridge-table schema for external IDs (recommended: `kent_entity_links`).
 - Decide whether shipment/vendor reference creation is automatic or operator-approved.
+- Finalize operator/admin separation in the dashboard workflow.
+- Finalize override governance:
+  - who may override
+  - which reasons require review
+  - what constitutes override misuse/drift
+
+## Override Governance (v1)
+
+Default v1 governance:
+
+- hard-block is reserved for safety/legal/compliance only
+- hard-blocks are not overrideable through the normal operator path
+- overrideable flags cover commercial, transfer, SLA, and contextual judgments
+- operators may override only when:
+  - an active reason code exists
+  - operator identity is captured
+  - the override is auditable
+- managers/admins should review:
+  - repeated loss-alert overrides
+  - repeated use of `other`
+  - overrides on the same corridor/customer pattern
+
+Review cadence:
+
+- weekly during active Kent pilot use
+- monthly once workflow stabilizes and calibration is reliable
 
 ## Implementation Checklist
 
@@ -266,6 +313,14 @@ Practical guidance for Kent's peak-season context:
 3. Implement ingest validator and schema conformance tests.
 4. Add outbound contract tests for quote recommendation payloads.
 5. Add runbook for sync failures and replay.
+
+Current fixture coverage:
+
+- synthetic tender fixture coverage exists at
+  `tests/fixtures/kent_ams/tenders_sample.json`
+- fixture smoke validation exists in `tests/test_kent_ams_fixtures.py`
+- live Kent AMS exports are still required to lock field names, enum mappings,
+  auth behavior, and web-adapter extraction rules
 
 ## Next Reference
 
