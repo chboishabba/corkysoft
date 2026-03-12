@@ -10,6 +10,10 @@
 [AU Cluster Template](docs/cluster_template_au.md)
 [Corridor Opportunity Report](docs/corridor_opportunity_report.md)
 [Corridor Opportunity View](docs/corridor_opportunity_view.md)
+[AMS Backend Docs Playbook](docs/ams_backend_docs_playbook.md)
+[Kent AMS Integration Spec](docs/kent_ams_integration.md)
+[Kent AMS Integration Roadmap](docs/kent_ams_integration_roadmap.md)
+[Multi-Truck Route/Load Optimization](docs/multi_truck_route_load_optimization.md)
 [Roadmap](ROADMAP.md)
 
 
@@ -31,6 +35,7 @@ High-leverage next features:
 - Corridor / lane detection + rollups.
 - $/m³ market benchmarking overlays.
 - Quote recommendation engine.
+- Kent AMS tender queue with profitability rule-mode prioritization and override audit.
 - Backhaul detection and discount suggestions.
 - Job profitability scoring.
 - Corridor profitability heatmap layer.

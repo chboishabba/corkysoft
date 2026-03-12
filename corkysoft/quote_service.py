@@ -8,6 +8,7 @@ from datetime import date
 from typing import Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
 from corkysoft.au_address import GeocodeResult
+from analytics.operational_signals import compute_route_spare_capacity_signal
 from corkysoft.pricing import (
     DEFAULT_MODIFIERS,
     PRICING_MODELS,
@@ -97,6 +98,8 @@ class QuoteResult:
     origin_ambiguities: Dict[str, Sequence[str]] = field(default_factory=dict)
     destination_ambiguities: Dict[str, Sequence[str]] = field(default_factory=dict)
     manual_quote: Optional[float] = None
+    spare_capacity_score: Optional[float] = None
+    spare_capacity_label: Optional[str] = None
 
 
 def format_currency(amount: float) -> str:
@@ -197,6 +200,10 @@ def build_summary(inputs: QuoteInput, result: QuoteResult) -> str:
     if result.manual_quote is not None:
         lines.append(
             f"Manual quote override: {format_currency(result.manual_quote)}"
+        )
+    if result.spare_capacity_score is not None:
+        lines.append(
+            f"Operational signal: {result.spare_capacity_label} ({result.spare_capacity_score:.1f}/100)"
         )
     _append_section(
         lines,
@@ -439,6 +446,15 @@ def calculate_quote(
         origin_ambiguities=origin_ambiguities,
         destination_ambiguities=destination_ambiguities,
     )
+    spare_capacity_signal = compute_route_spare_capacity_signal(
+        conn,
+        origin=result.origin_resolved or inputs.origin,
+        destination=result.destination_resolved or inputs.destination,
+        required_trucks=1,
+        estimated_volume_m3=inputs.cubic_m,
+    )
+    result.spare_capacity_score = float(spare_capacity_signal["score"])
+    result.spare_capacity_label = str(spare_capacity_signal["label"])
     result.summary_text = build_summary(inputs, result)
     return result
 

@@ -175,3 +175,191 @@ Docs updated:
 
 Implementation changes:
 - None. Documentation-only updates.
+
+## 2026-03-11 (AMS Backend Docs Context Sync)
+
+Resolved archived thread metadata and used it to refresh backend documentation
+intent before making doc/TODO updates.
+
+Resolved thread:
+- title: Kent Removals AMS Info
+- online UUID: 69b137e9-862c-83a0-95ff-90b12cdb7751
+- canonical thread ID: 3a4e2a1bf2bd1571afb73c915a4edf99953ad3a7
+- source used: db (local canonical archive at `~/chat_archive.sqlite`)
+
+Main topics pulled from the thread:
+- Backend documentation structure that reduces onboarding time.
+- Typical relocation backend entity model (`assignees`, `moves`, `shipments`, `services`, `vendors`, `inventory_items`, `documents`, `tasks`).
+- Reverse-engineering checklist for undocumented systems.
+- Importance of documenting lifecycle state transitions and pricing-engine inputs.
+
+Docs updated:
+- README.md
+- ROADMAP.md
+- docs/ams_backend_docs_playbook.md
+
+Implementation changes:
+- None. Documentation/TODO alignment only.
+
+## 2026-03-11 (Kent AMS Interface Spec)
+
+Added an explicit Corkysoft-to-Kent AMS integration document so the interface
+boundary and payload expectations are not implied.
+
+Docs updated:
+- README.md
+- ROADMAP.md
+- docs/kent_ams_integration.md
+
+Implementation changes:
+- None. Documentation-only update.
+
+## 2026-03-11 (Kent AMS Mapping + Roadmap)
+
+Expanded Kent integration documentation with an explicit field mapping table
+from expected Kent AMS entities to current Corkysoft schema fields and added a
+phased integration roadmap with milestones and acceptance gates.
+
+Docs updated:
+- README.md
+- ROADMAP.md
+- docs/kent_ams_integration.md
+- docs/kent_ams_integration_roadmap.md
+
+Implementation changes:
+- None. Documentation-only update.
+
+## 2026-03-12 (Kent AMS Importer Scaffold)
+
+Brought Kent AMS integration interface closer to MoveWare by adding an internal
+Kent importer endpoint and resource dispatcher for adapter-fed payloads.
+
+Code updated:
+- corkysoft/api.py
+- analytics/kent_ams_import.py
+- tests/test_api.py
+
+Docs updated:
+- docs/kent_ams_integration.md
+
+Implementation changes:
+- Added `POST /importers/kent-ams/{resource}` using the same request/summary
+  shape as MoveWare importer.
+- Added Kent resources: `jobs`, `subcontractors`/`vendors`, `bids`, `awards`.
+- Added Kent bid/award persistence tables created on demand by importer.
+
+## 2026-03-12 (Kent Tender Pre-Scoring)
+
+Implemented tender pre-scoring so incoming Kent AMS tenders are ranked for
+operator focus based on profitability, urgency, seasonality, and capacity fit.
+
+Code updated:
+- analytics/kent_ams_import.py
+- corkysoft/api.py
+- tests/test_api.py
+
+Docs updated:
+- docs/kent_ams_integration.md
+- ROADMAP.md
+
+Implementation changes:
+- Added Kent `tenders` import resource on `POST /importers/kent-ams/{resource}`.
+- Added tender storage table `kent_job_tenders` with persisted score components.
+- Added read endpoint `GET /kent-ams/tenders/prioritized` for ranked tender queues.
+- Added score outputs and recommended action labels (`pursue_now`, `review_today`,
+  `review_if_capacity`, `defer`).
+
+## 2026-03-12 (Kent Tender Calibration Metrics)
+
+Implemented calibration metrics to quantify whether tender scores predict win
+rate and realized margin outcomes.
+
+Code updated:
+- analytics/kent_ams_import.py
+- corkysoft/api.py
+- tests/test_api.py
+
+Docs updated:
+- docs/kent_ams_integration.md
+- ROADMAP.md
+
+Implementation changes:
+- Added `GET /kent-ams/tenders/calibration?lookback_days=<n>` endpoint.
+- Added score-band metrics: tender count, wins, win rate, predicted vs realized
+  margin, and mean absolute margin error.
+- Added documented recommendations for weight tuning with peak-season guardrails.
+
+## 2026-03-12 (Route/Location Scoring Added)
+
+Expanded tender scoring and docs to include route/location fit, covering lane
+familiarity and historical lane margin effects.
+
+Code updated:
+- analytics/kent_ams_import.py
+- corkysoft/api.py
+- tests/test_api.py
+
+Docs updated:
+- docs/kent_ams_integration.md
+- ROADMAP.md
+
+## 2026-03-12 (En-Route Spare Capacity Signal Integration)
+
+Added a shared operational signal module and integrated it into:
+- Kent tender scoring
+- quote creation summaries/persistence
+- MoveWare and Kent job ingest paths
+
+Code updated:
+- analytics/operational_signals.py
+- analytics/kent_ams_import.py
+- analytics/moveware_import.py
+- corkysoft/quote_service.py
+- corkysoft/repo.py
+- corkysoft/api.py
+- tests/test_api.py
+
+Docs updated:
+- docs/kent_ams_integration.md
+
+## 2026-03-12 (Multi-Truck Optimization Spec)
+
+Documented the multi-truck pickup/drop sequencing and transfer optimization
+problem explicitly, including the "many jobs per truck / many trucks per job"
+model and phased optimization approach.
+
+Docs updated:
+- README.md
+- ROADMAP.md
+- docs/multi_truck_route_load_optimization.md
+
+Implementation changes:
+- None. Documentation-only update.
+
+## 2026-03-12 (Kent AMS Policy Workflow)
+
+Implemented the operator-facing Kent tender policy workflow and aligned code,
+API, dashboard, and docs around the same behavior.
+
+Code updated:
+- analytics/db/parameters.py
+- analytics/kent_ams_import.py
+- corkysoft/api.py
+- dashboard/app.py
+- tests/test_api.py
+
+Docs updated:
+- README.md
+- ROADMAP.md
+- docs/kent_ams_integration.md
+
+Implementation changes:
+- Added profitability rule-mode defaults in `global_parameters`.
+- Changed tender queue ordering to prioritize policy matches while keeping
+  non-matching tenders visible with fail reasons and loss alerts.
+- Added seeded/admin-managed override reason codes and tender override audit
+  logging.
+- Added API endpoints for Kent policy config, reason-code management, override
+  creation, and override history.
+- Added a Streamlit `Kent tenders` tab for queue review, config updates, reason
+  management, and override capture/history.

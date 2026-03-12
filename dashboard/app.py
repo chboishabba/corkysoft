@@ -94,6 +94,15 @@ from analytics.routes_map import (
     fetch_job_route_rows,
     populate_route_geometry,
 )
+from analytics.kent_ams_import import (
+    get_kent_tender_policy_config,
+    list_kent_override_reason_codes,
+    list_kent_tender_override_history,
+    list_prioritized_tenders,
+    record_kent_tender_override,
+    update_kent_tender_policy_config,
+    upsert_kent_override_reason_code,
+)
 from corkysoft.pricing import DEFAULT_MODIFIERS
 from corkysoft.quote_service import (
     COUNTRY_DEFAULT,
@@ -146,6 +155,7 @@ PRICE_DASHBOARD_TABS = [
     "Fleet",
     "Vehicle maintenance",
     "Quote builder",
+    "Kent tenders",
     "Optimizer",
     "Inventory",
     "Staff",
@@ -2118,6 +2128,9 @@ def render_price_distribution_dashboard():
                             st.session_state.pop(_NULL_CLIENT_NOTES_KEY, None)
                             _rerun_app()
 
+        with tab_map["Kent tenders"]:
+            render_kent_tenders_tab(conn)
+
         with tab_map["Optimizer"]:
 
             with st.popover("❓ How to use the Optimiser", width='stretch'):
@@ -2227,6 +2240,218 @@ def _read_uploaded_inventory_file(uploaded_file: Any | None) -> pd.DataFrame:
     if filename.endswith(('.xls', '.xlsx')):
         return pd.read_excel(uploaded_file)
     raise ValueError("Unsupported file type. Please upload CSV or Excel.")
+
+
+def render_kent_tenders_tab(conn: sqlite3.Connection) -> None:
+    st.subheader("Kent AMS tender queue")
+    st.caption(
+        "Profitability rule mode drives priority, not hard blocking. Only safety/legal/compliance flags should hard-block."
+    )
+
+    policy = get_kent_tender_policy_config(conn)
+    queue_cols = st.columns([1, 1, 1, 1])
+    status_filter = queue_cols[0].selectbox(
+        "Status",
+        options=["open", "awarded", "closed", "all"],
+        index=0,
+        key="kent_tender_status_filter",
+    )
+    limit_value = int(
+        queue_cols[1].number_input(
+            "Rows",
+            min_value=5,
+            max_value=250,
+            value=25,
+            step=5,
+            key="kent_tender_limit",
+        )
+    )
+    operator_id = queue_cols[2].text_input(
+        "Operator ID",
+        value=st.session_state.get("kent_tender_operator_id", ""),
+        key="kent_tender_operator_id",
+    )
+    st.session_state["kent_tender_operator_id"] = operator_id
+    queue_cols[3].metric("Rule mode", policy["ruleMode"])
+
+    with st.expander("Policy defaults", expanded=False):
+        with st.form("kent_tender_policy_form"):
+            config_cols = st.columns(4)
+            rule_mode = config_cols[0].selectbox(
+                "Rule mode",
+                options=["ABS_ONLY", "PCT_ONLY", "EITHER", "BOTH"],
+                index=["ABS_ONLY", "PCT_ONLY", "EITHER", "BOTH"].index(policy["ruleMode"]),
+            )
+            abs_threshold = config_cols[1].number_input(
+                "Abs margin threshold",
+                value=float(policy["absoluteMarginThreshold"]),
+                step=100.0,
+            )
+            pct_threshold = config_cols[2].number_input(
+                "Margin % threshold",
+                value=float(policy["marginPercentThreshold"]),
+                step=1.0,
+            )
+            loss_floor = config_cols[3].number_input(
+                "Loss alert floor",
+                value=float(policy["lossAlertFloor"]),
+                step=100.0,
+            )
+            if st.form_submit_button("Save policy defaults"):
+                try:
+                    update_kent_tender_policy_config(
+                        conn,
+                        rule_mode=rule_mode,
+                        absolute_margin_threshold=float(abs_threshold),
+                        margin_percent_threshold=float(pct_threshold),
+                        loss_alert_floor=float(loss_floor),
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.success("Kent tender policy defaults updated.")
+                    st.rerun()
+
+    with st.expander("Override reasons", expanded=False):
+        reasons = list_kent_override_reason_codes(conn)
+        if reasons:
+            st.dataframe(pd.DataFrame(reasons), use_container_width=True, hide_index=True)
+        with st.form("kent_override_reason_form"):
+            reason_cols = st.columns(4)
+            new_code = reason_cols[0].text_input("Code")
+            new_label = reason_cols[1].text_input("Label")
+            new_description = reason_cols[2].text_input("Description")
+            new_active = reason_cols[3].checkbox("Active", value=True)
+            if st.form_submit_button("Save reason"):
+                try:
+                    upsert_kent_override_reason_code(
+                        conn,
+                        code=new_code,
+                        label=new_label,
+                        description=new_description,
+                        active=new_active,
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.success("Override reason saved.")
+                    st.rerun()
+
+    rows = list_prioritized_tenders(conn, status=status_filter, limit=limit_value)
+    if not rows:
+        st.info("No Kent tenders found for the selected filter.")
+        return
+
+    reason_options = {
+        row["code"]: row["label"]
+        for row in list_kent_override_reason_codes(conn)
+        if row["active"]
+    }
+
+    summary_rows = [
+        {
+            "Tender": row["tenderExternalId"],
+            "Job": row["jobNumber"],
+            "Client": row["clientName"],
+            "Origin": row["origin"],
+            "Destination": row["destination"],
+            "Action": row["recommendedAction"],
+            "Policy": "PASS" if row["policyMatched"] else "FAIL",
+            "Margin": row["estimatedMargin"],
+            "Margin %": row["estimatedMarginPct"],
+            "Score": row["scoreTotal"],
+            "Loss": "ALERT" if row["lossAlert"] else "",
+            "Freshness": row["freshnessState"],
+        }
+        for row in rows
+    ]
+    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+
+    for row in rows:
+        badge_parts = []
+        if row["hardBlockFlags"]:
+            badge_parts.append("HARD BLOCK")
+        if row["lossAlert"]:
+            badge_parts.append("LOSS ALERT")
+        if not row["policyMatched"]:
+            badge_parts.append("POLICY FAIL")
+        header = " | ".join(
+            part for part in [row["tenderExternalId"], row["jobNumber"], ", ".join(badge_parts)] if part
+        )
+        with st.expander(header or row["tenderExternalId"], expanded=False):
+            detail_cols = st.columns(4)
+            detail_cols[0].metric("Expected revenue", format_currency(row["expectedRevenue"] or 0.0))
+            detail_cols[1].metric("Est. margin", format_currency(row["estimatedMargin"] or 0.0))
+            detail_cols[2].metric(
+                "Est. margin %",
+                "n/a" if row["estimatedMarginPct"] is None else f"{row['estimatedMarginPct']:.1f}%",
+            )
+            detail_cols[3].metric("Priority score", f"{row['scoreTotal']:.1f}")
+            st.caption(
+                f"Rule mode `{row['profitRuleMode']}` | thresholds: ${row['absoluteMarginThreshold']:,.0f} and {row['marginPercentThreshold']:.1f}% | freshness `{row['freshnessState']}` ({row['confidenceScore']:.1f})"
+            )
+            if row["policyFailReasons"]:
+                st.warning("Policy fail reasons: " + ", ".join(row["policyFailReasons"]))
+            if row["overrideableFlags"]:
+                st.info("Overrideable flags: " + ", ".join(row["overrideableFlags"]))
+            if row["hardBlockFlags"]:
+                st.error("Hard-block flags: " + ", ".join(row["hardBlockFlags"]))
+
+            with st.form(f"kent_override_form_{row['tenderExternalId']}"):
+                action = st.selectbox(
+                    "Action",
+                    options=["pursue", "review", "defer", "award_override"],
+                    key=f"kent_override_action_{row['tenderExternalId']}",
+                )
+                reason_code = st.selectbox(
+                    "Reason code",
+                    options=list(reason_options.keys()),
+                    format_func=lambda code: reason_options.get(code, code),
+                    key=f"kent_override_reason_{row['tenderExternalId']}",
+                )
+                note = st.text_area(
+                    "Optional note",
+                    key=f"kent_override_note_{row['tenderExternalId']}",
+                    height=80,
+                )
+                submit_disabled = bool(row["hardBlockFlags"]) or not operator_id.strip()
+                if st.form_submit_button("Record override", disabled=submit_disabled):
+                    try:
+                        record_kent_tender_override(
+                            conn,
+                            tender_external_id=row["tenderExternalId"],
+                            action=action,
+                            operator_id=operator_id.strip(),
+                            reason_code=reason_code,
+                            note=note,
+                        )
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.success("Override recorded.")
+                        st.rerun()
+                if not operator_id.strip():
+                    st.caption("Enter an operator ID to record override actions.")
+
+            history = list_kent_tender_override_history(
+                conn, tender_external_id=row["tenderExternalId"]
+            )
+            if history:
+                history_df = pd.DataFrame(
+                    [
+                        {
+                            "At": item["createdAt"],
+                            "Action": item["action"],
+                            "Operator": item["operatorId"],
+                            "Reason": item["reasonCode"],
+                            "Note": item["note"],
+                            "Policy matched": item["policyMatched"],
+                            "Loss alert": item["lossAlert"],
+                        }
+                        for item in history
+                    ]
+                )
+                st.dataframe(history_df, use_container_width=True, hide_index=True)
 
 
 def render_inventory_tab(conn: sqlite3.Connection) -> None:

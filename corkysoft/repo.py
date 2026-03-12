@@ -78,6 +78,14 @@ CREATE TABLE IF NOT EXISTS quotes (
   final_quote REAL NOT NULL,
   summary TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS quote_operational_signals (
+  quote_id INTEGER PRIMARY KEY,
+  spare_capacity_score REAL,
+  spare_capacity_label TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(quote_id) REFERENCES quotes(id) ON DELETE CASCADE
+);
 """
 
 POSTCODE_RE = re.compile(r"\b(\d{4})\b")
@@ -705,6 +713,23 @@ def persist_quote(
         ),
     )
     quote_rowid = int(cursor.lastrowid)
+    if result.spare_capacity_score is not None:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO quote_operational_signals (
+                quote_id,
+                spare_capacity_score,
+                spare_capacity_label,
+                created_at
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (
+                quote_rowid,
+                float(result.spare_capacity_score),
+                result.spare_capacity_label,
+                created_at,
+            ),
+        )
 
     stored_amount = (
         float(manual_value)

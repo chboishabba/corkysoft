@@ -37,6 +37,20 @@ def get_parameter_value(
     return row[0]
 
 
+def get_parameter_text(
+    conn: sqlite3.Connection, key: str, default: Optional[str] = None
+) -> Optional[str]:
+    """Return the text value for ``key`` from ``global_parameters``."""
+
+    row = conn.execute(
+        "SELECT value_text FROM global_parameters WHERE key = ?",
+        (key,),
+    ).fetchone()
+    if row is None:
+        return default
+    return row[0]
+
+
 def set_parameter_value(
     conn: sqlite3.Connection, key: str, value: float, description: Optional[str] = None
 ) -> None:
@@ -56,6 +70,25 @@ def set_parameter_value(
     conn.commit()
 
 
+def set_parameter_text(
+    conn: sqlite3.Connection, key: str, value: str, description: Optional[str] = None
+) -> None:
+    """Insert or update a text parameter in ``global_parameters``."""
+
+    conn.execute(
+        """
+        INSERT INTO global_parameters (key, value_text, description, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value_text = excluded.value_text,
+            description = COALESCE(excluded.description, global_parameters.description),
+            updated_at = excluded.updated_at
+        """,
+        (key, str(value), description, datetime.now(UTC).isoformat()),
+    )
+    conn.commit()
+
+
 def bootstrap_parameters(
     conn: sqlite3.Connection, defaults: Iterable[tuple[str, float, str]]
 ) -> None:
@@ -71,6 +104,8 @@ def bootstrap_parameters(
 __all__ = [
     "bootstrap_parameters",
     "ensure_global_parameters_table",
+    "get_parameter_text",
     "get_parameter_value",
+    "set_parameter_text",
     "set_parameter_value",
 ]

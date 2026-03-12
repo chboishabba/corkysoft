@@ -16,6 +16,18 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Maintain `docs/corridor_defaults.md` and `docs/cluster_template_au.md` when thresholds or clusters change.
 - Maintain `docs/corridor_opportunity_report.md` alongside opportunity scoring changes.
 - Maintain `docs/corridor_opportunity_view.md` alongside the report schema.
+- Maintain `docs/ams_backend_docs_playbook.md` as the onboarding baseline for backend docs.
+- Add a "Move/Job Lifecycle" doc that maps current CLI + dashboard flow states end-to-end.
+- Add a data-model glossary mapping relocation terms (assignee/move/shipment) to Corkysoft table and field names.
+- Add a pricing-engine documentation page that lists margin inputs, formulas, and data dependencies.
+- Validate and maintain `docs/kent_ams_integration.md` against real Kent AMS payloads and auth constraints.
+- Execute `docs/kent_ams_integration_roadmap.md` Phase 0 contract lock with sample payload coverage and enum catalog.
+- Expand Kent adapter from import-only to operator triage with tender pre-scoring calibration and peak-season weighting validation.
+- Review `GET /kent-ams/tenders/calibration` weekly and tune score weights only when band monotonicity and margin-error metrics improve.
+- Validate route/location scoring against historical lane outcomes to avoid over-prioritizing unfamiliar but risky tenders.
+- Integrate en-route spare capacity signals into quote creation outputs and ingestion triage so operators can combine price and operational fit.
+- Maintain `docs/multi_truck_route_load_optimization.md` and align implementation milestones to its transfer/split/sequence constraints.
+- Validate Kent tender policy defaults and override workflow against live operator usage before adding any deeper async solver.
 
 ---
 

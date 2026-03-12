@@ -13,6 +13,7 @@ from analytics.db import (
     upsert_job_container_allocation,
     upsert_worker,
 )
+from analytics.operational_signals import upsert_job_operational_signal
 
 
 def _first_present(
@@ -123,6 +124,16 @@ def import_jobs(conn, records: Sequence[Mapping[str, object]], *, dry_run: bool 
                         record, "updated_at", "updatedAt", "lastUpdated", "importedAt"
                     )
                 ),
+            )
+            upsert_job_operational_signal(
+                conn,
+                job_number=job_number,
+                origin=_clean_str(record.get("origin")),
+                destination=_clean_str(record.get("destination")),
+                estimated_volume_m3=_coerce_float(
+                    _first_present(record, "volume_m3", "volumeM3")
+                ),
+                source="moveware_import",
             )
         if existing is None:
             inserted += 1
