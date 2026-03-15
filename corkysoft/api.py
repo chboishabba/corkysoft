@@ -4,12 +4,24 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import base64
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 
-from analytics.db import fetch_driver_shifts
+from analytics.db import (
+    ABSENCE_RECORD_STATUSES,
+    ABSENCE_RECORD_TYPES,
+    create_worker_absence_record,
+    fetch_driver_shifts,
+    list_worker_absence_records,
+)
+from analytics.db.inventory import (
+    allocate_inventory_to_segment,
+    list_segment_inventory_coordination,
+)
+from analytics.labor_analytics import build_payroll_labor_analytics
 from analytics.db_connection import connection_scope
 from analytics.kent_ams_import import (
     get_kent_tender_policy_config,
@@ -24,14 +36,74 @@ from analytics.kent_ams_import import (
 )
 from analytics.moveware_import import import_moveware_records
 from analytics.operations_assignment import (
+    approve_operations_cutover_promotion,
+    apply_operations_cutover_recommendation,
     assign_segment_resources,
+    assign_worker_compliance,
+    assign_worker_role,
     ensure_segment,
+    ensure_worker_compliance,
+    ensure_worker_role,
     get_operations_policy,
+    list_job_operations_board,
+    list_labor_reconciliation,
+    list_operations_cutover_events,
+    list_operations_cutover_rollout,
+    list_operations_cutover_workflows,
+    list_operational_readiness_items,
     list_operational_conflicts,
+    list_planned_labor_assignments,
     list_segment_readiness,
+    reject_operations_cutover_promotion,
+    record_operations_cutover_event,
+    request_operations_cutover_promotion,
+    upsert_operations_cutover_workflow,
     update_operations_policy,
 )
 from analytics.operations_workbook import sync_operations_workbook
+from corkysoft.call_ops import (
+    AMBIENT_SESSION_STATUSES,
+    CALL_DIRECTIONS,
+    CALL_EVENT_KINDS,
+    CALL_LEG_KINDS,
+    CALL_ROUTING_EVENT_TYPES,
+    CALL_SOURCE_CHANNELS,
+    CALL_STATUSES,
+    EXTRACTED_ACTION_STATUSES,
+    WORKER_TIME_CHANNELS,
+    WORKER_TIME_EVENT_TYPES,
+    add_call_note,
+    add_extracted_action,
+    create_ambient_session,
+    create_call_event,
+    create_call_leg,
+    create_call_session,
+    decide_extracted_action,
+    decide_worker_time_capture_event,
+    generate_fake_ambient_transcript_artifact,
+    generate_fake_transcript_artifact,
+    get_ambient_session,
+    get_call_event,
+    get_call_session,
+    list_ambient_sessions,
+    list_ambient_transcript_artifacts,
+    list_call_events,
+    list_call_legs,
+    list_call_notes,
+    list_call_routing_events,
+    list_call_sessions,
+    list_extracted_actions,
+    list_state_egress_events,
+    list_transcript_artifacts,
+    list_worker_time_capture_events,
+    log_call_routing_event,
+    poll_transcript_artifact,
+    record_ambient_transcript_artifact,
+    record_transcript_artifact,
+    record_worker_time_capture_event,
+    resolve_call_links,
+    submit_call_audio_for_transcription,
+)
 
 
 def _current_db_path() -> str:
@@ -481,6 +553,341 @@ class OperationalConflictResponse(BaseModel):
     flag: str
 
 
+class OperationalReadinessItemResponse(BaseModel):
+    resourceType: str
+    resourceId: str
+    resourceName: str
+    status: str
+    ruleType: str
+    dueAt: Optional[str] = None
+    overrideable: bool = False
+    sourceImportedAt: Optional[str] = None
+    details: Optional[str] = None
+
+
+class WorkerRoleAssignmentRequest(BaseModel):
+    roleId: Optional[int] = None
+    roleName: Optional[str] = None
+    description: Optional[str] = None
+
+
+class WorkerComplianceAssignmentRequest(BaseModel):
+    complianceId: Optional[int] = None
+    complianceName: Optional[str] = None
+    description: Optional[str] = None
+    expiryDate: Optional[str] = None
+
+
+class PlannedLaborAssignmentResponse(BaseModel):
+    segmentId: int
+    jobId: int
+    jobClient: Optional[str] = None
+    segmentSequence: int
+    workerId: int
+    workerName: Optional[str] = None
+    roleId: Optional[int] = None
+    truckIds: List[str] = Field(default_factory=list)
+    truckNames: List[str] = Field(default_factory=list)
+    plannedStart: Optional[str] = None
+    plannedEnd: Optional[str] = None
+    fromLocation: Optional[str] = None
+    toLocation: Optional[str] = None
+    assignmentStatus: Optional[str] = None
+
+
+class LaborReconciliationResponse(BaseModel):
+    status: str
+    workerId: Optional[int] = None
+    workerName: Optional[str] = None
+    truckIds: List[str] = Field(default_factory=list)
+    jobId: Optional[int] = None
+    segmentId: Optional[int] = None
+    plannedStart: Optional[str] = None
+    plannedEnd: Optional[str] = None
+    shiftDate: Optional[str] = None
+    source: Optional[str] = None
+
+
+class LaborAnalyticsSummaryResponse(BaseModel):
+    plannedHours: float
+    plannedExposure: float
+    importedHours: float
+    importedCost: float
+    reviewedActualCost: float
+    workerCount: int
+    confidenceScore: int
+    confidenceLabel: str
+    absenceModelStatus: str
+    absenceRecordCount: int
+    confirmedAbsenceCount: int
+    overtimeDailyHours: float
+
+
+class PayForecastRowResponse(BaseModel):
+    workerName: str
+    plannedHours: float
+    plannedExposure: float
+    importedHours: float
+    importedCost: float
+    reviewedActualCost: float
+    acceptedEventCount: int
+    hourlyRateBasis: float
+    absenceDays: float
+    absenceHours: float
+
+
+class ExportReadyLaborSummaryRowResponse(BaseModel):
+    workerName: str
+    dateRangeStart: str
+    dateRangeEnd: str
+    plannedExposure: float
+    importedCost: float
+    reviewedActualCost: float
+    importedHours: float
+    overtimeHours: float
+    absenceDays: float
+    absenceHours: float
+    acceptedEventCount: int
+    pendingReviewCount: int
+    hourlyRateBasis: float
+    exportReady: bool
+
+
+class OvertimeDistributionRowResponse(BaseModel):
+    workerName: str
+    date: str
+    totalHours: float
+    overtimeHours: float
+    totalCost: float
+    shiftCount: int
+
+
+class LaborConfidenceSummaryResponse(BaseModel):
+    pendingReviewCount: int
+    acceptedEventCount: int
+    rejectedEventCount: int
+    duplicateEventCount: int
+    missingPriorClockOnCount: int
+    plannedOnlyCount: int
+    importedOnlyCount: int
+    matchedPlanImportCount: int
+    acceptedUnmatchedCount: int
+    confidenceScore: int
+    confidenceLabel: str
+
+
+class LaborCostDriverRowResponse(BaseModel):
+    dimension: str
+    dimensionValue: str
+    totalHours: float
+    totalCost: float
+    shiftCount: int
+
+
+class LaborAbsenceSummaryResponse(BaseModel):
+    recordCount: int
+    confirmedCount: int
+    plannedCount: int
+    cancelledCount: int
+    sickDays: float
+    annualLeaveDays: float
+    personalLeaveDays: float
+    unpaidLeaveDays: float
+    carersLeaveDays: float
+    otherDays: float
+
+
+class WorkerAbsenceRecordResponse(BaseModel):
+    id: int
+    workerId: int
+    workerName: str
+    startDate: str
+    endDate: str
+    absenceType: str
+    status: str
+    hoursPerDay: Optional[float] = None
+    note: Optional[str] = None
+    source: Optional[str] = None
+    recordedBy: Optional[str] = None
+    createdAt: str
+    updatedAt: str
+
+
+class WorkerAbsenceRecordRequest(BaseModel):
+    workerId: int
+    startDate: str
+    endDate: Optional[str] = None
+    absenceType: str = Field(default="other", description="One of the supported absence/leave types")
+    status: str = Field(default="confirmed", description="One of the supported absence statuses")
+    hoursPerDay: Optional[float] = None
+    note: Optional[str] = None
+    source: Optional[str] = None
+    recordedBy: Optional[str] = None
+
+
+class SegmentInventoryCoordinationResponse(BaseModel):
+    segmentId: int
+    jobId: int
+    segmentSequence: int
+    fromLocation: Optional[str] = None
+    toLocation: Optional[str] = None
+    plannedStart: Optional[str] = None
+    plannedEnd: Optional[str] = None
+    assignmentStatus: Optional[str] = None
+    shipmentCount: int
+    allocatedQuantity: float
+    inventoryNames: List[str] = Field(default_factory=list)
+    supplierNames: List[str] = Field(default_factory=list)
+
+
+class SegmentInventoryAllocationRequest(BaseModel):
+    inventoryItemId: int
+    quantity: float
+    status: str = "planned"
+
+
+class JobBoardSegmentResponse(BaseModel):
+    segmentId: int
+    segmentSequence: int
+    fromLocation: Optional[str] = None
+    toLocation: Optional[str] = None
+    plannedStart: Optional[str] = None
+    plannedEnd: Optional[str] = None
+    assignmentStatus: Optional[str] = None
+    warningCount: int
+    blockingCount: int
+    overrideableCount: int
+    truckIds: List[str] = Field(default_factory=list)
+    workerNames: List[str] = Field(default_factory=list)
+    inventoryNames: List[str] = Field(default_factory=list)
+    supplierNames: List[str] = Field(default_factory=list)
+    shipmentCount: int
+
+
+class JobOperationsBoardResponse(BaseModel):
+    jobId: int
+    jobClient: Optional[str] = None
+    jobOrigin: Optional[str] = None
+    jobDestination: Optional[str] = None
+    segmentCount: int
+    plannedStart: Optional[str] = None
+    plannedEnd: Optional[str] = None
+    jobStatus: str
+    warningCount: int
+    blockingCount: int
+    overrideableCount: int
+    truckIds: List[str] = Field(default_factory=list)
+    workerNames: List[str] = Field(default_factory=list)
+    inventoryNames: List[str] = Field(default_factory=list)
+    supplierNames: List[str] = Field(default_factory=list)
+    segments: List[JobBoardSegmentResponse] = Field(default_factory=list)
+
+
+class OperationsCutoverChecklistResponse(BaseModel):
+    nativeReady: bool
+    dualRunComplete: bool
+    fallbackDrillComplete: bool
+    operatorTrained: bool
+
+
+class OperationsCutoverApprovalResponse(BaseModel):
+    targetStatus: Optional[str] = None
+    status: str
+    requestPending: bool
+    approvalSatisfied: bool
+    blockedByApproval: bool
+    requestedAt: Optional[str] = None
+    requestedBy: Optional[str] = None
+    requestNote: Optional[str] = None
+    approvedAt: Optional[str] = None
+    approvedBy: Optional[str] = None
+    approvalNote: Optional[str] = None
+    rejectedAt: Optional[str] = None
+    rejectedBy: Optional[str] = None
+    rejectionNote: Optional[str] = None
+
+
+class OperationsCutoverRecommendationResponse(BaseModel):
+    recommendedStatus: str
+    actionable: bool
+    reason: str
+    approvalRequired: bool = False
+    approvalSatisfied: bool = False
+    blockedByApproval: bool = False
+
+
+class OperationsCutoverWorkflowResponse(BaseModel):
+    workflowKey: str
+    label: str
+    nativeSurface: str
+    spreadsheetSource: str
+    cutoverStatus: str
+    ownerRole: Optional[str] = None
+    snapshotMode: str
+    snapshotFields: List[str] = Field(default_factory=list)
+    fallbackMode: str
+    metrics: Dict[str, Any]
+    checklist: OperationsCutoverChecklistResponse
+    allChecksComplete: bool
+    targetMet: bool
+    approval: OperationsCutoverApprovalResponse
+    recommendation: OperationsCutoverRecommendationResponse
+    lastDrillAt: Optional[str] = None
+    rollbackInstructions: Optional[str] = None
+    notes: Optional[str] = None
+    updatedAt: Optional[str] = None
+
+
+class OperationsCutoverWorkflowUpdateRequest(BaseModel):
+    cutoverStatus: str
+    ownerRole: Optional[str] = None
+    snapshotMode: str = "none"
+    snapshotFields: List[str] = Field(default_factory=list)
+    fallbackMode: str = "import_only"
+    cutoverTargetPercent: float = 100.0
+    nativeReady: bool = False
+    dualRunComplete: bool = False
+    fallbackDrillComplete: bool = False
+    operatorTrained: bool = False
+    rollbackInstructions: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class OperationsCutoverEventResponse(BaseModel):
+    id: int
+    workflowKey: str
+    eventType: str
+    actor: Optional[str] = None
+    note: Optional[str] = None
+    eventValue: Optional[str] = None
+    createdAt: str
+
+
+class OperationsCutoverEventRequest(BaseModel):
+    eventType: str
+    actor: Optional[str] = None
+    note: Optional[str] = None
+    eventValue: Optional[str] = None
+    createdAt: Optional[str] = None
+
+
+class OperationsCutoverTransitionRequest(BaseModel):
+    actor: Optional[str] = None
+    note: Optional[str] = None
+
+
+class OperationsCutoverPromotionRequest(BaseModel):
+    actor: str
+    note: Optional[str] = None
+    targetStatus: Optional[str] = None
+
+
+class OperationsCutoverPromotionDecisionRequest(BaseModel):
+    actor: str
+    note: Optional[str] = None
+    targetStatus: Optional[str] = None
+
+
 class OperationsSyncResponse(BaseModel):
     fleetImported: int
     staffInserted: int
@@ -492,6 +899,395 @@ class OperationsSyncResponse(BaseModel):
 
 class OperationsSyncRequest(BaseModel):
     reference: Optional[str] = None
+
+
+class CallEventCreateRequest(BaseModel):
+    eventKind: str = Field(..., description="client_call, ops_call, manager_call, worker_call, clock_on_call, or clock_off_call")
+    direction: str = Field(..., description="inbound, outbound, or internal")
+    status: str = Field(default="completed", description="Current call status")
+    sourceChannel: str = Field(default="telephony", description="telephony, whatsapp, manual_note, or imported_recording")
+    title: Optional[str] = None
+    callerPhone: Optional[str] = None
+    calleePhone: Optional[str] = None
+    quoteId: Optional[int] = None
+    jobId: Optional[int] = None
+    segmentId: Optional[int] = None
+    workerId: Optional[int] = None
+    operatorId: Optional[str] = None
+    startedAt: Optional[str] = None
+    endedAt: Optional[str] = None
+    capturedAt: Optional[str] = None
+    correlationId: Optional[str] = None
+
+
+class CallEventResponse(BaseModel):
+    id: int
+    eventKind: str
+    direction: str
+    status: str
+    sourceChannel: str
+    title: Optional[str] = None
+    callerPhone: Optional[str] = None
+    callerPhoneNormalized: Optional[str] = None
+    calleePhone: Optional[str] = None
+    calleePhoneNormalized: Optional[str] = None
+    clientId: Optional[int] = None
+    clientName: Optional[str] = None
+    quoteId: Optional[int] = None
+    jobId: Optional[int] = None
+    segmentId: Optional[int] = None
+    workerId: Optional[int] = None
+    workerName: Optional[str] = None
+    jobClient: Optional[str] = None
+    jobOrigin: Optional[str] = None
+    jobDestination: Optional[str] = None
+    operatorId: Optional[str] = None
+    correlationId: Optional[str] = None
+    startedAt: Optional[str] = None
+    endedAt: Optional[str] = None
+    capturedAt: Optional[str] = None
+    processedAt: Optional[str] = None
+    createdAt: str
+    updatedAt: str
+    latestTranscriptStatus: Optional[str] = None
+    pendingActionCount: int = 0
+
+
+class CallSessionCreateRequest(BaseModel):
+    eventKind: str
+    direction: str
+    status: str = "completed"
+    sourceChannel: str = "telephony"
+    title: Optional[str] = None
+    callerPhone: Optional[str] = None
+    calleePhone: Optional[str] = None
+    quoteId: Optional[int] = None
+    jobId: Optional[int] = None
+    segmentId: Optional[int] = None
+    workerId: Optional[int] = None
+    operatorId: Optional[str] = None
+    startedAt: Optional[str] = None
+    endedAt: Optional[str] = None
+    capturedAt: Optional[str] = None
+    correlationId: Optional[str] = None
+    initialDestinationKind: Optional[str] = None
+    initialDestinationLabel: Optional[str] = None
+
+
+class CallSessionResponse(BaseModel):
+    id: int
+    rootCallEventId: Optional[int] = None
+    eventKind: str
+    direction: str
+    status: str
+    sourceChannel: str
+    title: Optional[str] = None
+    callerPhone: Optional[str] = None
+    callerPhoneNormalized: Optional[str] = None
+    calleePhone: Optional[str] = None
+    calleePhoneNormalized: Optional[str] = None
+    clientId: Optional[int] = None
+    clientName: Optional[str] = None
+    quoteId: Optional[int] = None
+    jobId: Optional[int] = None
+    segmentId: Optional[int] = None
+    workerId: Optional[int] = None
+    workerName: Optional[str] = None
+    operatorId: Optional[str] = None
+    correlationId: Optional[str] = None
+    startedAt: Optional[str] = None
+    endedAt: Optional[str] = None
+    capturedAt: Optional[str] = None
+    processedAt: Optional[str] = None
+    createdAt: str
+    updatedAt: str
+    legCount: int = 0
+    pendingActionCount: int = 0
+
+
+class CallLegCreateRequest(BaseModel):
+    legKind: str = "primary"
+    direction: str = "inbound"
+    status: str = "ringing"
+    sourceChannel: str = "telephony"
+    destinationKind: Optional[str] = None
+    destinationLabel: Optional[str] = None
+    operatorId: Optional[str] = None
+    callerPhone: Optional[str] = None
+    calleePhone: Optional[str] = None
+    startedAt: Optional[str] = None
+    answeredAt: Optional[str] = None
+    endedAt: Optional[str] = None
+
+
+class CallLegResponse(BaseModel):
+    id: int
+    callSessionId: int
+    rootCallEventId: Optional[int] = None
+    legKind: str
+    direction: str
+    status: str
+    sourceChannel: str
+    destinationKind: Optional[str] = None
+    destinationLabel: Optional[str] = None
+    operatorId: Optional[str] = None
+    callerPhone: Optional[str] = None
+    callerPhoneNormalized: Optional[str] = None
+    calleePhone: Optional[str] = None
+    calleePhoneNormalized: Optional[str] = None
+    startedAt: Optional[str] = None
+    answeredAt: Optional[str] = None
+    endedAt: Optional[str] = None
+    createdAt: str
+    updatedAt: str
+    latestTranscriptStatus: Optional[str] = None
+
+
+class CallRoutingEventCreateRequest(BaseModel):
+    eventType: str
+    callLegId: Optional[int] = None
+    fromDestination: Optional[str] = None
+    toDestination: Optional[str] = None
+    actor: Optional[str] = None
+    detail: Optional[str] = None
+
+
+class CallRoutingEventResponse(BaseModel):
+    id: int
+    callSessionId: int
+    callLegId: Optional[int] = None
+    eventType: str
+    fromDestination: Optional[str] = None
+    toDestination: Optional[str] = None
+    actor: Optional[str] = None
+    detail: Optional[str] = None
+    createdAt: str
+
+
+class CallNoteCreateRequest(BaseModel):
+    author: Optional[str] = None
+    noteText: str
+    noteKind: str = "operator"
+    authoritative: bool = True
+
+
+class CallNoteResponse(BaseModel):
+    id: int
+    callEventId: Optional[int] = None
+    ambientSessionId: Optional[int] = None
+    author: Optional[str] = None
+    noteKind: str
+    noteText: str
+    authoritative: bool
+    createdAt: str
+
+
+class ExtractedActionCreateRequest(BaseModel):
+    actionText: str
+    sourceEngine: Optional[str] = None
+    transcriptArtifactId: Optional[int] = None
+    spanStart: Optional[float] = None
+    spanEnd: Optional[float] = None
+
+
+class ExtractedActionDecisionRequest(BaseModel):
+    status: str = Field(..., description="accepted or rejected")
+    decidedBy: Optional[str] = None
+    decisionNote: Optional[str] = None
+
+
+class ExtractedActionResponse(BaseModel):
+    id: int
+    callEventId: Optional[int] = None
+    ambientSessionId: Optional[int] = None
+    transcriptArtifactId: Optional[int] = None
+    sourceEngine: Optional[str] = None
+    actionText: str
+    spanStart: Optional[float] = None
+    spanEnd: Optional[float] = None
+    status: str
+    decidedBy: Optional[str] = None
+    decisionNote: Optional[str] = None
+    createdAt: str
+    decidedAt: Optional[str] = None
+
+
+class CallLinkResolutionRequest(BaseModel):
+    actor: Optional[str] = None
+    ambientSessionId: Optional[int] = None
+    clientId: Optional[int] = None
+    quoteId: Optional[int] = None
+    jobId: Optional[int] = None
+    segmentId: Optional[int] = None
+    workerId: Optional[int] = None
+    resolutionNote: Optional[str] = None
+
+
+class TranscriptArtifactCreateRequest(BaseModel):
+    serviceKey: str = "ops"
+    status: str = "completed"
+    transcriptText: Optional[str] = None
+    confidence: Optional[float] = None
+    isFinal: bool = True
+
+
+class TranscriptUploadRequest(BaseModel):
+    serviceKey: str = "ops"
+    filename: str
+    contentBase64: str
+    language: Optional[str] = None
+    diarize: bool = True
+
+
+class FakeTranscriptRequest(BaseModel):
+    serviceKey: str = "ops"
+    scenario: Optional[str] = None
+    operatorGoal: Optional[str] = None
+
+
+class TranscriptArtifactResponse(BaseModel):
+    id: int
+    callEventId: Optional[int] = None
+    callSessionId: Optional[int] = None
+    callLegId: Optional[int] = None
+    serviceKey: str
+    externalTaskId: Optional[str] = None
+    status: str
+    transcriptText: Optional[str] = None
+    transcriptSegments: List[Dict[str, Any]] = Field(default_factory=list)
+    diarization: List[Dict[str, Any]] = Field(default_factory=list)
+    confidence: Optional[float] = None
+    isFinal: bool
+    errorMessage: Optional[str] = None
+    createdAt: str
+    updatedAt: str
+
+
+class WorkerTimeCaptureCreateRequest(BaseModel):
+    callEventId: Optional[int] = None
+    callSessionId: Optional[int] = None
+    callLegId: Optional[int] = None
+    workerId: Optional[int] = None
+    workerNameRaw: Optional[str] = None
+    employeeCodeRaw: Optional[str] = None
+    eventType: str
+    channel: str
+    effectiveTimestamp: Optional[str] = None
+    callerPhone: Optional[str] = None
+    jobId: Optional[int] = None
+    segmentId: Optional[int] = None
+    truckId: Optional[str] = None
+    confidence: Optional[float] = None
+    rawPayload: Dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkerTimeCaptureDecisionRequest(BaseModel):
+    reviewStatus: str = Field(..., description="accepted or rejected")
+    reviewer: Optional[str] = None
+    reviewNote: Optional[str] = None
+    workerId: Optional[int] = None
+    jobId: Optional[int] = None
+    segmentId: Optional[int] = None
+    truckId: Optional[str] = None
+
+
+class WorkerTimeCaptureResponse(BaseModel):
+    id: int
+    callEventId: Optional[int] = None
+    callSessionId: Optional[int] = None
+    callLegId: Optional[int] = None
+    workerId: Optional[int] = None
+    workerName: Optional[str] = None
+    workerNameRaw: Optional[str] = None
+    employeeCodeRaw: Optional[str] = None
+    eventType: str
+    channel: str
+    effectiveTimestamp: Optional[str] = None
+    capturedTimestamp: str
+    callerPhone: Optional[str] = None
+    jobId: Optional[int] = None
+    segmentId: Optional[int] = None
+    truckId: Optional[str] = None
+    confidence: Optional[float] = None
+    reviewStatus: str
+    reviewer: Optional[str] = None
+    reviewNote: Optional[str] = None
+    rawPayload: Dict[str, Any] = Field(default_factory=dict)
+    createdAt: str
+    reviewedAt: Optional[str] = None
+
+
+class StateEgressEventResponse(BaseModel):
+    id: int
+    eventId: str
+    sourceComponent: str
+    sourceEntityId: str
+    eventType: str
+    idempotencyKey: str
+    correlationId: Optional[str] = None
+    causationId: Optional[str] = None
+    authorityClass: str
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    payloadHash: str
+    occurredAt: str
+    ingestedAt: str
+
+
+class AmbientSessionCreateRequest(BaseModel):
+    title: Optional[str] = None
+    sourceLocation: Optional[str] = None
+    sourceDevice: Optional[str] = None
+    teamLabel: Optional[str] = None
+    status: str = "active"
+    clientId: Optional[int] = None
+    quoteId: Optional[int] = None
+    jobId: Optional[int] = None
+    segmentId: Optional[int] = None
+    workerId: Optional[int] = None
+    operatorId: Optional[str] = None
+    startedAt: Optional[str] = None
+    endedAt: Optional[str] = None
+    capturedAt: Optional[str] = None
+    correlationId: Optional[str] = None
+
+
+class AmbientSessionResponse(BaseModel):
+    id: int
+    title: Optional[str] = None
+    sourceLocation: Optional[str] = None
+    sourceDevice: Optional[str] = None
+    teamLabel: Optional[str] = None
+    status: str
+    clientId: Optional[int] = None
+    clientName: Optional[str] = None
+    quoteId: Optional[int] = None
+    jobId: Optional[int] = None
+    segmentId: Optional[int] = None
+    workerId: Optional[int] = None
+    workerName: Optional[str] = None
+    operatorId: Optional[str] = None
+    correlationId: Optional[str] = None
+    startedAt: Optional[str] = None
+    endedAt: Optional[str] = None
+    capturedAt: Optional[str] = None
+    processedAt: Optional[str] = None
+    createdAt: str
+    updatedAt: str
+
+
+class AmbientTranscriptArtifactResponse(BaseModel):
+    id: int
+    ambientSessionId: int
+    serviceKey: str
+    status: str
+    transcriptText: Optional[str] = None
+    transcriptSegments: List[Dict[str, Any]] = Field(default_factory=list)
+    diarization: List[Dict[str, Any]] = Field(default_factory=list)
+    confidence: Optional[float] = None
+    isFinal: bool
+    errorMessage: Optional[str] = None
+    createdAt: str
+    updatedAt: str
 
 
 app = FastAPI(title="Corkysoft API", version="0.1.0")
@@ -910,6 +1706,1382 @@ def get_operations_conflicts(
     with connection_scope(_current_db_path()) as conn:
         rows = list_operational_conflicts(conn, job_id=job_id)
     return [OperationalConflictResponse(**row) for row in rows]
+
+
+@app.get(
+    "/operations/readiness/resources",
+    response_model=List[OperationalReadinessItemResponse],
+    summary="List due-soon and blocked operational readiness items",
+)
+def get_operations_readiness_resources(
+    resource_type: Optional[str] = Query(
+        default=None,
+        description="Optional filter: vehicle or worker",
+    ),
+    status: Optional[str] = Query(
+        default=None,
+        description="Optional filter: warning or blocked",
+    ),
+) -> List[OperationalReadinessItemResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_operational_readiness_items(
+            conn,
+            resource_type=resource_type,
+            status=status,
+        )
+    return [OperationalReadinessItemResponse(**row) for row in rows]
+
+
+@app.post(
+    "/operations/workers/{worker_id}/roles",
+    summary="Assign a role to a worker for operational planning",
+)
+def post_operations_worker_role(
+    worker_id: int = Path(..., description="Worker identifier"),
+    payload: WorkerRoleAssignmentRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> dict[str, Any]:
+    if payload.roleId is None and not (payload.roleName or "").strip():
+        raise HTTPException(status_code=400, detail="Provide roleId or roleName")
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            role_id = (
+                int(payload.roleId)
+                if payload.roleId is not None
+                else ensure_worker_role(
+                    conn,
+                    name=str(payload.roleName).strip(),
+                    description=payload.description or "",
+                )
+            )
+            assign_worker_role(conn, worker_id=worker_id, role_id=role_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"workerId": worker_id, "roleId": role_id}
+
+
+@app.post(
+    "/operations/workers/{worker_id}/compliances",
+    summary="Assign a compliance to a worker for operational planning",
+)
+def post_operations_worker_compliance(
+    worker_id: int = Path(..., description="Worker identifier"),
+    payload: WorkerComplianceAssignmentRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> dict[str, Any]:
+    if payload.complianceId is None and not (payload.complianceName or "").strip():
+        raise HTTPException(status_code=400, detail="Provide complianceId or complianceName")
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            compliance_id = (
+                int(payload.complianceId)
+                if payload.complianceId is not None
+                else ensure_worker_compliance(
+                    conn,
+                    name=str(payload.complianceName).strip(),
+                    description=payload.description or "",
+                )
+            )
+            assign_worker_compliance(
+                conn,
+                worker_id=worker_id,
+                compliance_id=compliance_id,
+                expiry_date=payload.expiryDate,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"workerId": worker_id, "complianceId": compliance_id, "expiryDate": payload.expiryDate}
+
+
+@app.get(
+    "/operations/labor/roster",
+    response_model=List[PlannedLaborAssignmentResponse],
+    summary="List native planned labor assignments from job segments",
+)
+def get_operations_labor_roster(
+    start_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD lower bound"),
+    end_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD upper bound"),
+    worker_id: Optional[int] = Query(default=None, description="Optional worker filter"),
+    truck_id: Optional[str] = Query(default=None, description="Optional truck filter"),
+) -> List[PlannedLaborAssignmentResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_planned_labor_assignments(
+            conn,
+            start_date=start_date,
+            end_date=end_date,
+            worker_id=worker_id,
+            truck_id=truck_id,
+        )
+    return [PlannedLaborAssignmentResponse(**row) for row in rows]
+
+
+@app.get(
+    "/operations/labor/reconciliation",
+    response_model=List[LaborReconciliationResponse],
+    summary="Compare native planned labor with imported VEHICLE_DRIVER shifts",
+)
+def get_operations_labor_reconciliation(
+    start_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD lower bound"),
+    end_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD upper bound"),
+) -> List[LaborReconciliationResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_labor_reconciliation(
+            conn,
+            start_date=start_date,
+            end_date=end_date,
+    )
+    return [LaborReconciliationResponse(**row) for row in rows]
+
+
+@app.get(
+    "/labor-analytics/summary",
+    response_model=LaborAnalyticsSummaryResponse,
+    summary="Summarize payroll-preparation and labor analytics for a date range",
+)
+def get_labor_analytics_summary(
+    start_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD lower bound"),
+    end_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD upper bound"),
+    overtime_daily_hours: Optional[float] = Query(
+        default=None, description="Optional daily overtime threshold in hours"
+    ),
+) -> LaborAnalyticsSummaryResponse:
+    with connection_scope(_current_db_path()) as conn:
+        payload = build_payroll_labor_analytics(
+            conn,
+            start_date=start_date,
+            end_date=end_date,
+            overtime_daily_hours=overtime_daily_hours,
+        )
+    return LaborAnalyticsSummaryResponse(**payload["summary"])
+
+
+@app.get(
+    "/labor-analytics/pay-forecast",
+    response_model=List[PayForecastRowResponse],
+    summary="List pay-forecast rows by worker for a date range",
+)
+def get_labor_analytics_pay_forecast(
+    start_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD lower bound"),
+    end_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD upper bound"),
+    overtime_daily_hours: Optional[float] = Query(
+        default=None, description="Optional daily overtime threshold in hours"
+    ),
+) -> List[PayForecastRowResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        payload = build_payroll_labor_analytics(
+            conn,
+            start_date=start_date,
+            end_date=end_date,
+            overtime_daily_hours=overtime_daily_hours,
+        )
+    return [PayForecastRowResponse(**row) for row in payload["payForecastRows"]]
+
+
+@app.get(
+    "/labor-analytics/export-summary",
+    response_model=List[ExportReadyLaborSummaryRowResponse],
+    summary="List export-ready labor summary rows for payroll/accounting handoff",
+)
+def get_labor_analytics_export_summary(
+    start_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD lower bound"),
+    end_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD upper bound"),
+    overtime_daily_hours: Optional[float] = Query(
+        default=None, description="Optional daily overtime threshold in hours"
+    ),
+) -> List[ExportReadyLaborSummaryRowResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        payload = build_payroll_labor_analytics(
+            conn,
+            start_date=start_date,
+            end_date=end_date,
+            overtime_daily_hours=overtime_daily_hours,
+        )
+    return [
+        ExportReadyLaborSummaryRowResponse(**row)
+        for row in payload["exportReadyLaborSummaries"]
+    ]
+
+
+@app.get(
+    "/labor-analytics/overtime",
+    response_model=List[OvertimeDistributionRowResponse],
+    summary="List daily overtime distribution rows for a date range",
+)
+def get_labor_analytics_overtime(
+    start_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD lower bound"),
+    end_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD upper bound"),
+    overtime_daily_hours: Optional[float] = Query(
+        default=None, description="Optional daily overtime threshold in hours"
+    ),
+) -> List[OvertimeDistributionRowResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        payload = build_payroll_labor_analytics(
+            conn,
+            start_date=start_date,
+            end_date=end_date,
+            overtime_daily_hours=overtime_daily_hours,
+        )
+    return [OvertimeDistributionRowResponse(**row) for row in payload["overtimeRows"]]
+
+
+@app.get(
+    "/labor-analytics/confidence",
+    response_model=LaborConfidenceSummaryResponse,
+    summary="Summarize payroll-prep confidence and worker-time anomalies for a date range",
+)
+def get_labor_analytics_confidence(
+    start_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD lower bound"),
+    end_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD upper bound"),
+    overtime_daily_hours: Optional[float] = Query(
+        default=None, description="Optional daily overtime threshold in hours"
+    ),
+) -> LaborConfidenceSummaryResponse:
+    with connection_scope(_current_db_path()) as conn:
+        payload = build_payroll_labor_analytics(
+            conn,
+            start_date=start_date,
+            end_date=end_date,
+            overtime_daily_hours=overtime_daily_hours,
+        )
+    return LaborConfidenceSummaryResponse(**payload["confidence"])
+
+
+@app.get(
+    "/labor-analytics/absence",
+    response_model=LaborAbsenceSummaryResponse,
+    summary="Summarize recorded absence and leave rows for a date range",
+)
+def get_labor_analytics_absence(
+    start_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD lower bound"),
+    end_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD upper bound"),
+    overtime_daily_hours: Optional[float] = Query(
+        default=None, description="Optional daily overtime threshold in hours"
+    ),
+) -> LaborAbsenceSummaryResponse:
+    with connection_scope(_current_db_path()) as conn:
+        payload = build_payroll_labor_analytics(
+            conn,
+            start_date=start_date,
+            end_date=end_date,
+            overtime_daily_hours=overtime_daily_hours,
+        )
+    return LaborAbsenceSummaryResponse(**payload["absenceSummary"])
+
+
+@app.get(
+    "/labor-analytics/cost-drivers",
+    response_model=List[LaborCostDriverRowResponse],
+    summary="List labor cost drivers grouped by worker, client, corridor, truck, or job",
+)
+def get_labor_analytics_cost_drivers(
+    dimension: str = Query(
+        default="worker",
+        description="Grouping dimension: worker, client, corridor, truck, or job",
+    ),
+    start_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD lower bound"),
+    end_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD upper bound"),
+    overtime_daily_hours: Optional[float] = Query(
+        default=None, description="Optional daily overtime threshold in hours"
+    ),
+) -> List[LaborCostDriverRowResponse]:
+    normalized_dimension = dimension.strip().lower()
+    if normalized_dimension not in {"worker", "client", "corridor", "truck", "job"}:
+        raise HTTPException(status_code=400, detail="Unsupported labor cost-driver dimension")
+    with connection_scope(_current_db_path()) as conn:
+        payload = build_payroll_labor_analytics(
+            conn,
+            start_date=start_date,
+            end_date=end_date,
+            overtime_daily_hours=overtime_daily_hours,
+        )
+    return [
+        LaborCostDriverRowResponse(**row)
+        for row in payload["laborCostDrivers"][normalized_dimension]
+    ]
+
+
+@app.get(
+    "/worker-absence/records",
+    response_model=List[WorkerAbsenceRecordResponse],
+    summary="List worker absence and leave records",
+)
+def get_worker_absence_records(
+    worker_id: Optional[int] = Query(default=None),
+    start_date: Optional[str] = Query(default=None),
+    end_date: Optional[str] = Query(default=None),
+    status: Optional[str] = Query(default=None),
+) -> List[WorkerAbsenceRecordResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_worker_absence_records(
+            conn,
+            worker_id=worker_id,
+            start_date=start_date,
+            end_date=end_date,
+            status=status,
+        )
+    return [WorkerAbsenceRecordResponse(**row) for row in rows]
+
+
+@app.post(
+    "/worker-absence/records",
+    response_model=WorkerAbsenceRecordResponse,
+    dependencies=[Depends(require_internal_api_token)],
+    summary="Create a worker absence or leave record",
+)
+def create_worker_absence(
+    payload: WorkerAbsenceRecordRequest,
+) -> WorkerAbsenceRecordResponse:
+    if payload.absenceType.strip().lower() not in ABSENCE_RECORD_TYPES:
+        raise HTTPException(status_code=400, detail="Unsupported absence type")
+    if payload.status.strip().lower() not in ABSENCE_RECORD_STATUSES:
+        raise HTTPException(status_code=400, detail="Unsupported absence status")
+    with connection_scope(_current_db_path()) as conn:
+        row = create_worker_absence_record(
+            conn,
+            worker_id=payload.workerId,
+            start_date=payload.startDate,
+            end_date=payload.endDate,
+            absence_type=payload.absenceType,
+            status=payload.status,
+            hours_per_day=payload.hoursPerDay,
+            note=payload.note,
+            source=payload.source,
+            recorded_by=payload.recordedBy,
+        )
+    return WorkerAbsenceRecordResponse(
+        **{
+            "id": int(row["id"]),
+            "workerId": int(row["worker_id"]),
+            "workerName": row["worker_name"],
+            "startDate": row["start_date"],
+            "endDate": row["end_date"],
+            "absenceType": row["absence_type"],
+            "status": row["status"],
+            "hoursPerDay": row["hours_per_day"],
+            "note": row["note"],
+            "source": row["source"],
+            "recordedBy": row["recorded_by"],
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+        }
+    )
+
+
+@app.get(
+    "/operations/inventory/segments",
+    response_model=List[SegmentInventoryCoordinationResponse],
+    summary="List segment-linked inventory and supplier coordination",
+)
+def get_operations_inventory_segments(
+    job_id: Optional[int] = Query(default=None, description="Optional job filter"),
+) -> List[SegmentInventoryCoordinationResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_segment_inventory_coordination(conn, job_id=job_id)
+    return [SegmentInventoryCoordinationResponse(**row) for row in rows]
+
+
+@app.get(
+    "/operations/jobs/board",
+    response_model=List[JobOperationsBoardResponse],
+    summary="List job-centric operational board rows",
+)
+def get_operations_jobs_board(
+    job_id: Optional[int] = Query(default=None, description="Optional job filter"),
+) -> List[JobOperationsBoardResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_job_operations_board(conn, job_id=job_id)
+    return [JobOperationsBoardResponse(**row) for row in rows]
+
+
+@app.get(
+    "/operations/cutover/workflows",
+    response_model=List[OperationsCutoverWorkflowResponse],
+    summary="List spreadsheet-to-native workflow cutover status",
+)
+def get_operations_cutover_workflows() -> List[OperationsCutoverWorkflowResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_operations_cutover_rollout(conn)
+    return [OperationsCutoverWorkflowResponse(**row) for row in rows]
+
+
+@app.put(
+    "/operations/cutover/workflows/{workflow_key}",
+    response_model=OperationsCutoverWorkflowResponse,
+    summary="Update workflow cutover status and fallback rules",
+)
+def put_operations_cutover_workflow(
+    workflow_key: str = Path(..., description="Workflow identifier"),
+    payload: OperationsCutoverWorkflowUpdateRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> OperationsCutoverWorkflowResponse:
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = upsert_operations_cutover_workflow(
+                conn,
+                workflow_key=workflow_key,
+                cutover_status=payload.cutoverStatus,
+                owner_role=payload.ownerRole,
+                snapshot_mode=payload.snapshotMode,
+                snapshot_fields=payload.snapshotFields,
+                fallback_mode=payload.fallbackMode,
+                cutover_target_percent=payload.cutoverTargetPercent,
+                native_ready=payload.nativeReady,
+                dual_run_complete=payload.dualRunComplete,
+                fallback_drill_complete=payload.fallbackDrillComplete,
+                operator_trained=payload.operatorTrained,
+                rollback_instructions=payload.rollbackInstructions,
+                notes=payload.notes,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        row = next(item for item in list_operations_cutover_rollout(conn) if item["workflowKey"] == workflow_key)
+    return OperationsCutoverWorkflowResponse(**row)
+
+
+@app.post(
+    "/operations/cutover/workflows/{workflow_key}/request-promotion",
+    response_model=OperationsCutoverWorkflowResponse,
+    summary="Request the next guarded cutover promotion",
+)
+def post_operations_cutover_request_promotion(
+    workflow_key: str = Path(..., description="Workflow identifier"),
+    payload: OperationsCutoverPromotionRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> OperationsCutoverWorkflowResponse:
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = request_operations_cutover_promotion(
+                conn,
+                workflow_key=workflow_key,
+                actor=payload.actor,
+                note=payload.note,
+                target_status=payload.targetStatus,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return OperationsCutoverWorkflowResponse(**row)
+
+
+@app.post(
+    "/operations/cutover/workflows/{workflow_key}/approve-promotion",
+    response_model=OperationsCutoverWorkflowResponse,
+    summary="Approve the next guarded cutover promotion",
+)
+def post_operations_cutover_approve_promotion(
+    workflow_key: str = Path(..., description="Workflow identifier"),
+    payload: OperationsCutoverPromotionDecisionRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> OperationsCutoverWorkflowResponse:
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = approve_operations_cutover_promotion(
+                conn,
+                workflow_key=workflow_key,
+                actor=payload.actor,
+                note=payload.note,
+                target_status=payload.targetStatus,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return OperationsCutoverWorkflowResponse(**row)
+
+
+@app.post(
+    "/operations/cutover/workflows/{workflow_key}/reject-promotion",
+    response_model=OperationsCutoverWorkflowResponse,
+    summary="Reject the next guarded cutover promotion",
+)
+def post_operations_cutover_reject_promotion(
+    workflow_key: str = Path(..., description="Workflow identifier"),
+    payload: OperationsCutoverPromotionDecisionRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> OperationsCutoverWorkflowResponse:
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = reject_operations_cutover_promotion(
+                conn,
+                workflow_key=workflow_key,
+                actor=payload.actor,
+                note=payload.note or "",
+                target_status=payload.targetStatus,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return OperationsCutoverWorkflowResponse(**row)
+
+
+@app.post(
+    "/operations/cutover/workflows/{workflow_key}/apply-recommendation",
+    response_model=OperationsCutoverWorkflowResponse,
+    summary="Apply the guarded recommended cutover transition",
+)
+def post_operations_cutover_apply_recommendation(
+    workflow_key: str = Path(..., description="Workflow identifier"),
+    payload: OperationsCutoverTransitionRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> OperationsCutoverWorkflowResponse:
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = apply_operations_cutover_recommendation(
+                conn,
+                workflow_key=workflow_key,
+                actor=payload.actor,
+                note=payload.note,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return OperationsCutoverWorkflowResponse(**row)
+
+
+@app.get(
+    "/operations/cutover/events",
+    response_model=List[OperationsCutoverEventResponse],
+    summary="List spreadsheet cutover events",
+)
+def get_operations_cutover_events(
+    workflow_key: Optional[str] = Query(default=None, description="Optional workflow filter"),
+    event_type: Optional[str] = Query(default=None, description="Optional event-type filter"),
+    limit: int = Query(default=100, ge=1, le=500, description="Maximum events to return"),
+) -> List[OperationsCutoverEventResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_operations_cutover_events(
+            conn,
+            workflow_key=workflow_key,
+            event_type=event_type,
+            limit=limit,
+        )
+    return [OperationsCutoverEventResponse(**row) for row in rows]
+
+
+@app.post(
+    "/operations/cutover/workflows/{workflow_key}/events",
+    response_model=OperationsCutoverEventResponse,
+    summary="Record a spreadsheet cutover event",
+)
+def post_operations_cutover_event(
+    workflow_key: str = Path(..., description="Workflow identifier"),
+    payload: OperationsCutoverEventRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> OperationsCutoverEventResponse:
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = record_operations_cutover_event(
+                conn,
+                workflow_key=workflow_key,
+                event_type=payload.eventType,
+                actor=payload.actor,
+                note=payload.note,
+                event_value=payload.eventValue,
+                created_at=payload.createdAt,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return OperationsCutoverEventResponse(**row)
+
+
+@app.post(
+    "/operations/inventory/segments/{segment_id}/allocate",
+    summary="Allocate inventory to a planned job segment",
+)
+def post_operations_inventory_allocation(
+    segment_id: int = Path(..., description="Segment identifier"),
+    payload: SegmentInventoryAllocationRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> dict[str, Any]:
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            shipment = allocate_inventory_to_segment(
+                conn,
+                segment_id=segment_id,
+                inventory_item_id=payload.inventoryItemId,
+                quantity=payload.quantity,
+                status=payload.status,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "segmentId": segment_id,
+        "shipmentId": int(shipment["id"]),
+        "inventoryItemId": payload.inventoryItemId,
+        "quantity": payload.quantity,
+        "status": payload.status,
+    }
+
+
+@app.get(
+    "/calls/sessions",
+    response_model=List[CallSessionResponse],
+    summary="List call sessions with routing-aware context",
+)
+def get_call_sessions(
+    status: Optional[str] = Query(default=None),
+    event_kind: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> List[CallSessionResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_call_sessions(conn, status=status, event_kind=event_kind, limit=limit)
+    return [CallSessionResponse(**row) for row in rows]
+
+
+@app.post(
+    "/calls/sessions",
+    response_model=CallSessionResponse,
+    summary="Create a routed call session with an initial leg",
+)
+def post_call_session(
+    payload: CallSessionCreateRequest,
+    _auth: None = Depends(require_internal_api_token),
+) -> CallSessionResponse:
+    if payload.eventKind not in CALL_EVENT_KINDS:
+        raise HTTPException(status_code=400, detail="Unsupported call event kind")
+    if payload.direction not in CALL_DIRECTIONS:
+        raise HTTPException(status_code=400, detail="Unsupported call direction")
+    if payload.status not in CALL_STATUSES:
+        raise HTTPException(status_code=400, detail="Unsupported call status")
+    if payload.sourceChannel not in CALL_SOURCE_CHANNELS:
+        raise HTTPException(status_code=400, detail="Unsupported call source channel")
+    with connection_scope(_current_db_path()) as conn:
+        row = create_call_session(
+            conn,
+            event_kind=payload.eventKind,
+            direction=payload.direction,
+            status=payload.status,
+            source_channel=payload.sourceChannel,
+            title=payload.title,
+            caller_phone=payload.callerPhone,
+            callee_phone=payload.calleePhone,
+            quote_id=payload.quoteId,
+            job_id=payload.jobId,
+            segment_id=payload.segmentId,
+            worker_id=payload.workerId,
+            operator_id=payload.operatorId,
+            started_at=payload.startedAt,
+            ended_at=payload.endedAt,
+            captured_at=payload.capturedAt,
+            correlation_id=payload.correlationId,
+            initial_destination_kind=payload.initialDestinationKind,
+            initial_destination_label=payload.initialDestinationLabel,
+        )
+    return CallSessionResponse(**row)
+
+
+@app.get(
+    "/calls/sessions/{call_session_id}",
+    response_model=CallSessionResponse,
+    summary="Get a single call session",
+)
+def get_call_session_by_id(call_session_id: int = Path(...)) -> CallSessionResponse:
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = get_call_session(conn, call_session_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return CallSessionResponse(**row)
+
+
+@app.get(
+    "/calls/sessions/{call_session_id}/legs",
+    response_model=List[CallLegResponse],
+    summary="List call legs for a session",
+)
+def get_call_session_legs(call_session_id: int = Path(...)) -> List[CallLegResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_call_legs(conn, call_session_id=call_session_id)
+    return [CallLegResponse(**row) for row in rows]
+
+
+@app.post(
+    "/calls/sessions/{call_session_id}/legs",
+    response_model=CallLegResponse,
+    summary="Add a routed or consult leg to a call session",
+)
+def post_call_session_leg(
+    call_session_id: int = Path(...),
+    payload: CallLegCreateRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> CallLegResponse:
+    if payload.legKind not in CALL_LEG_KINDS:
+        raise HTTPException(status_code=400, detail="Unsupported call leg kind")
+    if payload.direction not in CALL_DIRECTIONS:
+        raise HTTPException(status_code=400, detail="Unsupported call direction")
+    if payload.status not in CALL_STATUSES:
+        raise HTTPException(status_code=400, detail="Unsupported call status")
+    if payload.sourceChannel not in CALL_SOURCE_CHANNELS:
+        raise HTTPException(status_code=400, detail="Unsupported call source channel")
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = create_call_leg(
+                conn,
+                call_session_id=call_session_id,
+                leg_kind=payload.legKind,
+                direction=payload.direction,
+                status=payload.status,
+                source_channel=payload.sourceChannel,
+                destination_kind=payload.destinationKind,
+                destination_label=payload.destinationLabel,
+                operator_id=payload.operatorId,
+                caller_phone=payload.callerPhone,
+                callee_phone=payload.calleePhone,
+                started_at=payload.startedAt,
+                answered_at=payload.answeredAt,
+                ended_at=payload.endedAt,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return CallLegResponse(**row)
+
+
+@app.get(
+    "/calls/sessions/{call_session_id}/routing-events",
+    response_model=List[CallRoutingEventResponse],
+    summary="List routing events for a call session",
+)
+def get_call_session_routing_events(call_session_id: int = Path(...)) -> List[CallRoutingEventResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_call_routing_events(conn, call_session_id=call_session_id)
+    return [CallRoutingEventResponse(**row) for row in rows]
+
+
+@app.post(
+    "/calls/sessions/{call_session_id}/routing-events",
+    response_model=CallRoutingEventResponse,
+    summary="Record a routing or transfer event for a call session",
+)
+def post_call_session_routing_event(
+    call_session_id: int = Path(...),
+    payload: CallRoutingEventCreateRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> CallRoutingEventResponse:
+    if payload.eventType not in CALL_ROUTING_EVENT_TYPES:
+        raise HTTPException(status_code=400, detail="Unsupported routing event type")
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = log_call_routing_event(
+                conn,
+                call_session_id=call_session_id,
+                event_type=payload.eventType,
+                call_leg_id=payload.callLegId,
+                from_destination=payload.fromDestination,
+                to_destination=payload.toDestination,
+                actor=payload.actor,
+                detail=payload.detail,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return CallRoutingEventResponse(**row)
+
+
+@app.get(
+    "/calls/ambient-sessions",
+    response_model=List[AmbientSessionResponse],
+    summary="List ambient office transcript sessions",
+)
+def get_ambient_call_sessions(limit: int = Query(default=100, ge=1, le=500)) -> List[AmbientSessionResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_ambient_sessions(conn, limit=limit)
+    return [AmbientSessionResponse(**row) for row in rows]
+
+
+@app.post(
+    "/calls/ambient-sessions",
+    response_model=AmbientSessionResponse,
+    summary="Create an ambient office transcript session",
+)
+def post_ambient_call_session(
+    payload: AmbientSessionCreateRequest,
+    _auth: None = Depends(require_internal_api_token),
+) -> AmbientSessionResponse:
+    if payload.status not in AMBIENT_SESSION_STATUSES:
+        raise HTTPException(status_code=400, detail="Unsupported ambient session status")
+    with connection_scope(_current_db_path()) as conn:
+        row = create_ambient_session(
+            conn,
+            title=payload.title,
+            source_location=payload.sourceLocation,
+            source_device=payload.sourceDevice,
+            team_label=payload.teamLabel,
+            status=payload.status,
+            client_id=payload.clientId,
+            quote_id=payload.quoteId,
+            job_id=payload.jobId,
+            segment_id=payload.segmentId,
+            worker_id=payload.workerId,
+            operator_id=payload.operatorId,
+            started_at=payload.startedAt,
+            ended_at=payload.endedAt,
+            captured_at=payload.capturedAt,
+            correlation_id=payload.correlationId,
+        )
+    return AmbientSessionResponse(**row)
+
+
+@app.get(
+    "/calls/ambient-sessions/{ambient_session_id}",
+    response_model=AmbientSessionResponse,
+    summary="Get a single ambient office transcript session",
+)
+def get_ambient_call_session_by_id(ambient_session_id: int = Path(...)) -> AmbientSessionResponse:
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = get_ambient_session(conn, ambient_session_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return AmbientSessionResponse(**row)
+
+
+@app.get(
+    "/calls/ambient-sessions/{ambient_session_id}/transcripts",
+    response_model=List[AmbientTranscriptArtifactResponse],
+    summary="List transcript artifacts for an ambient office session",
+)
+def get_ambient_call_session_transcripts(ambient_session_id: int = Path(...)) -> List[AmbientTranscriptArtifactResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_ambient_transcript_artifacts(conn, ambient_session_id=ambient_session_id)
+    return [AmbientTranscriptArtifactResponse(**row) for row in rows]
+
+
+@app.post(
+    "/calls/ambient-sessions/{ambient_session_id}/transcripts/manual",
+    response_model=AmbientTranscriptArtifactResponse,
+    summary="Create a manual transcript artifact for an ambient session",
+)
+def post_ambient_call_session_transcript(
+    ambient_session_id: int = Path(...),
+    payload: TranscriptArtifactCreateRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> AmbientTranscriptArtifactResponse:
+    with connection_scope(_current_db_path()) as conn:
+        row = record_ambient_transcript_artifact(
+            conn,
+            ambient_session_id=ambient_session_id,
+            service_key=payload.serviceKey,
+            status=payload.status,
+            transcript_text=payload.transcriptText,
+            confidence=payload.confidence,
+            is_final=payload.isFinal,
+        )
+    return AmbientTranscriptArtifactResponse(**row)
+
+
+@app.post(
+    "/calls/ambient-sessions/{ambient_session_id}/transcripts/fake",
+    response_model=AmbientTranscriptArtifactResponse,
+    summary="Generate a fake transcript artifact for an ambient office session",
+)
+def post_fake_ambient_call_session_transcript(
+    ambient_session_id: int = Path(...),
+    payload: FakeTranscriptRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> AmbientTranscriptArtifactResponse:
+    with connection_scope(_current_db_path()) as conn:
+        row = generate_fake_ambient_transcript_artifact(
+            conn,
+            ambient_session_id=ambient_session_id,
+            scenario=payload.scenario,
+            operator_goal=payload.operatorGoal,
+            service_key=payload.serviceKey,
+        )
+    return AmbientTranscriptArtifactResponse(**row)
+
+
+@app.get(
+    "/calls/events",
+    response_model=List[CallEventResponse],
+    summary="List operational call events",
+)
+def get_call_events(
+    status: Optional[str] = Query(default=None, description="Optional call status filter"),
+    event_kind: Optional[str] = Query(default=None, description="Optional call-kind filter"),
+    unresolved_only: bool = Query(default=False, description="Only list unresolved call events"),
+    limit: int = Query(default=100, ge=1, le=500, description="Maximum rows to return"),
+) -> List[CallEventResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_call_events(
+            conn,
+            limit=limit,
+            status=status,
+            event_kind=event_kind,
+            unresolved_only=unresolved_only,
+        )
+    return [CallEventResponse(**row) for row in rows]
+
+
+@app.post(
+    "/calls/events",
+    response_model=CallEventResponse,
+    summary="Create a call event and auto-link by phone where possible",
+)
+def post_call_event(
+    payload: CallEventCreateRequest,
+    _auth: None = Depends(require_internal_api_token),
+) -> CallEventResponse:
+    if payload.eventKind not in CALL_EVENT_KINDS:
+        raise HTTPException(status_code=400, detail="Unsupported call event kind")
+    if payload.direction not in CALL_DIRECTIONS:
+        raise HTTPException(status_code=400, detail="Unsupported call direction")
+    if payload.status not in CALL_STATUSES:
+        raise HTTPException(status_code=400, detail="Unsupported call status")
+    if payload.sourceChannel not in CALL_SOURCE_CHANNELS:
+        raise HTTPException(status_code=400, detail="Unsupported call source channel")
+    with connection_scope(_current_db_path()) as conn:
+        row = create_call_event(
+            conn,
+            event_kind=payload.eventKind,
+            direction=payload.direction,
+            status=payload.status,
+            source_channel=payload.sourceChannel,
+            title=payload.title,
+            caller_phone=payload.callerPhone,
+            callee_phone=payload.calleePhone,
+            quote_id=payload.quoteId,
+            job_id=payload.jobId,
+            segment_id=payload.segmentId,
+            worker_id=payload.workerId,
+            operator_id=payload.operatorId,
+            started_at=payload.startedAt,
+            ended_at=payload.endedAt,
+            captured_at=payload.capturedAt,
+            correlation_id=payload.correlationId,
+        )
+    return CallEventResponse(**row)
+
+
+@app.get(
+    "/calls/events/{call_event_id}",
+    response_model=CallEventResponse,
+    summary="Get a single operational call event",
+)
+def get_call_event_by_id(
+    call_event_id: int = Path(..., description="Call event identifier"),
+) -> CallEventResponse:
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = get_call_event(conn, call_event_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return CallEventResponse(**row)
+
+
+@app.get(
+    "/calls/events/{call_event_id}/notes",
+    response_model=List[CallNoteResponse],
+    summary="List notes attached to a call event",
+)
+def get_call_notes_for_event(
+    call_event_id: int = Path(..., description="Call event identifier"),
+) -> List[CallNoteResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_call_notes(conn, call_event_id=call_event_id)
+    return [CallNoteResponse(**row) for row in rows]
+
+
+@app.post(
+    "/calls/events/{call_event_id}/notes",
+    response_model=CallNoteResponse,
+    summary="Add an authoritative or advisory note to a call event",
+)
+def post_call_note(
+    call_event_id: int = Path(..., description="Call event identifier"),
+    payload: CallNoteCreateRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> CallNoteResponse:
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = add_call_note(
+                conn,
+                call_event_id=call_event_id,
+                author=payload.author,
+                note_text=payload.noteText,
+                note_kind=payload.noteKind,
+                authoritative=payload.authoritative,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return CallNoteResponse(**row)
+
+
+@app.get(
+    "/calls/events/{call_event_id}/extracted-actions",
+    response_model=List[ExtractedActionResponse],
+    summary="List extracted action candidates for a call event",
+)
+def get_call_extracted_actions(
+    call_event_id: int = Path(..., description="Call event identifier"),
+) -> List[ExtractedActionResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_extracted_actions(conn, call_event_id=call_event_id)
+    return [ExtractedActionResponse(**row) for row in rows]
+
+
+@app.post(
+    "/calls/events/{call_event_id}/extracted-actions",
+    response_model=ExtractedActionResponse,
+    summary="Add an extracted action candidate for review",
+)
+def post_call_extracted_action(
+    call_event_id: int = Path(..., description="Call event identifier"),
+    payload: ExtractedActionCreateRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> ExtractedActionResponse:
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = add_extracted_action(
+                conn,
+                call_event_id=call_event_id,
+                action_text=payload.actionText,
+                source_engine=payload.sourceEngine,
+                transcript_artifact_id=payload.transcriptArtifactId,
+                span_start=payload.spanStart,
+                span_end=payload.spanEnd,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ExtractedActionResponse(**row)
+
+
+@app.post(
+    "/calls/extracted-actions/{action_id}/decision",
+    response_model=ExtractedActionResponse,
+    summary="Accept or reject an extracted action candidate",
+)
+def post_call_extracted_action_decision(
+    action_id: int = Path(..., description="Extracted action identifier"),
+    payload: ExtractedActionDecisionRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> ExtractedActionResponse:
+    if payload.status not in EXTRACTED_ACTION_STATUSES or payload.status == "pending":
+        raise HTTPException(status_code=400, detail="Decision status must be accepted or rejected")
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = decide_extracted_action(
+                conn,
+                action_id=action_id,
+                status=payload.status,
+                decided_by=payload.decidedBy,
+                decision_note=payload.decisionNote,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ExtractedActionResponse(**row)
+
+
+@app.post(
+    "/calls/events/{call_event_id}/resolve",
+    response_model=CallEventResponse,
+    summary="Resolve a call event to client/job/segment/worker context",
+)
+def post_call_link_resolution(
+    call_event_id: int = Path(..., description="Call event identifier"),
+    payload: CallLinkResolutionRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> CallEventResponse:
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = resolve_call_links(
+                conn,
+                call_event_id=call_event_id,
+                actor=payload.actor,
+                client_id=payload.clientId,
+                quote_id=payload.quoteId,
+                job_id=payload.jobId,
+                segment_id=payload.segmentId,
+                worker_id=payload.workerId,
+                resolution_note=payload.resolutionNote,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return CallEventResponse(**row)
+
+
+@app.get(
+    "/calls/legs/{call_leg_id}/transcripts",
+    response_model=List[TranscriptArtifactResponse],
+    summary="List transcript artifacts for a call leg",
+)
+def get_call_leg_transcripts(
+    call_leg_id: int = Path(..., description="Call leg identifier"),
+) -> List[TranscriptArtifactResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_transcript_artifacts(conn, call_leg_id=call_leg_id)
+    return [TranscriptArtifactResponse(**row) for row in rows]
+
+
+@app.post(
+    "/calls/legs/{call_leg_id}/transcripts/manual",
+    response_model=TranscriptArtifactResponse,
+    summary="Create a manual transcript artifact for a call leg",
+)
+def post_manual_call_leg_transcript(
+    call_leg_id: int = Path(..., description="Call leg identifier"),
+    payload: TranscriptArtifactCreateRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> TranscriptArtifactResponse:
+    with connection_scope(_current_db_path()) as conn:
+        row = record_transcript_artifact(
+            conn,
+            call_leg_id=call_leg_id,
+            service_key=payload.serviceKey,
+            status=payload.status,
+            transcript_text=payload.transcriptText,
+            confidence=payload.confidence,
+            is_final=payload.isFinal,
+        )
+    return TranscriptArtifactResponse(**row)
+
+
+@app.post(
+    "/calls/legs/{call_leg_id}/transcripts/fake",
+    response_model=TranscriptArtifactResponse,
+    summary="Generate a fake transcript artifact for a call leg",
+)
+def post_fake_call_leg_transcript(
+    call_leg_id: int = Path(..., description="Call leg identifier"),
+    payload: FakeTranscriptRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> TranscriptArtifactResponse:
+    with connection_scope(_current_db_path()) as conn:
+        row = generate_fake_transcript_artifact(
+            conn,
+            call_leg_id=call_leg_id,
+            scenario=payload.scenario,
+            operator_goal=payload.operatorGoal,
+            service_key=payload.serviceKey,
+        )
+    return TranscriptArtifactResponse(**row)
+
+
+@app.post(
+    "/calls/legs/{call_leg_id}/transcripts/upload",
+    response_model=TranscriptArtifactResponse,
+    summary="Submit audio to WhisperX and create a queued transcript artifact for a call leg",
+)
+def post_call_leg_transcript_upload(
+    call_leg_id: int = Path(..., description="Call leg identifier"),
+    payload: TranscriptUploadRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> TranscriptArtifactResponse:
+    try:
+        file_bytes = base64.b64decode(payload.contentBase64.encode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="contentBase64 must contain valid base64 data") from exc
+    with connection_scope(_current_db_path()) as conn:
+        row = submit_call_audio_for_transcription(
+            conn,
+            call_leg_id=call_leg_id,
+            service_key=payload.serviceKey,
+            file_bytes=file_bytes,
+            filename=payload.filename or "call_audio.bin",
+            language=payload.language,
+            diarize=payload.diarize,
+        )
+    return TranscriptArtifactResponse(**row)
+
+
+@app.get(
+    "/calls/events/{call_event_id}/transcripts",
+    response_model=List[TranscriptArtifactResponse],
+    summary="List transcript artifacts for a call event",
+)
+def get_call_transcripts(
+    call_event_id: int = Path(..., description="Call event identifier"),
+) -> List[TranscriptArtifactResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_transcript_artifacts(conn, call_event_id=call_event_id)
+    return [TranscriptArtifactResponse(**row) for row in rows]
+
+
+@app.post(
+    "/calls/events/{call_event_id}/transcripts/manual",
+    response_model=TranscriptArtifactResponse,
+    summary="Create a manual transcript artifact",
+)
+def post_manual_call_transcript(
+    call_event_id: int = Path(..., description="Call event identifier"),
+    payload: TranscriptArtifactCreateRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> TranscriptArtifactResponse:
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = record_transcript_artifact(
+                conn,
+                call_event_id=call_event_id,
+                service_key=payload.serviceKey,
+                status=payload.status,
+                transcript_text=payload.transcriptText,
+                confidence=payload.confidence,
+                is_final=payload.isFinal,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return TranscriptArtifactResponse(**row)
+
+
+@app.post(
+    "/calls/events/{call_event_id}/transcripts/fake",
+    response_model=TranscriptArtifactResponse,
+    summary="Generate a fake transcript artifact for workflow testing",
+)
+def post_fake_call_transcript(
+    call_event_id: int = Path(..., description="Call event identifier"),
+    payload: FakeTranscriptRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> TranscriptArtifactResponse:
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = generate_fake_transcript_artifact(
+                conn,
+                call_event_id=call_event_id,
+                scenario=payload.scenario,
+                operator_goal=payload.operatorGoal,
+                service_key=payload.serviceKey,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return TranscriptArtifactResponse(**row)
+
+
+@app.post(
+    "/calls/events/{call_event_id}/transcripts/upload",
+    response_model=TranscriptArtifactResponse,
+    summary="Submit audio to WhisperX and create a queued transcript artifact",
+)
+def post_call_transcript_upload(
+    call_event_id: int = Path(..., description="Call event identifier"),
+    payload: TranscriptUploadRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> TranscriptArtifactResponse:
+    try:
+        file_bytes = base64.b64decode(payload.contentBase64.encode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="contentBase64 must contain valid base64 data") from exc
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = submit_call_audio_for_transcription(
+                conn,
+                call_event_id=call_event_id,
+                service_key=payload.serviceKey,
+                file_bytes=file_bytes,
+                filename=payload.filename or "call_audio.bin",
+                language=payload.language,
+                diarize=payload.diarize,
+            )
+        except WhisperXAdapterError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return TranscriptArtifactResponse(**row)
+
+
+@app.post(
+    "/calls/transcripts/{artifact_id}/poll",
+    response_model=TranscriptArtifactResponse,
+    summary="Poll WhisperX for transcript task completion",
+)
+def post_call_transcript_poll(
+    artifact_id: int = Path(..., description="Transcript artifact identifier"),
+    _auth: None = Depends(require_internal_api_token),
+) -> TranscriptArtifactResponse:
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = poll_transcript_artifact(conn, artifact_id=artifact_id)
+        except WhisperXAdapterError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return TranscriptArtifactResponse(**row)
+
+
+@app.get(
+    "/worker-time/events",
+    response_model=List[WorkerTimeCaptureResponse],
+    summary="List worker time-capture events and review state",
+)
+def get_worker_time_events(
+    review_status: Optional[str] = Query(default=None, description="Optional review-status filter"),
+    limit: int = Query(default=100, ge=1, le=500, description="Maximum rows to return"),
+) -> List[WorkerTimeCaptureResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_worker_time_capture_events(conn, review_status=review_status, limit=limit)
+    return [WorkerTimeCaptureResponse(**row) for row in rows]
+
+
+@app.post(
+    "/worker-time/events",
+    response_model=WorkerTimeCaptureResponse,
+    summary="Record a worker time-capture event from app, WhatsApp, or voice call",
+)
+def post_worker_time_event(
+    payload: WorkerTimeCaptureCreateRequest,
+    _auth: None = Depends(require_internal_api_token),
+) -> WorkerTimeCaptureResponse:
+    if payload.eventType not in WORKER_TIME_EVENT_TYPES:
+        raise HTTPException(status_code=400, detail="Unsupported worker time event type")
+    if payload.channel not in WORKER_TIME_CHANNELS:
+        raise HTTPException(status_code=400, detail="Unsupported worker time channel")
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = record_worker_time_capture_event(
+                conn,
+                call_event_id=payload.callEventId,
+                call_session_id=payload.callSessionId,
+                call_leg_id=payload.callLegId,
+                worker_id=payload.workerId,
+                worker_name_raw=payload.workerNameRaw,
+                employee_code_raw=payload.employeeCodeRaw,
+                event_type=payload.eventType,
+                channel=payload.channel,
+                effective_timestamp=payload.effectiveTimestamp,
+                caller_phone=payload.callerPhone,
+                job_id=payload.jobId,
+                segment_id=payload.segmentId,
+                truck_id=payload.truckId,
+                confidence=payload.confidence,
+                raw_payload=payload.rawPayload,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return WorkerTimeCaptureResponse(**row)
+
+
+@app.post(
+    "/worker-time/events/{event_id}/decision",
+    response_model=WorkerTimeCaptureResponse,
+    summary="Accept or reject a worker time-capture event after review",
+)
+def post_worker_time_event_decision(
+    event_id: int = Path(..., description="Worker time event identifier"),
+    payload: WorkerTimeCaptureDecisionRequest = ...,
+    _auth: None = Depends(require_internal_api_token),
+) -> WorkerTimeCaptureResponse:
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = decide_worker_time_capture_event(
+                conn,
+                event_id=event_id,
+                review_status=payload.reviewStatus,
+                reviewer=payload.reviewer,
+                review_note=payload.reviewNote,
+                worker_id=payload.workerId,
+                job_id=payload.jobId,
+                segment_id=payload.segmentId,
+                truck_id=payload.truckId,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return WorkerTimeCaptureResponse(**row)
+
+
+@app.get(
+    "/state-egress/events",
+    response_model=List[StateEgressEventResponse],
+    summary="List append-only downstream state events prepared for StatiBaker-like consumers",
+)
+def get_state_egress_events(
+    limit: int = Query(default=100, ge=1, le=500, description="Maximum rows to return"),
+) -> List[StateEgressEventResponse]:
+    with connection_scope(_current_db_path()) as conn:
+        rows = list_state_egress_events(conn, limit=limit)
+    return [StateEgressEventResponse(**row) for row in rows]
 
 
 @app.get(

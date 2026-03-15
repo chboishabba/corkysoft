@@ -39,6 +39,8 @@ Current UI implication:
 - Staff tab shows planned segment assignments separately from imported sheet truck context
 - Fleet tab shows planned job-segment assignments separately from `present_driver`
 - operators should treat `present_driver` as imported context only unless it is reconciled into segment assignments
+- Fleet also acts as the maintenance/compliance cockpit for blocked and due-soon rego, COI, service, and worker compliance items
+- Staff provides lightweight native role/compliance assignment actions so readiness data can be maintained in-app
 
 ## Assignment readiness
 

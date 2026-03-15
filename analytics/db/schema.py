@@ -99,9 +99,14 @@ CREATE TABLE IF NOT EXISTS inventory_items (
     unit TEXT DEFAULT 'unit',
     supplier_id INTEGER,
     job_id INTEGER,
+    architecture TEXT DEFAULT 'general',
     state TEXT DEFAULT 'created',
     item_id TEXT,
     asset_tag TEXT,
+    custody_location_type TEXT,
+    custody_location_ref TEXT,
+    custody_location_label TEXT,
+    custody_updated_at TEXT,
     updated_at TEXT,
     UNIQUE(name),
     FOREIGN KEY(supplier_id) REFERENCES suppliers(id)
@@ -122,6 +127,26 @@ CREATE TABLE IF NOT EXISTS workers (
     updated_at TEXT,
     UNIQUE(name)
 );
+
+CREATE TABLE IF NOT EXISTS worker_absence_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    worker_id INTEGER NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    absence_type TEXT NOT NULL DEFAULT 'other',
+    status TEXT NOT NULL DEFAULT 'confirmed',
+    hours_per_day REAL,
+    note TEXT,
+    source TEXT,
+    recorded_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_worker_absence_worker_dates
+    ON worker_absence_records(worker_id, start_date, end_date);
+CREATE INDEX IF NOT EXISTS idx_worker_absence_status
+    ON worker_absence_records(status);
 
 CREATE TABLE IF NOT EXISTS trucks (
     truck_id TEXT PRIMARY KEY,
@@ -206,6 +231,9 @@ CREATE TABLE IF NOT EXISTS inventory_movements (
     change_allocated INTEGER NOT NULL DEFAULT 0,
     reason TEXT DEFAULT '',
     state TEXT,
+    location_type TEXT,
+    location_ref TEXT,
+    location_label TEXT,
     sequence_no INTEGER,
     created_at TEXT NOT NULL,
     FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE CASCADE,
@@ -227,6 +255,144 @@ CREATE TABLE IF NOT EXISTS inventory_exceptions (
     resolved_at TEXT,
     FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE SET NULL,
     FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS inventory_requirements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL,
+    segment_id INTEGER,
+    inventory_item_id INTEGER,
+    requirement_name TEXT,
+    required_quantity REAL NOT NULL DEFAULT 0,
+    substitution_allowed INTEGER NOT NULL DEFAULT 0,
+    architecture TEXT DEFAULT 'general',
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(job_id, segment_id, inventory_item_id, requirement_name),
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+    FOREIGN KEY(segment_id) REFERENCES job_segments(id) ON DELETE CASCADE,
+    FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS inventory_execution_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL,
+    segment_id INTEGER NOT NULL,
+    requirement_id INTEGER,
+    inventory_item_id INTEGER,
+    stage TEXT NOT NULL,
+    quantity REAL,
+    actor TEXT,
+    note TEXT,
+    container_ref TEXT,
+    truck_id TEXT,
+    location_type TEXT,
+    location_ref TEXT,
+    location_label TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+    FOREIGN KEY(segment_id) REFERENCES job_segments(id) ON DELETE CASCADE,
+    FOREIGN KEY(requirement_id) REFERENCES inventory_requirements(id) ON DELETE CASCADE,
+    FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE SET NULL,
+    FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS inventory_substitution_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL,
+    segment_id INTEGER NOT NULL,
+    requirement_id INTEGER NOT NULL,
+    inventory_item_id INTEGER,
+    substitute_inventory_item_id INTEGER,
+    requested_quantity REAL NOT NULL DEFAULT 0,
+    approved_quantity REAL,
+    status TEXT NOT NULL DEFAULT 'requested',
+    requested_by TEXT,
+    approved_by TEXT,
+    approved_role TEXT,
+    reason_code TEXT,
+    note TEXT,
+    created_at TEXT NOT NULL,
+    decided_at TEXT,
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+    FOREIGN KEY(segment_id) REFERENCES job_segments(id) ON DELETE CASCADE,
+    FOREIGN KEY(requirement_id) REFERENCES inventory_requirements(id) ON DELETE CASCADE,
+    FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE SET NULL,
+    FOREIGN KEY(substitute_inventory_item_id) REFERENCES inventory_items(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS inventory_substitution_reason_codes (
+    code TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    description TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    system_seeded INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS site_media_assets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    quote_id INTEGER,
+    job_id INTEGER,
+    site_kind TEXT NOT NULL DEFAULT 'general',
+    media_type TEXT NOT NULL,
+    source TEXT NOT NULL,
+    title TEXT,
+    media_url TEXT,
+    local_path TEXT,
+    mime_type TEXT,
+    heading_degrees REAL,
+    captured_by TEXT,
+    status TEXT NOT NULL DEFAULT 'available',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS site_assessments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    quote_id INTEGER,
+    job_id INTEGER,
+    site_kind TEXT NOT NULL DEFAULT 'general',
+    source TEXT NOT NULL DEFAULT 'manual',
+    loading_access_risk TEXT NOT NULL DEFAULT 'unknown',
+    parking_risk TEXT NOT NULL DEFAULT 'unknown',
+    narrow_street_risk TEXT NOT NULL DEFAULT 'unknown',
+    stairs_risk TEXT NOT NULL DEFAULT 'unknown',
+    clearance_risk TEXT NOT NULL DEFAULT 'unknown',
+    large_vehicle_suitability TEXT NOT NULL DEFAULT 'unknown',
+    uncertainty_flag INTEGER NOT NULL DEFAULT 0,
+    note TEXT,
+    reviewed_by TEXT,
+    accepted INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(quote_id, job_id, site_kind, source),
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS media_inference_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_asset_id INTEGER,
+    quote_id INTEGER,
+    job_id INTEGER,
+    result_type TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    confidence REAL,
+    payload_json TEXT NOT NULL,
+    model_name TEXT,
+    model_version TEXT,
+    status TEXT NOT NULL DEFAULT 'pending_review',
+    reviewed_by TEXT,
+    reviewed_at TEXT,
+    corrected_payload_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(media_asset_id) REFERENCES site_media_assets(id) ON DELETE SET NULL,
+    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS driver_shifts (
@@ -308,9 +474,14 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
     inventory_columns = _table_columns(conn, "inventory_items")
     inventory_declarations = {
         "job_id": "INTEGER",
+        "architecture": "TEXT DEFAULT 'general'",
         "state": "TEXT DEFAULT 'created'",
         "item_id": "TEXT",
         "asset_tag": "TEXT",
+        "custody_location_type": "TEXT",
+        "custody_location_ref": "TEXT",
+        "custody_location_label": "TEXT",
+        "custody_updated_at": "TEXT",
     }
     for column, declaration in inventory_declarations.items():
         if column not in inventory_columns:
@@ -320,6 +491,9 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
     movement_declarations = {
         "job_id": "INTEGER",
         "state": "TEXT",
+        "location_type": "TEXT",
+        "location_ref": "TEXT",
+        "location_label": "TEXT",
         "sequence_no": "INTEGER",
     }
     for column, declaration in movement_declarations.items():
@@ -360,13 +534,29 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
     _ensure_shipment_columns(conn)
     from .legacy import _ensure_job_segment_tables
     _ensure_job_segment_tables(conn)
+    _ensure_inventory_requirements_table(conn)
+    _ensure_inventory_execution_events_table(conn)
+    _ensure_inventory_substitution_requests_table(conn)
+    _ensure_inventory_substitution_reason_codes_table(conn)
+    _ensure_site_media_assets_table(conn)
+    _ensure_site_assessments_table(conn)
+    _ensure_media_inference_results_table(conn)
+    _ensure_worker_absence_records_table(conn)
     conn.commit()
 
     for table_name in (
         "inventory_items",
         "inventory_movements",
         "inventory_exceptions",
+        "inventory_requirements",
+        "inventory_execution_events",
+        "inventory_substitution_requests",
+        "inventory_substitution_reason_codes",
+        "site_media_assets",
+        "site_assessments",
+        "media_inference_results",
         "workers",
+        "worker_absence_records",
         "trucks",
         "vehicle_repairs",
         "shipments",
@@ -448,6 +638,72 @@ def _ensure_driver_shift_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE driver_shifts ADD COLUMN {column} {declaration}")
 
 
+def _ensure_worker_absence_records_table(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "worker_absence_records"):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS worker_absence_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                worker_id INTEGER NOT NULL,
+                start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL,
+                absence_type TEXT NOT NULL DEFAULT 'other',
+                status TEXT NOT NULL DEFAULT 'confirmed',
+                hours_per_day REAL,
+                note TEXT,
+                source TEXT,
+                recorded_by TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(worker_id) REFERENCES workers(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_worker_absence_worker_dates
+                ON worker_absence_records(worker_id, start_date, end_date)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_worker_absence_status
+                ON worker_absence_records(status)
+            """
+        )
+        return
+
+    columns = _table_columns(conn, "worker_absence_records")
+    declarations = {
+        "worker_id": "INTEGER NOT NULL",
+        "start_date": "TEXT NOT NULL",
+        "end_date": "TEXT NOT NULL",
+        "absence_type": "TEXT NOT NULL DEFAULT 'other'",
+        "status": "TEXT NOT NULL DEFAULT 'confirmed'",
+        "hours_per_day": "REAL",
+        "note": "TEXT",
+        "source": "TEXT",
+        "recorded_by": "TEXT",
+        "created_at": "TEXT",
+        "updated_at": "TEXT",
+    }
+    for column, declaration in declarations.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE worker_absence_records ADD COLUMN {column} {declaration}")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_worker_absence_worker_dates
+            ON worker_absence_records(worker_id, start_date, end_date)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_worker_absence_status
+            ON worker_absence_records(status)
+        """
+    )
+
+
 def ensure_historical_job_routes_table(conn: sqlite3.Connection) -> None:
     """Ensure the table storing historical job route GeoJSON exists."""
     conn.execute(
@@ -462,6 +718,319 @@ def ensure_historical_job_routes_table(conn: sqlite3.Connection) -> None:
         """
     )
     conn.commit()
+
+
+def _ensure_inventory_requirements_table(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "inventory_requirements"):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS inventory_requirements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                segment_id INTEGER,
+                inventory_item_id INTEGER,
+                requirement_name TEXT,
+                required_quantity REAL NOT NULL DEFAULT 0,
+                substitution_allowed INTEGER NOT NULL DEFAULT 0,
+                architecture TEXT DEFAULT 'general',
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(job_id, segment_id, inventory_item_id, requirement_name),
+                FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+                FOREIGN KEY(segment_id) REFERENCES job_segments(id) ON DELETE CASCADE,
+                FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE SET NULL
+            )
+            """
+        )
+        return
+
+    requirement_columns = _table_columns(conn, "inventory_requirements")
+    requirement_declarations = {
+        "job_id": "INTEGER NOT NULL",
+        "segment_id": "INTEGER",
+        "inventory_item_id": "INTEGER",
+        "requirement_name": "TEXT",
+        "required_quantity": "REAL NOT NULL DEFAULT 0",
+        "substitution_allowed": "INTEGER NOT NULL DEFAULT 0",
+        "architecture": "TEXT DEFAULT 'general'",
+        "notes": "TEXT",
+        "created_at": "TEXT",
+        "updated_at": "TEXT",
+    }
+    for column, declaration in requirement_declarations.items():
+        if column not in requirement_columns:
+            conn.execute(f"ALTER TABLE inventory_requirements ADD COLUMN {column} {declaration}")
+
+
+def _ensure_inventory_execution_events_table(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "inventory_execution_events"):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS inventory_execution_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                segment_id INTEGER NOT NULL,
+                requirement_id INTEGER,
+                inventory_item_id INTEGER,
+                stage TEXT NOT NULL,
+                quantity REAL,
+                actor TEXT,
+                note TEXT,
+                container_ref TEXT,
+                truck_id TEXT,
+                location_type TEXT,
+                location_ref TEXT,
+                location_label TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+                FOREIGN KEY(segment_id) REFERENCES job_segments(id) ON DELETE CASCADE,
+                FOREIGN KEY(requirement_id) REFERENCES inventory_requirements(id) ON DELETE CASCADE,
+                FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE SET NULL,
+                FOREIGN KEY(truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL
+            )
+            """
+        )
+        return
+
+
+def _ensure_inventory_substitution_requests_table(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "inventory_substitution_requests"):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS inventory_substitution_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                segment_id INTEGER NOT NULL,
+                requirement_id INTEGER NOT NULL,
+                inventory_item_id INTEGER,
+                substitute_inventory_item_id INTEGER,
+                requested_quantity REAL NOT NULL DEFAULT 0,
+                approved_quantity REAL,
+                status TEXT NOT NULL DEFAULT 'requested',
+                requested_by TEXT,
+                approved_by TEXT,
+                approved_role TEXT,
+                reason_code TEXT,
+                note TEXT,
+                created_at TEXT NOT NULL,
+                decided_at TEXT,
+                FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+                FOREIGN KEY(segment_id) REFERENCES job_segments(id) ON DELETE CASCADE,
+                FOREIGN KEY(requirement_id) REFERENCES inventory_requirements(id) ON DELETE CASCADE,
+                FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id) ON DELETE SET NULL,
+                FOREIGN KEY(substitute_inventory_item_id) REFERENCES inventory_items(id) ON DELETE SET NULL
+            )
+            """
+        )
+        return
+
+    columns = _table_columns(conn, "inventory_substitution_requests")
+    declarations = {
+        "job_id": "INTEGER NOT NULL",
+        "segment_id": "INTEGER NOT NULL",
+        "requirement_id": "INTEGER NOT NULL",
+        "inventory_item_id": "INTEGER",
+        "substitute_inventory_item_id": "INTEGER",
+        "requested_quantity": "REAL NOT NULL DEFAULT 0",
+        "approved_quantity": "REAL",
+        "status": "TEXT NOT NULL DEFAULT 'requested'",
+        "requested_by": "TEXT",
+        "approved_by": "TEXT",
+        "approved_role": "TEXT",
+        "reason_code": "TEXT",
+        "note": "TEXT",
+        "created_at": "TEXT",
+        "decided_at": "TEXT",
+    }
+    for column, declaration in declarations.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE inventory_substitution_requests ADD COLUMN {column} {declaration}")
+
+
+def _ensure_inventory_substitution_reason_codes_table(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "inventory_substitution_reason_codes"):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS inventory_substitution_reason_codes (
+                code TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                description TEXT,
+                active INTEGER NOT NULL DEFAULT 1,
+                system_seeded INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        return
+
+    columns = _table_columns(conn, "inventory_substitution_reason_codes")
+    declarations = {
+        "label": "TEXT",
+        "description": "TEXT",
+        "active": "INTEGER NOT NULL DEFAULT 1",
+        "system_seeded": "INTEGER NOT NULL DEFAULT 0",
+        "created_at": "TEXT",
+        "updated_at": "TEXT",
+    }
+    for column, declaration in declarations.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE inventory_substitution_reason_codes ADD COLUMN {column} {declaration}")
+
+
+def _ensure_site_media_assets_table(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "site_media_assets"):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS site_media_assets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                quote_id INTEGER,
+                job_id INTEGER,
+                site_kind TEXT NOT NULL DEFAULT 'general',
+                media_type TEXT NOT NULL,
+                source TEXT NOT NULL,
+                title TEXT,
+                media_url TEXT,
+                local_path TEXT,
+                mime_type TEXT,
+                heading_degrees REAL,
+                captured_by TEXT,
+                status TEXT NOT NULL DEFAULT 'available',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+            )
+            """
+        )
+        return
+
+    columns = _table_columns(conn, "site_media_assets")
+    declarations = {
+        "quote_id": "INTEGER",
+        "job_id": "INTEGER",
+        "site_kind": "TEXT NOT NULL DEFAULT 'general'",
+        "media_type": "TEXT",
+        "source": "TEXT",
+        "title": "TEXT",
+        "media_url": "TEXT",
+        "local_path": "TEXT",
+        "mime_type": "TEXT",
+        "heading_degrees": "REAL",
+        "captured_by": "TEXT",
+        "status": "TEXT NOT NULL DEFAULT 'available'",
+        "metadata_json": "TEXT NOT NULL DEFAULT '{}'",
+        "created_at": "TEXT",
+        "updated_at": "TEXT",
+    }
+    for column, declaration in declarations.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE site_media_assets ADD COLUMN {column} {declaration}")
+
+
+def _ensure_site_assessments_table(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "site_assessments"):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS site_assessments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                quote_id INTEGER,
+                job_id INTEGER,
+                site_kind TEXT NOT NULL DEFAULT 'general',
+                source TEXT NOT NULL DEFAULT 'manual',
+                loading_access_risk TEXT NOT NULL DEFAULT 'unknown',
+                parking_risk TEXT NOT NULL DEFAULT 'unknown',
+                narrow_street_risk TEXT NOT NULL DEFAULT 'unknown',
+                stairs_risk TEXT NOT NULL DEFAULT 'unknown',
+                clearance_risk TEXT NOT NULL DEFAULT 'unknown',
+                large_vehicle_suitability TEXT NOT NULL DEFAULT 'unknown',
+                uncertainty_flag INTEGER NOT NULL DEFAULT 0,
+                note TEXT,
+                reviewed_by TEXT,
+                accepted INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(quote_id, job_id, site_kind, source),
+                FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+            )
+            """
+        )
+        return
+
+    columns = _table_columns(conn, "site_assessments")
+    declarations = {
+        "quote_id": "INTEGER",
+        "job_id": "INTEGER",
+        "site_kind": "TEXT NOT NULL DEFAULT 'general'",
+        "source": "TEXT NOT NULL DEFAULT 'manual'",
+        "loading_access_risk": "TEXT NOT NULL DEFAULT 'unknown'",
+        "parking_risk": "TEXT NOT NULL DEFAULT 'unknown'",
+        "narrow_street_risk": "TEXT NOT NULL DEFAULT 'unknown'",
+        "stairs_risk": "TEXT NOT NULL DEFAULT 'unknown'",
+        "clearance_risk": "TEXT NOT NULL DEFAULT 'unknown'",
+        "large_vehicle_suitability": "TEXT NOT NULL DEFAULT 'unknown'",
+        "uncertainty_flag": "INTEGER NOT NULL DEFAULT 0",
+        "note": "TEXT",
+        "reviewed_by": "TEXT",
+        "accepted": "INTEGER NOT NULL DEFAULT 1",
+        "created_at": "TEXT",
+        "updated_at": "TEXT",
+    }
+    for column, declaration in declarations.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE site_assessments ADD COLUMN {column} {declaration}")
+
+
+def _ensure_media_inference_results_table(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "media_inference_results"):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS media_inference_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                media_asset_id INTEGER,
+                quote_id INTEGER,
+                job_id INTEGER,
+                result_type TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'manual',
+                confidence REAL,
+                payload_json TEXT NOT NULL,
+                model_name TEXT,
+                model_version TEXT,
+                status TEXT NOT NULL DEFAULT 'pending_review',
+                reviewed_by TEXT,
+                reviewed_at TEXT,
+                corrected_payload_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(media_asset_id) REFERENCES site_media_assets(id) ON DELETE SET NULL,
+                FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+            )
+            """
+        )
+        return
+
+    columns = _table_columns(conn, "media_inference_results")
+    declarations = {
+        "media_asset_id": "INTEGER",
+        "quote_id": "INTEGER",
+        "job_id": "INTEGER",
+        "result_type": "TEXT",
+        "source": "TEXT NOT NULL DEFAULT 'manual'",
+        "confidence": "REAL",
+        "payload_json": "TEXT NOT NULL DEFAULT '{}'",
+        "model_name": "TEXT",
+        "model_version": "TEXT",
+        "status": "TEXT NOT NULL DEFAULT 'pending_review'",
+        "reviewed_by": "TEXT",
+        "reviewed_at": "TEXT",
+        "corrected_payload_json": "TEXT",
+        "created_at": "TEXT",
+        "updated_at": "TEXT",
+    }
+    for column, declaration in declarations.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE media_inference_results ADD COLUMN {column} {declaration}")
 
 
 def _ensure_vehicle_details_table(conn: sqlite3.Connection) -> None:

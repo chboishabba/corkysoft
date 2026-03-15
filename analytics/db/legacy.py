@@ -2164,9 +2164,20 @@ def upsert_job_by_number(
         ),
     )
     conn.commit()
-    return conn.execute(
+    row = conn.execute(
         "SELECT * FROM jobs WHERE job_number = ?", (cleaned_job_number,)
     ).fetchone()
+    if row is not None:
+        try:
+            from analytics.routes_map import populate_route_geometry
+
+            populate_route_geometry(conn, [int(row["id"])], dataset="live")
+        except Exception:
+            pass
+        row = conn.execute(
+            "SELECT * FROM jobs WHERE job_number = ?", (cleaned_job_number,)
+        ).fetchone()
+    return row
 
 
 def upsert_job_segment(

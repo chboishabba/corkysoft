@@ -448,9 +448,9 @@ def _insert_historical_job(
     destination_postcode: Optional[str],
     origin_state: Optional[str],
     destination_state: Optional[str],
-) -> None:
+) -> Optional[int]:
     if not _table_exists(conn, "historical_jobs"):
-        return
+        return None
 
     _ensure_column(conn, "historical_jobs", "origin_postcode", "TEXT")
     _ensure_column(conn, "historical_jobs", "destination_postcode", "TEXT")
@@ -530,7 +530,7 @@ def _insert_historical_job(
         values.append(destination_state)
 
     placeholders = ", ".join(["?"] * len(columns))
-    conn.execute(
+    cursor = conn.execute(
         f"""
         INSERT INTO historical_jobs (
             {', '.join(columns)}
@@ -538,6 +538,7 @@ def _insert_historical_job(
         """,
         tuple(values),
     )
+    return int(cursor.lastrowid)
 
 
 def _ephemeral_client_display(details: ClientDetails) -> Optional[str]:
@@ -828,7 +829,7 @@ def persist_quote(
         postcode=destination_postcode,
         state=destination_state,
     )
-    _insert_historical_job(
+    historical_job_id = _insert_historical_job(
         conn,
         inputs,
         result,
@@ -844,6 +845,13 @@ def persist_quote(
         destination_state,
     )
     conn.commit()
+    if historical_job_id is not None:
+        try:
+            from analytics.routes_map import populate_route_geometry
+
+            populate_route_geometry(conn, [historical_job_id], dataset="historical")
+        except Exception:
+            pass
     return quote_rowid
 
 

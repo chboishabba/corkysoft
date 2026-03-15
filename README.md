@@ -15,8 +15,18 @@
 [Kent AMS Integration Roadmap](docs/kent_ams_integration_roadmap.md)
 [Multi-Truck Route/Load Optimization](docs/multi_truck_route_load_optimization.md)
 [Operator User Stories](docs/operator_user_stories.md)
+[Usage Onboarding Guide](docs/usage_onboarding_guide.md)
+[UI Role Coverage Matrix](docs/ui_role_coverage_matrix.md)
+[Naive User Tester Notes](docs/naive_user_tester_notes.md)
+[Rollout Execution Stories](docs/rollout_execution_user_stories.md)
 [Quote to Award Lifecycle](docs/commercial_workflow_lifecycle.md)
 [Spreadsheet Replacement Plan](docs/spreadsheet_replacement_plan.md)
+[Planner Interaction Model](docs/planner_interaction_model.md)
+[Inventory Execution Workflow](docs/inventory_execution_workflow.md)
+[Worker Time Capture Workflow](docs/worker_time_capture_workflow.md)
+[Payroll and Labor Analytics](docs/payroll_and_labor_analytics.md)
+[Accommodation Availability Operations](docs/accommodation_availability_operations.md)
+[Call Intelligence Workflow](docs/call_intelligence_workflow.md)
 [Roadmap](ROADMAP.md)
 
 
@@ -27,9 +37,33 @@ Run `./start_app.sh` or `start_app.bat` to run the app.
 ## Start Here
 
 - Estimator / quoting flow: [Quote to Award Lifecycle](docs/commercial_workflow_lifecycle.md)
+- Dispatch / jobs / execution flow: [Spreadsheet Replacement Plan](docs/spreadsheet_replacement_plan.md)
+- Planner UX target: [Planner Interaction Model](docs/planner_interaction_model.md)
+- Planner now supports both job-first and map/corridor-first planning, confirms draft legs into `job_segments`, uses the shared provider-aware routing preview, keeps saved-route overlays aligned with the active provider, surfaces first-pass street-level and Google-first 360 site context, and can store accepted site-risk assessments plus advisory media/CV outputs against jobs; the existing `Operations` segment form remains advanced/manual fallback.
+- Inventory execution workflow: [Inventory Execution Workflow](docs/inventory_execution_workflow.md)
 - Dispatch / tender triage flow: [Kent AMS Integration Spec](docs/kent_ams_integration.md)
 - Product and actor intent: [Operator User Stories](docs/operator_user_stories.md)
+- Role-to-surface ownership: [UI Role Coverage Matrix](docs/ui_role_coverage_matrix.md)
+- Formal onboarding and help usage: [Usage Onboarding Guide](docs/usage_onboarding_guide.md)
+- Out-loud user-testing notes: [Naive User Tester Notes](docs/naive_user_tester_notes.md)
+- Cutover, fallback, and rollout governance: [Rollout Execution Stories](docs/rollout_execution_user_stories.md)
 - Current delivery status: [Roadmap](ROADMAP.md)
+
+## Operational Roles
+
+- `Estimator`: starts in `Quote builder`.
+- `Dispatcher`: starts in `Dispatch` and `Kent tenders`.
+- `Fleet / Operations Manager`: starts in `Operations`, with `Fleet` for readiness and policy context.
+- `Labor Planner / Staff Coordinator`: starts in `Staff` and `Driver shifts`.
+- `Maintenance / Compliance Coordinator`: starts in `Fleet` and `Vehicle maintenance`.
+- `Inventory / Supplier Coordinator`: starts in `Inventory`, with `Dispatch` as execution context.
+- `Warehouse / Crew`: starts in `Inventory`, with `Dispatch` as execution context.
+- `Workforce Time Capture Coordinator`: starts in `Staff` and `Driver shifts`.
+- `Owner / Commercial / Finance-facing Manager`: starts in `Payroll / Labor analytics`, with `Staff` and `Driver shifts` as supporting surfaces.
+- `Commercial Owner`: starts in `Quote builder`, `Kent tenders`, and `Kent admin`.
+- `System / Rollout Admin`: starts in `Fleet` for cutover and source-sync governance.
+
+See [UI Role Coverage Matrix](docs/ui_role_coverage_matrix.md) for the authoritative tab ownership map.
 
 ## Current Status (2026-03-12)
 
@@ -41,6 +75,7 @@ usable, but some workflows remain provisional or governance-light:
 - profitability and route analytics are implemented across multiple tabs
 - live network, corridor, and optimization docs still describe more than the
   current MVP guarantees
+- visual last-mile planning now has a durable data model for site media, accepted site assessments, reviewed advisory CV/volume outputs, and first derived planning constraints (truck suitability, shuttle need, labor/access uplift). Actual model-backed CV inference remains scaffold-only
 
 Main blockers to reach the next phase:
 - historical job ingestion validation (to unlock reliable analytics)
@@ -178,6 +213,7 @@ The dashboard surfaces:
 - Interactive Mapbox map with corridor colouring, isochrone shading, lane filters, and density heatmaps.
 - Live network view that highlights active trucks, lane profitability, and telemetry clusters.
 - Quote builder with client dedupe, profitability policy preview, and quick-quote support without forcing customer records.
+- Dispatch board with a native job-centric view across segments, trucks, workers, stock, suppliers, and readiness flags.
 - Kent tender queue with profitability-rule prioritization, override capture, and audit history.
 - Optimiser tab recommending corridor price uplifts and exportable action lists.
 - Price history traces with daily/weekly/monthly resampling, prior-year comparisons, and lane box plots (see `docs/price_history.md`).
@@ -299,6 +335,10 @@ Common commands:
   ```bash
   python map_jobs.py --out routes_map.html
   ```
+- Seed clustered mainland-Australia jobs, segments, and container requirements for local planning tests:
+  ```bash
+  venv/bin/python scripts/seed_planning_harness.py --count 10
+  ```
 
 ### Dashboard Workflows
 
@@ -311,9 +351,24 @@ Common commands:
 - Use Google Sheets-backed imports for `FLEET`, `STAFF`, and `SUPPLIERS` before falling back to ad hoc local workbook uploads.
 - Use the shared operations-workbook sync in Fleet when you want `FLEET`, `STAFF`, and `SUPPLIERS` refreshed together from the same workbook reference.
 - Treat Corkysoft as the planning source of truth for truck/staff/job-segment assignments; current spreadsheets are import-only operational inputs.
-- Plan work at the `job_segments` level so one job can span multiple legs, trucks, and workers with readiness checks.
+- Treat `job_segments` as the internal planning truth, but not as a low-level operator data-entry workflow. The long-term planner should derive draft legs from map/corridor/site context and let operators confirm them through click-heavy interactions rather than manual segment typing.
+- Use the Dispatch tab as the native daily execution board for jobs, segments, trucks, workers, stock, suppliers, and exception review.
 - Use the Staff and Fleet tabs to review planned segment assignments alongside imported sheet context and recent shift history.
+- Use the Fleet cockpit to review blocked/due-soon rego, COI, service, and worker compliance items before confirming assignments.
+- Use Fleet admin to manage spreadsheet cutover status, rollback instructions, targets, logged rollout events, and guarded recommended transitions per workflow; the current usage/fallback/review metrics are derived from operational state and event history.
+- Use the Labor planning / Driver shifts tab as a native roster and reconciliation surface; treat `VEHICLE_DRIVER` imports as comparison input rather than primary planning truth.
+- Use the Inventory tab to coordinate stock and suppliers against planned job segments, not only against whole-job balances.
+- Inventory now supports segment-level requirement planning, shortage detection, custody/location truth, constrained warehouse pick / pack / load progression, and substitution requests/approvals backed by reason catalogs and approval-role rules.
+- Next inventory UX step should be requirement/container picklists with explicit action buttons and barcode/QR-assisted capture, rather than more generic stage editing.
+- Planner UX is still not at the desired end-state: the current hybrid planner now supports job-first and corridor-first planning with routing and resource-fit context, but site/location planning and richer draft-leg editing remain the next steps.
+- Workforce time capture needs its own multi-channel path: app where available, WhatsApp where practical, and voice/landline call-in with transcription/review where necessary.
+- Payroll and labor analytics are now explicitly framed as a separate layer above labor operations: Corkysoft should prepare reviewed labor actuals, forecasting, overtime/absence patterns, and export-ready summaries without trying to replace payroll/accounting systems.
+- The first `Payroll / Labor analytics` cockpit is now implemented with pay forecasting, overtime/hours/cost distributions, plan-vs-actual comparisons, confidence/anomaly summaries, labor cost-driver views, export-ready worker summaries, and a basic recorded absence/leave model. Sick-day analytics should now build on explicit recorded absence rows rather than inferred missing events.
+- Call intelligence foundation is live: the `Calls` tab now captures routed call sessions, child call legs, ambient office transcript sessions, transcript artifacts, accepted actions, and worker time-capture review through one operational substrate.
+- Fake transcript generation remains the current practical ingest surface for call-session and ambient-session workflow testing while live telephony remains pending.
+- Accommodation availability should be treated as an operational support signal for remote/peak-period work, not as a separate travel product.
 - Treat the current live profitability/network views as MVP analytics surfaces; advanced drill-down and auto-refresh behavior remain future work unless explicitly documented elsewhere.
+- Role-aware tab defaults are planned as lightweight app config, not auth-bound profiles; manager/admin sets role defaults and users can override them in-session.
 
 ### Telemetry & Live Data
 

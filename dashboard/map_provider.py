@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlencode
 from typing import Any, Dict, Mapping, Optional
 
 
@@ -25,6 +26,63 @@ def google_maps_api_key() -> Optional[str]:
         return None
     cleaned = key.strip()
     return cleaned or None
+
+
+def street_view_available() -> bool:
+    """Return True when Street View imagery can be requested."""
+
+    return using_google_maps() and google_maps_api_key() is not None
+
+
+def google_street_view_static_url(
+    *,
+    lat: float,
+    lon: float,
+    heading: float | None = None,
+    pitch: float = 0.0,
+    fov: int = 90,
+    size: str = "640x360",
+) -> Optional[str]:
+    """Return a Google Street View Static API URL when available."""
+
+    api_key = google_maps_api_key()
+    if not using_google_maps() or not api_key:
+        return None
+    params = {
+        "size": size,
+        "location": f"{float(lat):.6f},{float(lon):.6f}",
+        "pitch": f"{float(pitch):.1f}",
+        "fov": str(int(fov)),
+        "key": api_key,
+    }
+    if heading is not None:
+        params["heading"] = f"{float(heading) % 360:.1f}"
+    return "https://maps.googleapis.com/maps/api/streetview?" + urlencode(params)
+
+
+def google_street_view_360_url(
+    *,
+    lat: float,
+    lon: float,
+    heading: float | None = None,
+    pitch: float = 0.0,
+    fov: int = 90,
+) -> Optional[str]:
+    """Return a Google Maps Street View URL when the Google provider is active."""
+
+    api_key = google_maps_api_key()
+    if not using_google_maps() or not api_key:
+        return None
+    params = {
+        "api": "1",
+        "map_action": "pano",
+        "viewpoint": f"{float(lat):.6f},{float(lon):.6f}",
+        "pitch": f"{float(pitch):.1f}",
+        "fov": str(int(fov)),
+    }
+    if heading is not None:
+        params["heading"] = f"{float(heading) % 360:.1f}"
+    return "https://www.google.com/maps/@" + "?" + urlencode(params)
 
 
 def _google_tile_layer(api_key: Optional[str]) -> Dict[str, Any]:

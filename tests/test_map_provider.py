@@ -75,3 +75,42 @@ def test_plotly_map_layout_ignores_key_when_not_google(monkeypatch: pytest.Monke
     config = layout["mapbox"]
     assert config["style"] == "carto-positron"
     assert "layers" not in config
+
+
+def test_google_street_view_static_url_uses_google_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ROUTING_PROVIDER", "google")
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "abc123")
+
+    url = map_provider.google_street_view_static_url(
+        lat=-27.47,
+        lon=153.02,
+        heading=45.0,
+    )
+
+    assert url is not None
+    assert "maps.googleapis.com/maps/api/streetview" in url
+    assert "location=-27.470000%2C153.020000" in url
+    assert "heading=45.0" in url
+    assert "key=abc123" in url
+
+
+def test_google_street_view_static_url_returns_none_when_not_google(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "abc123")
+    assert map_provider.google_street_view_static_url(lat=-27.47, lon=153.02) is None
+
+
+def test_google_street_view_360_url_uses_google_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ROUTING_PROVIDER", "google")
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "abc123")
+
+    url = map_provider.google_street_view_360_url(
+        lat=-27.47,
+        lon=153.02,
+        heading=180.0,
+    )
+
+    assert url is not None
+    assert "google.com/maps/@" in url
+    assert "map_action=pano" in url
+    assert "viewpoint=-27.470000%2C153.020000" in url
+    assert "heading=180.0" in url

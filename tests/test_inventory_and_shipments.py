@@ -216,6 +216,418 @@ def test_supplier_import_and_linkage():
         conn.close()
 
 
+def test_segment_inventory_coordination_and_allocation():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        db.ensure_dashboard_tables(conn)
+
+        supplier = db.upsert_supplier(conn, company_name="Ops Supplier")
+        item = db.upsert_inventory_item(
+            conn,
+            name="Crates",
+            quantity=12,
+            supplier_id=supplier["id"],
+            unit="ea",
+        )
+        job_id = conn.execute(
+            "INSERT INTO jobs (origin, destination) VALUES ('Depot', 'Site C')"
+        ).lastrowid
+        segment = db.upsert_job_segment(
+            conn,
+            job_id=job_id,
+            segment_sequence=1,
+            from_location="Depot",
+            to_location="Site C",
+            planned_start="2026-03-15T08:00:00+00:00",
+            planned_end="2026-03-15T10:00:00+00:00",
+        )
+
+        shipment = db.allocate_inventory_to_segment(
+            conn,
+            segment_id=int(segment["id"]),
+            inventory_item_id=int(item["id"]),
+            quantity=3,
+            status="staged",
+        )
+        assert shipment["segment_id"] == int(segment["id"])
+
+        rows = db.list_segment_inventory_coordination(conn, job_id=job_id)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["segmentId"] == int(segment["id"])
+        assert row["shipmentCount"] == 1
+        assert row["allocatedQuantity"] == 3.0
+        assert row["inventoryNames"] == ["Crates"]
+        assert row["supplierNames"] == ["Ops Supplier"]
+    finally:
+        conn.close()
+
+
+def test_inventory_requirements_compute_shortages_and_architecture() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        db.ensure_dashboard_tables(conn)
+        item = db.upsert_inventory_item(
+            conn,
+            name="Module Container",
+            quantity=8,
+            unit="ea",
+            architecture="container",
+        )
+        job_id = conn.execute(
+            "INSERT INTO jobs (origin, destination) VALUES ('Depot', 'Site D')"
+        ).lastrowid
+        segment = db.upsert_job_segment(
+            conn,
+            job_id=job_id,
+            segment_sequence=1,
+            from_location="Depot",
+            to_location="Site D",
+        )
+        db.upsert_inventory_requirement(
+            conn,
+            job_id=int(job_id),
+            segment_id=int(segment["id"]),
+            inventory_item_id=int(item["id"]),
+            requirement_name="Module Container",
+            required_quantity=5,
+            substitution_allowed=False,
+            architecture="container",
+        )
+        db.allocate_inventory_to_segment(
+            conn,
+            segment_id=int(segment["id"]),
+            inventory_item_id=int(item["id"]),
+            quantity=3,
+            status="staged",
+        )
+
+        requirements = db.list_inventory_requirements(conn, segment_id=int(segment["id"]))
+        assert len(requirements) == 1
+        requirement = requirements[0]
+        assert requirement["architecture"] == "container"
+        assert requirement["requiredQuantity"] == 5.0
+        assert requirement["allocatedQuantity"] == 3.0
+        assert requirement["shortageQuantity"] == 2.0
+
+        coordination = db.list_segment_inventory_coordination(conn, job_id=int(job_id))[0]
+        assert coordination["requirementCount"] == 1
+        assert coordination["requiredQuantity"] == 5.0
+        assert coordination["allocatedQuantity"] == 3.0
+        assert coordination["shortageQuantity"] == 2.0
+        assert coordination["blockingShortageQuantity"] == 2.0
+        assert coordination["warningShortageQuantity"] == 0.0
+        assert coordination["architectures"] == ["container"]
+    finally:
+        conn.close()
+
+
+def test_inventory_custody_updates_follow_movements() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        db.ensure_dashboard_tables(conn)
+        item = db.upsert_inventory_item(
+            conn,
+            name="Dolly",
+            quantity=2,
+            unit="ea",
+            architecture="reusable_asset",
+        )
+
+        db.record_inventory_movement(
+            conn,
+            inventory_item_id=int(item["id"]),
+            reason="loaded_to_truck",
+            state="loaded",
+            location_type="truck",
+            location_ref="TRK-9",
+            location_label="Truck 9",
+        )
+        refreshed = db.get_inventory_balance(conn, int(item["id"]))
+        assert refreshed is not None
+        assert refreshed["custody_location_type"] == "truck"
+        assert refreshed["custody_location_ref"] == "TRK-9"
+        assert refreshed["custody_location_label"] == "Truck 9"
+
+        movements = db.list_inventory_movements(conn, limit=5)
+        assert movements[0]["location_type_value"] == "truck"
+        assert movements[0]["location_label_value"] == "Truck 9"
+    finally:
+        conn.close()
+
+
+def test_inventory_execution_events_and_substitutions_affect_requirement_view() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        db.ensure_dashboard_tables(conn)
+        item = db.upsert_inventory_item(
+            conn,
+            name="Container Pod",
+            quantity=4,
+            unit="ea",
+            architecture="container",
+        )
+        substitute = db.upsert_inventory_item(
+            conn,
+            name="Spare Container Pod",
+            quantity=2,
+            unit="ea",
+            architecture="container",
+        )
+        job_id = conn.execute(
+            "INSERT INTO jobs (origin, destination) VALUES ('Depot', 'Site E')"
+        ).lastrowid
+        segment = db.upsert_job_segment(
+            conn,
+            job_id=job_id,
+            segment_sequence=1,
+            from_location="Depot",
+            to_location="Site E",
+        )
+        requirement = db.upsert_inventory_requirement(
+            conn,
+            job_id=int(job_id),
+            segment_id=int(segment["id"]),
+            inventory_item_id=int(item["id"]),
+            requirement_name="Container Pod",
+            required_quantity=5,
+            substitution_allowed=True,
+            architecture="container",
+        )
+        db.allocate_inventory_to_segment(
+            conn,
+            segment_id=int(segment["id"]),
+            inventory_item_id=int(item["id"]),
+            quantity=3,
+            status="staged",
+        )
+
+        for stage in ("picked", "packed", "loaded"):
+            db.record_inventory_execution_event(
+                conn,
+                job_id=int(job_id),
+                segment_id=int(segment["id"]),
+                requirement_id=int(requirement["id"]),
+                inventory_item_id=int(item["id"]),
+                stage=stage,
+                quantity=3,
+                actor="warehouse-1",
+                container_ref="CONT-1",
+                truck_id=None,
+                location_type="container",
+                location_ref="CONT-1",
+                location_label="Container 1",
+            )
+        requested = db.request_inventory_substitution(
+            conn,
+            requirement_id=int(requirement["id"]),
+            requested_quantity=2,
+            requested_by="warehouse-1",
+            reason_code="stock_shortage",
+            substitute_inventory_item_id=int(substitute["id"]),
+        )
+        pending = db.list_inventory_requirements(conn, segment_id=int(segment["id"]))[0]
+        assert pending["executionStage"] == "loaded"
+        assert pending["hasPendingSubstitution"] is True
+        assert pending["approvedSubstitutionQuantity"] == 0.0
+        assert pending["requestedSubstitutionQuantity"] == 2.0
+        assert pending["shortageQuantity"] == 2.0
+
+        db.decide_inventory_substitution(
+            conn,
+            substitution_id=int(requested["id"]),
+            status="approved",
+            approved_by="dispatch-1",
+            approved_role="dispatcher",
+            approved_quantity=2,
+            substitute_inventory_item_id=int(substitute["id"]),
+            note="Approve equivalent container pod",
+        )
+        approved = db.list_inventory_requirements(conn, segment_id=int(segment["id"]))[0]
+        assert approved["approvedSubstitutionQuantity"] == 2.0
+        assert approved["effectiveFulfilledQuantity"] == 5.0
+        assert approved["shortageQuantity"] == 0.0
+
+        coordination = db.list_segment_inventory_coordination(conn, job_id=int(job_id))[0]
+        assert coordination["approvedSubstitutionQuantity"] == 2.0
+        assert coordination["pendingSubstitutionCount"] == 0
+        assert coordination["executionStages"] == ["loaded"]
+
+        events = db.list_inventory_execution_events(conn, segment_id=int(segment["id"]))
+        assert events[0]["stage"] == "loaded"
+        assert events[0]["containerRef"] == "CONT-1"
+    finally:
+        conn.close()
+
+
+def test_inventory_execution_stages_and_reason_catalog_are_enforced() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        db.ensure_dashboard_tables(conn)
+        reasons = db.list_inventory_substitution_reason_codes(conn, active_only=True)
+        assert any(row["code"] == "stock_shortage" for row in reasons)
+
+        item = db.upsert_inventory_item(
+            conn,
+            name="Packing Crate",
+            quantity=2,
+            architecture="container",
+        )
+        substitute = db.upsert_inventory_item(
+            conn,
+            name="Alternate Packing Crate",
+            quantity=3,
+            architecture="container",
+        )
+        job_id = conn.execute(
+            "INSERT INTO jobs (origin, destination) VALUES ('Depot', 'Site K')"
+        ).lastrowid
+        segment = db.upsert_job_segment(
+            conn,
+            job_id=job_id,
+            segment_sequence=1,
+            from_location="Depot",
+            to_location="Site K",
+        )
+        requirement = db.upsert_inventory_requirement(
+            conn,
+            job_id=int(job_id),
+            segment_id=int(segment["id"]),
+            inventory_item_id=int(item["id"]),
+            requirement_name="Packing Crate",
+            required_quantity=2,
+            substitution_allowed=True,
+            architecture="container",
+        )
+
+        with pytest.raises(ValueError, match="not allowed from 'required'"):
+            db.record_inventory_execution_event(
+                conn,
+                job_id=int(job_id),
+                segment_id=int(segment["id"]),
+                requirement_id=int(requirement["id"]),
+                inventory_item_id=int(item["id"]),
+                stage="loaded",
+                quantity=2,
+                actor="warehouse-1",
+            )
+
+        request = db.request_inventory_substitution(
+            conn,
+            requirement_id=int(requirement["id"]),
+            requested_quantity=1,
+            requested_by="warehouse-1",
+            reason_code="stock_shortage",
+            substitute_inventory_item_id=int(substitute["id"]),
+        )
+
+        with pytest.raises(ValueError, match="approval role must be one of"):
+            db.decide_inventory_substitution(
+                conn,
+                substitution_id=int(request["id"]),
+                status="approved",
+                approved_by="planner-1",
+                approved_role="warehouse",
+                approved_quantity=1,
+                substitute_inventory_item_id=int(substitute["id"]),
+            )
+    finally:
+        conn.close()
+
+
+def test_rejected_substitution_keeps_shortage_active() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        db.ensure_dashboard_tables(conn)
+        item = db.upsert_inventory_item(conn, name="Crew Box", quantity=1, architecture="container")
+        substitute = db.upsert_inventory_item(conn, name="Alt Crew Box", quantity=2, architecture="container")
+        job_id = conn.execute(
+            "INSERT INTO jobs (origin, destination) VALUES ('Depot', 'Site L')"
+        ).lastrowid
+        segment = db.upsert_job_segment(conn, job_id=job_id, segment_sequence=1, from_location="Depot", to_location="Site L")
+        requirement = db.upsert_inventory_requirement(
+            conn,
+            job_id=int(job_id),
+            segment_id=int(segment["id"]),
+            inventory_item_id=int(item["id"]),
+            requirement_name="Crew Box",
+            required_quantity=3,
+            substitution_allowed=True,
+            architecture="container",
+        )
+        db.allocate_inventory_to_segment(conn, segment_id=int(segment["id"]), inventory_item_id=int(item["id"]), quantity=1, status="staged")
+        request = db.request_inventory_substitution(
+            conn,
+            requirement_id=int(requirement["id"]),
+            requested_quantity=2,
+            requested_by="warehouse-1",
+            reason_code="stock_shortage",
+            substitute_inventory_item_id=int(substitute["id"]),
+        )
+
+        db.decide_inventory_substitution(
+            conn,
+            substitution_id=int(request["id"]),
+            status="rejected",
+            approved_by="dispatch-1",
+            approved_role="dispatcher",
+            note="Wait for original stock",
+        )
+        requirement_view = db.list_inventory_requirements(conn, segment_id=int(segment["id"]))[0]
+        assert requirement_view["approvedSubstitutionQuantity"] == 0.0
+        assert requirement_view["requestedSubstitutionQuantity"] == 0.0
+        assert requirement_view["shortageQuantity"] == 2.0
+        substitutions = db.list_inventory_substitutions(conn, segment_id=int(segment["id"]))
+        assert substitutions[0]["status"] == "rejected"
+    finally:
+        conn.close()
+
+
+def test_inventory_custody_latest_location_remains_singular() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        db.ensure_dashboard_tables(conn)
+        item = db.upsert_inventory_item(conn, name="Reusable Crate", quantity=1, architecture="reusable_asset")
+        db.record_inventory_movement(
+            conn,
+            inventory_item_id=int(item["id"]),
+            reason="loaded_to_truck",
+            state="loaded",
+            location_type="truck",
+            location_ref="TRK-1",
+            location_label="Truck 1",
+        )
+        db.record_inventory_movement(
+            conn,
+            inventory_item_id=int(item["id"]),
+            reason="arrived_on_site",
+            state="delivered",
+            location_type="site",
+            location_ref="SITE-1",
+            location_label="Site 1",
+        )
+        refreshed = db.get_inventory_balance(conn, int(item["id"]))
+        assert refreshed["custody_location_type"] == "site"
+        assert refreshed["custody_location_ref"] == "SITE-1"
+        assert refreshed["custody_location_label"] == "Site 1"
+        movements = [
+            row
+            for row in db.list_inventory_movements(conn, limit=10)
+            if int(row["inventory_item_id"]) == int(item["id"])
+        ]
+        assert movements[0]["location_type_value"] == "site"
+        assert movements[1]["location_type_value"] == "truck"
+    finally:
+        conn.close()
+
+
 def test_segment_worker_requires_assigned_role():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row

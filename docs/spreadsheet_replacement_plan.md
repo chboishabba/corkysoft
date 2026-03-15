@@ -51,9 +51,20 @@ Deliverables:
 - staff/fleet views that show planned assignments
 - conflict detection
 - readiness checks
+- planner UX that derives draft operational legs from route/corridor/site context instead of expecting manual segment authoring as the normal operator flow
+- dedicated `Planner` tab as the primary planning surface
+- existing `Operations` segment form retained as advanced/manual fallback
 
 Exit criteria:
 - operators can plan a day’s work without relying on sheet-side assignment columns
+
+Planner direction to lock before deeper implementation:
+- canonical interaction spec: [Planner Interaction Model](planner_interaction_model.md)
+- operators should not normally hand-author `job_segments` through a raw form
+- the planning surface should be map/corridor/site-first
+- roadway extents, site context, and historical overlap should suggest candidate legs
+- route, traffic, and resource-fit considerations should shape the draft plan before assignment
+- manual segment editing should remain an advanced/admin fallback only
 
 ### Phase 2: Maintenance and Compliance Cockpit
 
@@ -65,6 +76,11 @@ Deliverables:
 - maintenance scheduling actions
 - compliance assignment management
 - policy-controlled warning/block windows
+
+Current implementation:
+- due-soon and blocked-resource cockpit exists in Fleet
+- worker role/compliance assignment management exists in Staff
+- policy-controlled warning/block windows exist for rego, COI, service, and worker compliance
 
 Exit criteria:
 - spreadsheets no longer needed to determine whether a truck/worker is assignable
@@ -80,6 +96,11 @@ Deliverables:
 - reconciliation against imported historical shift data
 - variance detection between planned work and recorded shifts
 
+Current implementation:
+- `job_segments` assignments drive a native planned labor roster
+- driver shifts tab shows reconciliation between planned labor and imported `VEHICLE_DRIVER` rows
+- imported shifts remain for audit/history rather than primary planning
+
 Exit criteria:
 - daily driver/worker planning happens in Corkysoft first
 
@@ -92,6 +113,24 @@ Deliverables:
 - segment-linked stock allocation
 - supplier-linked maintenance/inventory flows
 - exception handling and reconciliation inside Corkysoft
+
+Current implementation:
+- Inventory tab exposes segment-linked stock and supplier coordination
+- inventory can be allocated directly to planned job segments
+- supplier context flows through segment-linked inventory shipments
+
+Current implementation detail:
+- per-job / per-segment inventory requirement lines now exist
+- required, allocated, and shortage quantities are tracked and surfaced
+- non-substitutable shortages block readiness; substitutable shortages create explicit override-required flags
+- Dispatch and Planner now surface shortage state before work is confirmed
+- custody/location truth now supports depot, truck, container, in transit, site, returned/storage, and exception contexts
+- container-heavy operations are supported as a first-class inventory architecture alongside consumables, reusable assets, serialized/tagged gear, job-specific lines, and general stock
+
+Next milestone:
+- deepen this from planning truth into richer warehouse execution and substitution workflow support
+- validate the requirement/custody model against real container-heavy operating patterns
+- use [Inventory Execution Workflow](inventory_execution_workflow.md) as the canonical warehouse-facing workflow spec
 
 Exit criteria:
 - operational stock and supplier workflows no longer require sheet-side tracking
@@ -106,6 +145,29 @@ Deliverables:
 - read-only import fallback mode
 - optional export snapshots for stakeholders still outside the app
 - operator training and rollback instructions
+
+Current implementation:
+- Dispatch tab provides a native job-centric execution board across segments,
+  trucks, workers, stock, suppliers, and readiness flags
+- dispatch snapshot CSV export exists for external stakeholders who still need a
+  lightweight operational extract
+- spreadsheet-backed imports remain available as fallback inputs rather than the
+  primary execution surface
+- Fleet admin tracks per-workflow cutover status, fallback mode, checklist
+  completion, snapshot requirements, and rollback instructions
+- Fleet admin also tracks rollout metrics per workflow: native usage %, target
+  %, fallback-use count, open issues, snapshot consumers, and review timestamp
+- review, fallback-drill, fallback-use, and snapshot-issued events are logged so
+  rollout metrics come from actual operational activity where possible
+- Fleet admin surfaces guarded recommended transitions so workflows can move
+  from `dual_run` -> `native_primary` -> `fallback_only` only when the current
+  gates and derived metrics justify it
+- rollout promotions now follow an explicit approval chain:
+  - operations manager requests promotion
+  - commercial owner approves or rejects it
+  - admin applies the status transition only after approval is present
+- rollout execution behavior is defined in
+  [Rollout Execution Stories](rollout_execution_user_stories.md)
 
 Exit criteria:
 - daily operations continue if spreadsheet imports are paused for a day
@@ -127,8 +189,10 @@ Exit criteria:
 
 ## Required Near-Term Work
 
-- add job-centric dispatch views built directly on `job_segments`
-- replace `present_driver` workflow dependence with native assignment/reconciliation
-- add maintenance/compliance cockpit and action flows
-- add native driver planning surface before deprecating `VEHICLE_DRIVER`
-- define cutover metrics for each spreadsheet-backed workflow
+- finish cutover checklists and fallback drills for each spreadsheet-backed workflow
+- validate which teams still need CSV snapshots and keep only the required field sets stable
+- run rollback drills for import outages or cutover regressions and keep the event log current in the cutover admin surface
+- keep cutover metrics current for each spreadsheet-backed workflow and use
+  them to decide when a sheet can move from dual-run to fallback-only
+- keep review, request, approval, rejection, drill, fallback-use, and
+  transition history current so rollout evidence stays trustworthy

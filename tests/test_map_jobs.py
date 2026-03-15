@@ -13,7 +13,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from analytics.routes_map import fetch_job_route_rows
+from analytics.routes_map import build_job_route_map, fetch_job_route_rows
+from dashboard.map_provider import folium_map_configuration
 from map_jobs import combine_route_geojson, compute_map_center
 
 
@@ -107,3 +108,31 @@ def test_fetch_job_route_rows_handles_missing_columns():
     assert "route_geojson" not in row.keys()
 
     conn.close()
+
+
+def test_build_job_route_map_uses_google_tiles_when_configured(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ROUTING_PROVIDER", "google")
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "abc123")
+    map_kwargs, tile_layer_kwargs = folium_map_configuration()
+    fmap = build_job_route_map(
+        [
+            {
+                "id": 1,
+                "origin": "Melbourne",
+                "destination": "Sydney",
+                "origin_resolved": "Melbourne",
+                "destination_resolved": "Sydney",
+                "origin_lat": -37.8136,
+                "origin_lon": 144.9631,
+                "dest_lat": -33.8688,
+                "dest_lon": 151.2093,
+                "route_geojson": "",
+            }
+        ],
+        include_actual=False,
+        map_kwargs=map_kwargs,
+        tile_layer_kwargs=tile_layer_kwargs,
+    )
+    html = fmap.get_root().render()
+    assert "mt1.google.com/vt/lyrs=m" in html
+    assert "abc123" in html

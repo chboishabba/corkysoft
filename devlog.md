@@ -18,3 +18,237 @@
 - Threaded segment-based planning into existing Staff and Fleet views so imported sheet context no longer masquerades as assignment truth.
 - Added worker/truck assignment summary helpers and segment detail views for staff/truck review screens.
 - Added a workflow-based spreadsheet replacement roadmap covering assignment, compliance/maintenance, native driver planning, inventory coordination, and final sheet decommissioning.
+- Added a maintenance/compliance cockpit in Fleet for blocked and due-soon rego, COI, service, and worker compliance items.
+- Added lightweight native role/compliance assignment flows in Staff so readiness data can be maintained inside Corkysoft instead of only in spreadsheets.
+- Added API coverage for readiness resources and worker role/compliance assignment routes.
+- Reframed the Driver shifts tab into a native labor planning and reconciliation surface, with segment-based planned roster at the top and imported `VEHICLE_DRIVER` rows below as audit input.
+- Added labor roster and reconciliation service/API helpers so cutover from spreadsheet-first labor planning can proceed without losing comparison visibility.
+- Added segment-linked inventory and supplier coordination so stock allocation now follows `job_segments` rather than only whole-job balances.
+- Added inventory coordination API and dashboard flows for allocating stock directly to planned segments.
+- Added a native Dispatch tab so jobs, segments, trucks, workers, stock, suppliers, and readiness flags can be managed from one job-centric board.
+- Added job-operations board service/API helpers and dispatch snapshot CSV export to support spreadsheet fallback without keeping sheets as the primary execution surface.
+- Validated the dispatch board and full spreadsheet-replacement slice with local `venv` tests: `tests/test_inventory_and_shipments.py`, `tests/test_operations_assignment.py`, `tests/test_api.py`, `tests/test_dashboard_app.py`, `tests/test_google_sheets_imports.py`, `tests/test_vehicle_workbook.py`, and `tests/test_operations_workbook.py`.
+- Added workflow-level spreadsheet cutover tracking with explicit cutover status, fallback mode, snapshot rules, checklist completion, and rollback instructions.
+- Added cutover admin controls in Fleet plus read-only cutover summary in Dispatch so operators and admins can see whether each workflow is truly native, dual-run, or fallback-only.
+- Revalidated the full operations slice after cutover-admin changes with local `venv` tests: `tests/test_operations_assignment.py`, `tests/test_api.py`, `tests/test_dashboard_app.py`, `tests/test_inventory_and_shipments.py`, `tests/test_google_sheets_imports.py`, `tests/test_vehicle_workbook.py`, and `tests/test_operations_workbook.py`.
+- Added workflow-level cutover metrics: native usage %, target %, fallback-use count, open issues, snapshot consumers, and last review timestamp.
+- Dispatch now exposes target-met visibility for operators, while Fleet admin can maintain the metrics used to decide when a workflow can move to fallback-only.
+- Fixed a cutover seed-table insert mismatch uncovered by tests and revalidated the full operations slice in local `venv`.
+- Switched cutover metrics from mostly manual admin entry to derived metrics backed by live operations state plus logged cutover events.
+- Added cutover event logging and API/UI actions for review, fallback drill, fallback use, and snapshot issuance.
+- MCP validation against the seeded Streamlit app uncovered and fixed an Inventory tab crash in the reserve/release stock selector; full operations tests passed again afterward.
+- MCP walkthrough confirmed the estimator (Quote builder), dispatcher/operator (Dispatch), fleet admin/ops manager (Fleet cutover admin + readiness cockpit), and Kent admin surfaces load separately and persist expected actions.
+- Replaced remaining `use_container_width` usages in the active Streamlit surfaces with `width='stretch'` / `width='content'` to remove the deprecation noise surfaced during live MCP testing.
+- Added rollout recommendations and a guarded apply path so cutover status transitions are evidence-based and one-click only when checklist gates and derived metrics allow them.
+- Added a dedicated rollout-execution stories doc for the live spreadsheet-decommissioning phase, separate from the core actor/product stories.
+- Extended spreadsheet cutover governance with explicit approval-chain events: `promotion_requested`, `promotion_approved`, and `promotion_rejected`.
+- Reused `operations_cutover_events` as the sole audit trail and made recommendation/apply behavior approval-aware instead of adding a second governance store.
+- Added Fleet cutover admin controls for request, approve, reject, and apply; Dispatch remains read-only for rollout state but now shows approval status in its summary.
+- Validated the approval-gated rollout path with local `venv` tests: `tests/test_operations_assignment.py`, `tests/test_api.py`, `tests/test_dashboard_app.py`, `tests/test_inventory_and_shipments.py`, `tests/test_google_sheets_imports.py`, `tests/test_vehicle_workbook.py`, and `tests/test_operations_workbook.py`.
+- Ran an MCP walkthrough against a seeded local Streamlit app and verified:
+  - dispatcher snapshot export logs `snapshot_issued`
+  - ops manager promotion request logs `promotion_requested`
+  - commercial owner approval logs `promotion_approved`
+  - admin apply logs `status_transition`
+  - `dispatch_execution` moved from `dual_run` to `native_primary`
+  - Dispatch, Fleet, Kent tenders, and Kent admin remained separate role surfaces
+- Added formal onboarding/help documentation in `docs/usage_onboarding_guide.md`.
+- Added a plain-language user-testing log in `docs/naive_user_tester_notes.md`.
+- Reran the user stories through MCP against fresh seeded job/tender/cutover data in `/tmp/corkysoft-mcp-stories.db`.
+- Confirmed estimator, dispatcher, operations/fleet manager, commercial owner, and rollout-admin flows still work in the live app on a fresh dataset.
+- Recorded the main UX issue from this pass in docs and roadmap: the global `historical_jobs` warning still leaks into operational tabs and should be suppressed there.
+- No code changes were required from this walkthrough; this pass was documentation, backlog, and live validation only.
+- Fixed the Fleet shared-workbook sync failure caused by pandas `NaT` values reaching SQLite through the vehicle workbook importer.
+- Tightened vehicle workbook parsing so optional text fields are normalized before insert and day-first fleet dates are parsed correctly.
+- Added explicit SQLite ignore patterns in `.gitignore`.
+- Validated the vehicle workbook changes with targeted local `venv` tests: `tests/test_vehicle_workbook.py`, `tests/test_operations_workbook.py`, and `tests/test_google_sheets_imports.py`.
+- Imported the provided shared operations workbook into `routes.db` and refreshed:
+  - vehicle/fleet details
+  - staff
+  - suppliers
+- Imported the second provided workbook into `routes.db` as a multi-tab vehicle workbook via its index sheet and per-vehicle tabs.
+- Post-import local counts in `routes.db`:
+  - trucks: 29
+  - vehicle_details: 29
+  - workers: 7
+  - suppliers: 14
+
+- Reviewed the imported operational footprint (`29` trucks, `29` vehicle detail rows, `7` workers, `14` suppliers) and confirmed the current UI covers the needed functions at this scale; the immediate gap is role/story documentation rather than missing operational surface area.
+- Started a docs-only role coverage alignment pass: expanded actor-story scope, added a role-to-surface coverage matrix, and rewired onboarding/README guidance so Staff, Driver shifts, Inventory, Fleet admin, and Kent surfaces have explicit ownership.
+
+- Updated the workflow docs to clarify a planner-UX gap: `job_segments` remain the internal planning truth, but the intended operator workflow should be map/corridor/site-first with historical overlap and profitability-aware draft legs rather than manual segment entry.
+- Added roadmap/context notes to keep the upcoming planner work anchored to docs before implementation resumes.
+
+- Added `docs/planner_interaction_model.md` as the canonical spec for the missing planner interaction model above `job_segments`.
+- Wired the existing `Planner` scaffold into the live dashboard tab flow in `dashboard/app.py`; the role-layout layer, planner helpers, and planner component were already present, but the tab was not being rendered.
+- Fixed the role-layout integration bug exposed during validation: hidden tabs can no longer crash the app because top-level tab bodies now respect the resolved visible-tab set.
+- Updated README/ROADMAP/planner spec wording from planned to implemented for the current planner scaffold, and added a regression test to ensure the dashboard render path keeps the `Planner` tab active.
+- Deepened the planner from a corridor-only scaffold into a hybrid job-first / corridor-first surface. Planner proposals now include routing context, resource-fit context, warnings, and grouped explainability before confirming into `job_segments`.
+- Updated product docs and roadmap to reflect planner milestone 2 as implemented and to position inventory as the next systems milestone: requirement planning, shortage detection, custody/location truth, and explicit support for container-heavy operations alongside other inventory architectures.
+- Implemented the first real inventory planning layer on top of the existing stock/movement ledger.
+- Added inventory requirement lines per job segment, with architecture tagging and optional substitution semantics.
+- Added shortage calculation from required vs allocated quantities, and folded those shortages into segment readiness:
+  - non-substitutable shortages block readiness
+  - substitutable shortages create explicit override-required flags
+- Extended inventory custody/location tracking so movement events can update operational location truth across depot, truck, container, in-transit, site, returned/storage, and exception contexts.
+- Surfaced the new inventory semantics in:
+  - Inventory tab requirement-planning and custody tools
+  - Dispatch shortage summaries
+  - Planner inventory-fit context
+- Validated with local `venv` tests:
+  - `tests/test_inventory_and_shipments.py`
+  - `tests/test_operations_assignment.py`
+  - `tests/test_planner.py`
+  - `tests/test_dashboard_app.py`
+  - `tests/test_api.py`
+  - `tests/test_operations_workbook.py`
+  - `tests/test_google_sheets_imports.py`
+  - `tests/test_vehicle_workbook.py`
+- Added `docs/inventory_execution_workflow.md` as the canonical spec for warehouse-facing inventory execution.
+- Locked the current execution decisions in docs:
+  - planning stays requirement-line / `m3` oriented
+  - custody/execution is container-first where applicable
+  - warehouse/crew records routine pick / pack / load state transitions
+  - dispatcher / operations manager approves substitutions
+  - manager review is for exception/escalation cases rather than normal execution
+- Follow-up docs alignment completed:
+  - added `Warehouse / Crew` as a first-class actor in user stories, onboarding, and the role matrix
+  - clarified that warehouse/crew requests substitutions, dispatcher/ops approves them, and manager handles escalation
+  - clarified that operator workflow stages sit above the persisted inventory movement state model rather than silently replacing it
+- Implemented constrained inventory execution progression so routine warehouse updates follow allowed next actions rather than arbitrary stage entry.
+- Added seeded/admin-manageable inventory substitution reason codes and enforced approval-role rules for substitution decisions.
+- Extended Inventory and Dispatch surfaces to expose execution stage, approved/requested substitution quantities, pending substitution state, and recent execution history.
+- Validated inventory execution changes with local `venv` tests:
+  - `tests/test_inventory_and_shipments.py`
+  - `tests/test_operations_assignment.py`
+  - `tests/test_dashboard_app.py`
+  - `tests/test_planner.py`
+- Added docs for next operations concerns beyond current inventory execution:
+  - `docs/worker_time_capture_workflow.md` for app / WhatsApp / voice/landline clock-on/off capture
+  - `docs/accommodation_availability_operations.md` for remote/peak-period availability support in Planner and Dispatch
+- Updated inventory docs to clarify the next warehouse UX step:
+  - requirement/container picklists
+  - explicit action buttons
+  - barcode/QR-assisted capture
+- Ran `robust-context-fetch` against the local archive for booking.com/accommodation context.
+  - source used: `db`
+  - result: no direct canonical booking.com thread resolved; availability hits were noisy and largely unrelated
+  - decision: treat accommodation availability as a new documented product direction, not a previously locked archived spec
+
+## 2026-03-13 (Call Intelligence Foundation)
+- Added fake transcript generation as the practical current ingest surface for calls so the review pipeline can be exercised without telephony or live WhisperX submission.
+- Documented delivery-worker thoughts for future StatiBaker egress instead of overloading the current operator/UI path with synchronous delivery semantics.
+
+- Implemented first-class `call_event` persistence, transcript artifacts, extracted-action review, worker time capture events, and append-only egress rows for downstream StatiBaker-style consumption.
+- Added `corkysoft/whisperx_adapter.py` to interface with external WhisperX-WebUI through `/transcription/` submission and `/task/{identifier}` polling rather than embedding ASR in Corkysoft.
+- Added API routes and a new `Calls` dashboard tab for manual event logging, transcript review, extracted-action acceptance/rejection, link resolution, and worker time review.
+- Added focused test coverage for call ops, API routes, role-layout tab presence, and dashboard render flow.
+- Validation passed in the local `venv` for `tests/test_call_ops.py`, `tests/test_dashboard_layouts.py`, `tests/test_dashboard_app.py`, `tests/test_api.py`, `tests/test_operations_assignment.py`, `tests/test_inventory_and_shipments.py`, and `tests/test_planner.py`.
+
+## 2026-03-13 (Routed Call Sessions)
+- Reworked call intelligence from flat `call_event` handling into a routed `call_session` + `call_leg` model while keeping the old call-event API as a compatibility wrapper.
+- Added explicit routing-event history (`call_received`, `call_routed`, `call_answered`, transfers/consults) so one-recipient and call-centre cases share the same operational substrate.
+- Added `ambient_session` support for always-on office transcription so off-call discussion capture is not mis-modeled as a phone call.
+- Shifted the `Calls` tab to session/leg-first review while preserving call-note, extracted-action, worker-time, and fake-transcript workflows.
+- Validation passed in the local `venv` for `tests/test_call_ops.py`, `tests/test_api.py`, and `tests/test_dashboard_app.py`.
+
+## 2026-03-14 (Risk-Driven Test Wave)
+- Added adversarial and cross-surface tests for call authority/correction, worker-time anomaly tagging, inventory substitution/readiness, planner resource warnings, and Google Sheets worker-import reconciliation.
+- Added lightweight worker-time anomaly handling so duplicate clock events and clock-off-without-prior-clock-on fall back to `pending_review` with explicit anomaly flags in `rawPayload` rather than auto-accepting.
+- Validation passed in local `venv` for `tests/test_call_ops.py`, `tests/test_api.py`, `tests/test_inventory_and_shipments.py`, `tests/test_operations_assignment.py`, `tests/test_planner.py`, and `tests/test_google_sheets_imports.py`.
+
+## 2026-03-14 (Live MCP Role Walkthrough)
+- Used the already-running local Streamlit server on `http://localhost:8501` against `routes.db` rather than a disposable server.
+- Seeded one minimal live scenario into `routes.db` so dispatcher, warehouse/crew, labor planner, and system-admin flows had real state to act on:
+  - one planned job/segment
+  - one container-heavy shortage with pending substitution
+  - one routed call session with manager consult and pending extracted action
+  - one ambiguous worker time capture event
+  - one dispatch cutover workflow in `dual_run`
+- Verified via live UI plus SQLite that these actions persisted:
+  - dispatch snapshot export
+  - extracted-action acceptance
+  - warehouse `picked` execution event
+  - worker-time review acceptance
+  - Fleet cutover review event
+- Found a real operator-flow blocker:
+  - `Calls` and `Inventory` still call `st.experimental_rerun()` directly
+  - the current Streamlit build no longer exposes it
+  - result: action persists, then the page crashes with `AttributeError`
+- Confirmed `Fleet` does not have this problem because it already uses a compatibility helper that prefers `st.rerun()`.
+- Additional role-model findings from the live walkthrough:
+  - dispatcher role-layout defaults still omit `Calls`
+  - labor-planner review still effectively ends in `Calls`; `Staff` / `Driver shifts` do not yet expose that reviewed state strongly enough as the natural downstream surface
+- Added a reusable local seeding harness for planning tests:
+  - `analytics/seed_harness.py`
+  - `scripts/seed_planning_harness.py`
+- Seeded 10 clustered mainland-Australia jobs into `routes.db` with:
+  - one segment per job
+  - provider-ready route geometry placeholders
+  - container-heavy inventory requirements
+  - baseline stock assumption of 30 `Standard Container Pod` units
+- Resulting live state after seeding:
+  - total jobs: 11
+  - total job_segments: 11
+  - total inventory_requirements: 11
+  - seeded corridor density: 4 Brisbane->Sunshine Coast, 2 Brisbane->Gold Coast, 2 Brisbane->Toowoomba, 2 Sydney->Newcastle, 1 Melbourne->Geelong
+
+## 2026-03-14 (Planner Site Context and Map Parity)
+- Closed the remaining saved-route provider parity gap by making the Folium saved-job route overlay use the same provider-aware tile configuration as the rest of the dashboard when Google Maps is active.
+- Added durable site-context persistence for Planner-driven last-mile work:
+  - `site_media_assets`
+  - `site_assessments`
+  - `media_inference_results`
+- Planner now surfaces accepted site-risk assessments, linked site media, and reviewed advisory media outputs (including volume-estimate scaffolding) for selected jobs.
+- Added Google-first 360 Street View URL support in the site-context helper layer.
+- Validation passed for compile, planner/map/site-media tests, and dashboard/operations smoke tests.
+- Added explicit planner-design notes for the next site-aware step: convert accepted site evidence into planning consequences rather than just displaying imagery/risk labels, and treat future CV services as advisory until reviewed.
+- Documented the model-backed media direction more explicitly: reviewed CV/volume outputs should attach to quote/job records and only become planner constraints after acceptance/correction.
+- Clarified priority for that planner work: richer interpreted site constraints are the right long-term layer, but deeper constraint policy should not outrun the media/CV pipeline. The immediate priority should be making walkaround/media ingestion and reviewed model outputs real enough that stronger constraint logic is grounded in better evidence.
+- Seed harness now backfills deterministic route-geometry data into historical_jobs and historical_job_routes as well as live jobs, so default historical-first analysis surfaces can see the synthetic planning jobs.
+- Planner routing preview no longer fabricates straight-line fallbacks when stored route geometry is missing; it now prefers real stored geometry only.
+- Completed the practical non-CV follow-up slice:
+  - replaced the remaining crash-prone direct rerun calls in the live `Calls` and `Inventory` paths with the compatibility helper
+  - made the main `upsert_job_by_number(...)` path attempt live route-geometry enrichment automatically after job creation/update
+  - tightened Planner site-summary UX so manual site assessments are framed more clearly as the input that unlocks truck-fit / shuttle / labor / access consequences
+- Live MCP recheck on the restarted app confirmed:
+  - `Calls` can generate a fake transcript without crashing on rerun
+  - `Inventory` can record a custody update without crashing on rerun
+  - `Route maps` still shows stored geometry and Google-backed saved overlays
+- Implemented the next operational hardening slice:
+  - `persist_quote(...)` / quote-save now attempts historical-job route-geometry enrichment automatically after insert/commit
+  - added dispatcher stale-layout detection and a one-click repair prompt when older stored layouts are missing recommended focus tabs like `Calls`
+  - surfaced worker-time capture state more strongly in `Staff` and `Driver shifts`, including pending/accepted/rejected visibility and labor-surface review controls
+- Followed up by tightening `Driver shifts` specifically:
+  - accepted call-derived worker-time events are now compared explicitly against imported VEHICLE_DRIVER rows with `matched / imported_only / call_only` statuses
+  - this makes reconciliation clearer instead of merely showing the two datasets near each other in the same tab
+- Audited remaining non-test job/historical creation seams:
+  - no additional production insert path outside the already-covered shared helpers required new geometry-enrichment code in this pass
+  - the real production creation paths are now `persist_quote(...)`, `upsert_job_by_number(...)`, historical import, and load/seed backfill
+- Added regression coverage for:
+  - quote-save historical geometry enrichment
+  - stale dispatcher layout detection
+  - dashboard source-level checks for dispatcher repair and worker-time labor-surface visibility
+- Validation for this slice:
+  - `52 passed` across quote-service, dashboard-layout, dashboard-app, and call-ops suites
+- Refined `Driver shifts` reconciliation beyond coarse date/worker/truck matching:
+  - accepted worker-time events are now matched against imported roster windows using same-worker/same-day plus shift-window containment for the call-derived `effectiveTimestamp`
+  - mismatches now classify as `truck_mismatch`, `job_mismatch`, `assignment_mismatch`, or `time_mismatch` instead of collapsing into generic absence
+- Live verification work for that refinement:
+  - seeded a deterministic `Riley Worker` imported shift plus accepted out-of-window worker-time event into `routes.db`
+  - confirmed the running `Driver shifts` tab shows the new mismatch summary block live (`Truck/job mismatch = 1`)
+  - confirmed the seeded row resolves to `time_mismatch` via the same helper the UI uses
+- Focused validation for the refinement:
+  - `tests/test_dashboard_app.py`: `5 passed`
+- Polished the `Driver shifts` reconciliation UI so operators now see explicit mismatch classes in a display table instead of only raw backend status codes and aggregate counts.
+- Renamed the summary metric from `Truck/job mismatch` to `Mismatch / timing drift` because the bucket now intentionally includes `time_mismatch` as well as truck/job assignment problems.
+- Kept start/end tolerance logic explicitly deferred: current worker-time capture is still simple `clock_on` / `clock_off`, so exact shift-window containment is enough for now; finer early/late/overtime tolerances should wait until the event model becomes richer.
+- Added a dedicated `docs/payroll_and_labor_analytics.md` spec to define the missing layer between labor operations/time-capture truth and external payroll/accounting systems.
+- Locked the product posture for that layer as analytics + payroll preparation, not full payroll execution.
+- Documented the low-surveillance default explicitly: aggregate, distribution, trend, and exception views first; person-level drill-down only when justified by payroll prep, anomaly review, forecasting, or cost investigation.
+- Extended operator docs to cover the new owner/commercial/finance-facing manager story plus labor/time-capture responsibilities for payroll-prep confidence.
+- Implemented the first `Payroll / Labor analytics` cockpit as a distinct management/payroll-prep surface above `Staff` / `Driver shifts`.
+- Added a shared derived analytics layer over planned labor assignments, imported `driver_shifts`, and reviewed `worker_time_capture_events` so Streamlit and FastAPI use the same labor-analytics truth.
+- Implemented read-only labor-analytics API endpoints for summary, pay forecast, overtime distribution, confidence/anomaly summary, and cost-driver groupings.
+- Shipped the first payroll cockpit as aggregate-first without inferring absence/sick days from weak signals; later added a basic explicit absence/leave record model instead of building those analytics from missing shifts.
+- Extended payroll analytics beyond the initial cockpit: added export-ready worker labor summaries for payroll/accounting handoff, a basic explicit worker absence/leave record model, absence-aware summaries in the dashboard/API, and a manager-facing absence/leave recording form inside `Payroll / Labor analytics`.

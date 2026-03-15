@@ -92,10 +92,14 @@ For full optimization, we should standardize:
 
 Use a staged optimizer rather than a single monolithic solve:
 
+0. **Planner interaction phase**
+   - user selects roadway/corridor/site extents visually
+   - historical overlap, route familiarity, and profitability context surface candidate legs
+   - the system proposes a draft operational plan before low-level assignment begins
 1. **Tender/job pre-ranking**
    - profitability + urgency + route familiarity + spare-capacity signals.
 2. **Assignment phase**
-   - choose feasible truck/crew combinations for each candidate job.
+   - choose feasible truck/crew combinations for each candidate job/leg.
 3. **Sequencing phase**
    - optimize pickup/drop order for each truck route.
 4. **Transfer phase (optional)**
@@ -177,9 +181,13 @@ Any future solver output must expose:
 - expected margin/cost impact
 - operator-visible risk flags
 
+Planner interaction reference:
+- [Planner Interaction Model](planner_interaction_model.md)
+
 ## Near-Term Documentation Deliverables
 
-1. Define transfer policy and allowed nodes.
-2. Define job split rules (what can be split, and when).
-3. Define route-plan schema (stop sequence, load evolution, transfer markers).
-4. Define operator UI expectations for explainability ("why this plan was chosen").
+1. Define the planner interaction model for visually selecting roadway/corridor/site extents and surfacing historical overlap.
+2. Define transfer policy and allowed nodes.
+3. Define job split rules (what can be split, and when).
+4. Define route-plan schema (stop sequence, load evolution, transfer markers).
+5. Define operator UI expectations for explainability ("why this plan was chosen").

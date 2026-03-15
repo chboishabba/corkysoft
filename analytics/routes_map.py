@@ -15,13 +15,22 @@ from .routing_provider import RoutingProvider, get_routing_provider
 
 logger = logging.getLogger(__name__)
 
+def _row_get(row: Any, key: str, default: Any = None) -> Any:
+    if isinstance(row, Mapping):
+        return row.get(key, default)
+    try:
+        return row[key]
+    except Exception:
+        return default
+
+
 def _iter_valid_coords(rows: Sequence[Mapping[str, Any]]) -> Iterable[tuple[float, float]]:
     """Yield ``(lat, lon)`` tuples for rows with coordinates."""
 
     for row in rows:
         for lat_key, lon_key in (("origin_lat", "origin_lon"), ("dest_lat", "dest_lon")):
-            lat = row.get(lat_key)
-            lon = row.get(lon_key)
+            lat = _row_get(row, lat_key)
+            lon = _row_get(row, lon_key)
             if lat is not None and lon is not None:
                 yield float(lat), float(lon)
 
@@ -63,7 +72,13 @@ def combine_route_geojson(geojson_strings: Iterable[str]) -> Dict[str, Any]:
     return {"type": "FeatureCollection", "features": features}
 
 
-def build_job_route_map(rows: Sequence[Mapping[str, Any]], *, include_actual: bool) -> "folium.Map":
+def build_job_route_map(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    include_actual: bool,
+    map_kwargs: Mapping[str, Any] | None = None,
+    tile_layer_kwargs: Mapping[str, Any] | None = None,
+) -> "folium.Map":
     """Return a Folium map visualising ``rows``.
 
     The map always plots straight-line routes between origin/destination points
@@ -76,7 +91,9 @@ def build_job_route_map(rows: Sequence[Mapping[str, Any]], *, include_actual: bo
         raise SystemExit("Folium not installed. Run: pip install folium") from exc
 
     center = compute_map_center(rows)
-    fmap = folium.Map(location=center, zoom_start=5)
+    fmap = folium.Map(location=center, zoom_start=5, **dict(map_kwargs or {}))
+    if tile_layer_kwargs:
+        folium.TileLayer(**dict(tile_layer_kwargs)).add_to(fmap)
 
     markers_group = folium.FeatureGroup(name="Locations", show=True)
     crow_group = folium.FeatureGroup(name="Straight-line routes", show=not include_actual)
@@ -85,15 +102,15 @@ def build_job_route_map(rows: Sequence[Mapping[str, Any]], *, include_actual: bo
     combined_geojson: List[str] = []
 
     for row in rows:
-        o_lat = row.get("origin_lat")
-        o_lon = row.get("origin_lon")
-        d_lat = row.get("dest_lat")
-        d_lon = row.get("dest_lon")
+        o_lat = _row_get(row, "origin_lat")
+        o_lon = _row_get(row, "origin_lon")
+        d_lat = _row_get(row, "dest_lat")
+        d_lon = _row_get(row, "dest_lon")
 
-        origin_label = row.get("origin")
-        dest_label = row.get("destination")
-        origin_resolved = row.get("origin_resolved") or origin_label
-        dest_resolved = row.get("destination_resolved") or dest_label
+        origin_label = _row_get(row, "origin")
+        dest_label = _row_get(row, "destination")
+        origin_resolved = _row_get(row, "origin_resolved") or origin_label
+        dest_resolved = _row_get(row, "destination_resolved") or dest_label
 
         if o_lat is not None and o_lon is not None:
             markers_group.add_child(
@@ -124,7 +141,7 @@ def build_job_route_map(rows: Sequence[Mapping[str, Any]], *, include_actual: bo
             )
 
         if include_actual:
-            route_geojson = row.get("route_geojson")
+            route_geojson = _row_get(row, "route_geojson")
             if isinstance(route_geojson, str):
                 combined_geojson.append(route_geojson)
 
@@ -274,10 +291,10 @@ def _store_historical_geometry(
         parameters.append(dest_lat)
 
     if "distance_km" in available_columns:
-        assignments.append("distance_km = ?")
+        assignments.append("distance_km = COALESCE(distance_km, ?)")
         parameters.append(distance_km)
     if "duration_hr" in available_columns:
-        assignments.append("duration_hr = ?")
+        assignments.append("duration_hr = COALESCE(duration_hr, ?)")
         parameters.append(duration_hr)
     if "updated_at" in available_columns:
         assignments.append("updated_at = ?")
@@ -319,10 +336,10 @@ def _store_live_geometry(
         assignments.append("route_geojson = ?")
         parameters.append(geojson)
     if "distance_km" in available_columns:
-        assignments.append("distance_km = ?")
+        assignments.append("distance_km = COALESCE(distance_km, ?)")
         parameters.append(distance_km)
     if "duration_hr" in available_columns:
-        assignments.append("duration_hr = ?")
+        assignments.append("duration_hr = COALESCE(duration_hr, ?)")
         parameters.append(duration_hr)
     if "origin_lon" in available_columns:
         assignments.append("origin_lon = COALESCE(origin_lon, ?)")
@@ -396,36 +413,38 @@ def populate_route_geometry(
     if dataset not in {"historical", "live"}:
         raise ValueError("dataset must be either 'historical' or 'live'")
 
-    if conn.row_factory is None:
+    previous_row_factory = conn.row_factory
+    if previous_row_factory is None:
         conn.row_factory = sqlite3.Row
 
     historical_columns: set[str] = set()
 
-    if dataset == "historical":
-        historical_columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(historical_jobs)").fetchall()
-        }
-        origin_lon_expr = (
-            "COALESCE(hj.origin_lon, o.lon)"
-            if "origin_lon" in historical_columns
-            else "o.lon"
-        )
-        origin_lat_expr = (
-            "COALESCE(hj.origin_lat, o.lat)"
-            if "origin_lat" in historical_columns
-            else "o.lat"
-        )
-        dest_lon_expr = (
-            "COALESCE(hj.dest_lon, d.lon)"
-            if "dest_lon" in historical_columns
-            else "d.lon"
-        )
-        dest_lat_expr = (
-            "COALESCE(hj.dest_lat, d.lat)"
-            if "dest_lat" in historical_columns
-            else "d.lat"
-        )
-        query = f"""
+    try:
+        if dataset == "historical":
+            historical_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(historical_jobs)").fetchall()
+            }
+            origin_lon_expr = (
+                "COALESCE(hj.origin_lon, o.lon)"
+                if "origin_lon" in historical_columns
+                else "o.lon"
+            )
+            origin_lat_expr = (
+                "COALESCE(hj.origin_lat, o.lat)"
+                if "origin_lat" in historical_columns
+                else "o.lat"
+            )
+            dest_lon_expr = (
+                "COALESCE(hj.dest_lon, d.lon)"
+                if "dest_lon" in historical_columns
+                else "d.lon"
+            )
+            dest_lat_expr = (
+                "COALESCE(hj.dest_lat, d.lat)"
+                if "dest_lat" in historical_columns
+                else "d.lat"
+            )
+            query = f"""
             SELECT
                 hj.id,
                 {origin_lon_expr} AS origin_lon,
@@ -439,11 +458,11 @@ def populate_route_geometry(
             LEFT JOIN historical_job_routes AS hr ON hr.historical_job_id = hj.id
             WHERE hj.id IN ({placeholders})
         """
-    else:
-        live_columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
-        }
-        query = f"""
+        else:
+            live_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+            }
+            query = f"""
             SELECT
                 id,
                 origin_lon,
@@ -455,65 +474,67 @@ def populate_route_geometry(
             WHERE id IN ({placeholders})
         """
 
-    rows = conn.execute(query, identifiers).fetchall()
-    if not rows:
-        return 0
+        rows = conn.execute(query, identifiers).fetchall()
+        if not rows:
+            return 0
 
-    updated = 0
-    route_provider = get_routing_provider(provider=provider, client=client)
+        updated = 0
+        route_provider = get_routing_provider(provider=provider, client=client)
 
-    for row in rows:
-        job_id = int(row["id"])
-        existing = row["existing_geojson"]
-        if isinstance(existing, str) and existing.strip():
-            continue
+        for row in rows:
+            job_id = int(row["id"])
+            existing = row["existing_geojson"]
+            if isinstance(existing, str) and existing.strip():
+                continue
 
-        coords = _extract_coordinates(row)
-        if coords is None:
-            logger.debug("Skipping job %s: missing coordinates", job_id)
-            continue
+            coords = _extract_coordinates(row)
+            if coords is None:
+                logger.debug("Skipping job %s: missing coordinates", job_id)
+                continue
 
-        origin_lon, origin_lat, dest_lon, dest_lat = coords
-        try:
-            geometry = route_provider.route_geometry(
-                origin=(origin_lon, origin_lat),
-                destination=(dest_lon, dest_lat),
-            )
-            geojson = geometry.dumps()
-            distance_km = float(geometry.distance_km)
-            duration_hr = float(geometry.duration_hr)
-        except Exception as exc:  # pragma: no cover - defensive logging only
-            logger.warning("Failed to fetch route geometry for job %s: %s", job_id, exc)
-            continue
+            origin_lon, origin_lat, dest_lon, dest_lat = coords
+            try:
+                geometry = route_provider.route_geometry(
+                    origin=(origin_lon, origin_lat),
+                    destination=(dest_lon, dest_lat),
+                )
+                geojson = geometry.dumps()
+                distance_km = float(geometry.distance_km)
+                duration_hr = float(geometry.duration_hr)
+            except Exception as exc:  # pragma: no cover - defensive logging only
+                logger.warning("Failed to fetch route geometry for job %s: %s", job_id, exc)
+                continue
 
-        if dataset == "historical":
-            _store_historical_geometry(
-                conn,
-                job_id,
-                distance_km=distance_km,
-                duration_hr=duration_hr,
-                geojson=geojson,
-                origin_lon=origin_lon,
-                origin_lat=origin_lat,
-                dest_lon=dest_lon,
-                dest_lat=dest_lat,
-                available_columns=historical_columns,
-            )
-        else:
-            _store_live_geometry(
-                conn,
-                job_id,
-                distance_km=distance_km,
-                duration_hr=duration_hr,
-                geojson=geojson,
-                origin_lon=origin_lon,
-                origin_lat=origin_lat,
-                dest_lon=dest_lon,
-                dest_lat=dest_lat,
-                available_columns=live_columns,
-            )
+            if dataset == "historical":
+                _store_historical_geometry(
+                    conn,
+                    job_id,
+                    distance_km=distance_km,
+                    duration_hr=duration_hr,
+                    geojson=geojson,
+                    origin_lon=origin_lon,
+                    origin_lat=origin_lat,
+                    dest_lon=dest_lon,
+                    dest_lat=dest_lat,
+                    available_columns=historical_columns,
+                )
+            else:
+                _store_live_geometry(
+                    conn,
+                    job_id,
+                    distance_km=distance_km,
+                    duration_hr=duration_hr,
+                    geojson=geojson,
+                    origin_lon=origin_lon,
+                    origin_lat=origin_lat,
+                    dest_lon=dest_lon,
+                    dest_lat=dest_lat,
+                    available_columns=live_columns,
+                )
 
-        updated += 1
+            updated += 1
 
-    conn.commit()
-    return updated
+        conn.commit()
+        return updated
+    finally:
+        conn.row_factory = previous_row_factory

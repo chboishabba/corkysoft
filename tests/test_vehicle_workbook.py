@@ -160,3 +160,69 @@ def test_import_vehicle_details_from_crusader_workbook() -> None:
     assert vehicle["state"] == "QLD"
     assert vehicle["make"] == "HINO"
     assert vehicle["body_type"] == "TRUCK"
+
+
+def test_import_vehicle_details_from_dataframe_tolerates_nat_values() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    ensure_dashboard_tables(conn)
+
+    df = pd.DataFrame(
+        {
+            "REGO": ["NAT123"],
+            "MAKE": [pd.NaT],
+            "MODEL": [pd.NaT],
+            "DESCRIPTION": [pd.NaT],
+            "BODY TYPE": [pd.NaT],
+            "COI NUMBER": [pd.NaT],
+            "PRESENT DRIVER": [pd.NaT],
+            "NEXT SERVICE DUE": ["2026-04-01"],
+        }
+    )
+
+    inserted = import_vehicle_details_from_dataframe(conn, df)
+    assert inserted == 1
+
+    vehicle = conn.execute(
+        """
+        SELECT make, model, description, body_type, coi_number, present_driver, next_service
+        FROM vehicle_details
+        WHERE truck_id = 'NAT123'
+        """
+    ).fetchone()
+    assert vehicle["make"] is None
+    assert vehicle["model"] is None
+    assert vehicle["description"] is None
+    assert vehicle["body_type"] is None
+    assert vehicle["coi_number"] is None
+    assert vehicle["present_driver"] is None
+    assert vehicle["next_service"] == "2026-04-01"
+
+
+def test_import_vehicle_details_from_dataframe_parses_day_first_dates() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    ensure_dashboard_tables(conn)
+
+    df = pd.DataFrame(
+        {
+            "REGO": ["DAY123"],
+            "REGO EXPIRY DATE ": ["03/06/2026"],
+            "NEXT SERVICE DUE": ["15/04/2026"],
+            "CERTIFICATE OF INSPECTION (COI) DUE DATE ": ["22/08/2026"],
+        }
+    )
+
+    inserted = import_vehicle_details_from_dataframe(conn, df)
+    assert inserted == 1
+
+    vehicle = conn.execute(
+        """
+        SELECT rego_expiry, next_service, coi_due
+        FROM vehicle_details
+        WHERE truck_id = 'DAY123'
+        """
+    ).fetchone()
+    assert vehicle["rego_expiry"] == "2026-06-03"
+    assert vehicle["next_service"] == "2026-04-15"
+    assert vehicle["coi_due"] == "2026-08-22"

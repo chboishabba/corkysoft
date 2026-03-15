@@ -23,6 +23,7 @@ _COLUMN_ALIASES: Mapping[str, str] = {
     "body type": "body_type",
     "description": "description",
     "nhv charging code": "nhv_code",
+    "national heavy vehicle charging code": "nhv_code",
     "nhv code": "nhv_code",
     "insurance type": "insurance",
     "insurance": "insurance",
@@ -31,6 +32,7 @@ _COLUMN_ALIASES: Mapping[str, str] = {
     "next service due": "next_service",
     "coi number": "coi_number",
     "certificate of inspection (coi) due date": "coi_due",
+    "certificate of inspection coi due date": "coi_due",
     "coi due date": "coi_due",
     "present driver": "present_driver",
     "daily complete": "daily_check_complete",
@@ -57,11 +59,25 @@ def _resolve_sheet_name(sheet_names: Sequence[str], hints: Sequence[str]) -> str
 
 
 def _coerce_date(value: object) -> str | None:
-    timestamp = pd.to_datetime(value, errors="coerce")
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, pd.Timestamp):
+        return value.date().isoformat()
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    text = str(value).strip()
+    if not text or text.lower() in {"nat", "nan", "none", "not required"}:
+        return None
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(text, fmt).date().isoformat()
+        except ValueError:
+            continue
+    timestamp = pd.to_datetime(text, errors="coerce", dayfirst=True)
     if pd.isna(timestamp):
         return None
     if isinstance(timestamp, pd.Timestamp):
-        timestamp = timestamp.to_pydatetime()
+        return timestamp.date().isoformat()
     if isinstance(timestamp, datetime):
         return timestamp.date().isoformat()
     return None
@@ -74,6 +90,15 @@ def _coerce_int(value: object) -> int | None:
         return int(str(value).replace(",", "").strip())
     except (TypeError, ValueError):
         return None
+
+
+def _coerce_text(value: object) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"nat", "nan", "none"}:
+        return None
+    return text
 
 
 def _coerce_bool(value: object) -> bool | None:
@@ -172,8 +197,8 @@ def _canonical_column_mapping(columns: Iterable[str]) -> Mapping[str, str]:
 
 
 def _compose_truck_name(row: Mapping[str, object]) -> str | None:
-    make = str(row.get("make") or "").strip()
-    model = str(row.get("model") or "").strip()
+    make = _coerce_text(row.get("make")) or ""
+    model = _coerce_text(row.get("model")) or ""
     year = row.get("year")
     parts = [part for part in (make, model) if part]
     if year and not pd.isna(year):
@@ -183,9 +208,9 @@ def _compose_truck_name(row: Mapping[str, object]) -> str | None:
             parts.append(str(year).strip())
     if parts:
         return " ".join(parts)
-    description = row.get("description")
-    if isinstance(description, str) and description.strip():
-        return description.strip()
+    description = _coerce_text(row.get("description"))
+    if description:
+        return description
     return None
 
 
@@ -211,32 +236,38 @@ def import_vehicle_details_from_dataframe(
     prepared = df.rename(columns=column_mapping)
     inserted = 0
     for _, row in prepared.iterrows():
-        rego = str(row.get("rego") or "").strip()
+        rego = _coerce_text(row.get("rego")) or ""
         if not rego:
             continue
 
         truck_name = _compose_truck_name(row)
-        upsert_truck(conn, truck_id=rego, name=truck_name, active=True, notes=row.get("description"))
+        upsert_truck(
+            conn,
+            truck_id=rego,
+            name=truck_name,
+            active=True,
+            notes=_coerce_text(row.get("description")),
+        )
 
         upsert_vehicle_details(
             conn,
             truck_id=rego,
-            state=(row.get("state") or None),
+            state=_coerce_text(row.get("state")),
             rego=rego,
             rego_expiry=_coerce_date(row.get("rego_expiry")),
-            make=(row.get("make") or None),
-            model=(row.get("model") or None),
+            make=_coerce_text(row.get("make")),
+            model=_coerce_text(row.get("model")),
             year=_coerce_int(row.get("year")),
-            body_type=(row.get("body_type") or None),
-            description=(row.get("description") or None),
-            nhv_code=(row.get("nhv_code") or None),
-            insurance=(row.get("insurance") or None),
+            body_type=_coerce_text(row.get("body_type")),
+            description=_coerce_text(row.get("description")),
+            nhv_code=_coerce_text(row.get("nhv_code")),
+            insurance=_coerce_text(row.get("insurance")),
             odometer=_coerce_int(row.get("odometer")),
             last_service=_coerce_date(row.get("last_service")),
             next_service=_coerce_date(row.get("next_service")),
-            coi_number=(row.get("coi_number") or None),
+            coi_number=_coerce_text(row.get("coi_number")),
             coi_due=_coerce_date(row.get("coi_due")),
-            present_driver=(row.get("present_driver") or None),
+            present_driver=_coerce_text(row.get("present_driver")),
             daily_check_complete=_coerce_bool(row.get("daily_check_complete")),
             source_system="google_sheets",
             source_sheet="VEHICLE",

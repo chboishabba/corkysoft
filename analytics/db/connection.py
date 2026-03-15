@@ -34,7 +34,7 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> Sequence[str]:
     """Return column names for ``table`` preserving declared order."""
 
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return [row["name"] for row in rows]
+    return [row["name"] if isinstance(row, sqlite3.Row) else row[1] for row in rows]
 
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:

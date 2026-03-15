@@ -1290,6 +1290,65 @@ def test_import_historical_jobs_from_dataframe_inserts_rows(tmp_path):
         conn.close()
 
 
+def test_import_historical_jobs_from_dataframe_attempts_geometry_enrichment(tmp_path, monkeypatch):
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    calls: list[tuple[list[int], str]] = []
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE historical_jobs (
+                id INTEGER PRIMARY KEY,
+                job_date TEXT,
+                client TEXT,
+                corridor_display TEXT,
+                price_per_m3 REAL,
+                revenue_total REAL,
+                revenue REAL,
+                volume_m3 REAL,
+                volume REAL,
+                distance_km REAL,
+                final_cost REAL,
+                origin TEXT,
+                destination TEXT,
+                origin_postcode TEXT,
+                destination_postcode TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            """
+        )
+
+        def fake_populate_route_geometry(conn, job_ids, *, dataset, provider=None, client=None):
+            calls.append((list(job_ids), dataset))
+            return len(list(job_ids))
+
+        monkeypatch.setattr(
+            "analytics.price_distribution.populate_route_geometry",
+            fake_populate_route_geometry,
+        )
+
+        df = pd.DataFrame(
+            {
+                "date": ["2024-01-01", "2024-02-01"],
+                "origin": ["Brisbane", "Sydney"],
+                "destination": ["Sydney", "Melbourne"],
+                "volume_m3": [10, 20],
+                "revenue_total": [2500, 5200],
+                "client": ["Client A", "Client B"],
+            }
+        )
+
+        inserted, skipped = import_historical_jobs_from_dataframe(conn, df)
+        assert inserted == 2
+        assert skipped == 0
+        assert calls
+        assert calls[0][1] == "historical"
+        assert len(calls[0][0]) == 2
+    finally:
+        conn.close()
+
+
 def test_import_historical_jobs_from_dataframe_handles_same_corridor_variants(tmp_path):
     db_path = tmp_path / "test.db"
     conn = sqlite3.connect(db_path)

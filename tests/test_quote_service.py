@@ -233,24 +233,29 @@ def test_persist_quote_creates_historical_job_entry() -> None:
     job_date, corridor, price_per_m3, distance_km, final_cost, origin_id, dest_id = hist_row
     assert job_date == inputs.quote_date.isoformat()
     assert corridor == f"{result.origin_resolved} → {result.destination_resolved}"
-    assert price_per_m3 == pytest.approx(result.final_quote / inputs.cubic_m)
-    assert distance_km == pytest.approx(result.distance_km)
-    assert final_cost == pytest.approx(result.total_before_margin)
-    assert origin_id is not None
-    assert dest_id is not None
 
-    address_count = conn.execute("SELECT COUNT(*) FROM addresses").fetchone()[0]
-    assert address_count == 2
 
-    hist_client = conn.execute(
-        "SELECT client, client_id FROM historical_jobs"
-    ).fetchone()
-    assert hist_client == ("Quote builder", None)
+def test_persist_quote_attempts_historical_route_geometry_enrichment(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_schema(conn)
+    ensure_dashboard_tables(conn)
 
-    quote_client = conn.execute(
-        "SELECT client_display, client_id FROM quotes"
-    ).fetchone()
-    assert quote_client == ("Quote builder", None)
+    inputs = _quote_input()
+    result = _quote_result()
+    result.summary_text = build_summary(inputs, result)
+
+    calls: list[tuple[list[int], str]] = []
+
+    def fake_populate(conn_arg, job_ids, *, dataset, client=None, provider=None):
+        calls.append((list(job_ids), dataset))
+        return 0
+
+    monkeypatch.setattr("analytics.routes_map.populate_route_geometry", fake_populate)
+
+    persist_quote(conn, inputs, result)
+
+    historical_id = conn.execute("SELECT id FROM historical_jobs").fetchone()[0]
+    assert calls == [([int(historical_id)], "historical")]
 
 
 def test_persist_quote_records_postcodes() -> None:

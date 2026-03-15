@@ -6,6 +6,7 @@ from typing import Iterable, Optional
 import pandas as pd
 import streamlit as st
 
+from analytics.dashboard_layouts import get_dashboard_role_layouts, upsert_dashboard_role_layout
 from analytics.db import ensure_dashboard_tables, upsert_truck, upsert_vehicle_details
 from analytics.vehicle_repairs import (
     import_vehicle_repairs_from_sheet,
@@ -13,9 +14,19 @@ from analytics.vehicle_repairs import (
 )
 from analytics.operations_workbook import sync_operations_workbook
 from analytics.operations_assignment import (
+    approve_operations_cutover_promotion,
+    apply_operations_cutover_recommendation,
     get_operations_policy,
+    list_operational_readiness_items,
+    list_operations_cutover_events,
+    list_operations_cutover_rollout,
+    list_operations_cutover_workflows,
     list_segments_for_truck,
     list_truck_assignment_summary,
+    reject_operations_cutover_promotion,
+    record_operations_cutover_event,
+    request_operations_cutover_promotion,
+    upsert_operations_cutover_workflow,
     update_operations_policy,
 )
 from analytics.vehicle_workbook import (
@@ -114,7 +125,7 @@ def render_vehicle_maintenance_tab(conn) -> None:
         vehicle_preview["Daily check complete"] = vehicle_preview["Daily check complete"].map(
             {1: "Yes", 0: "No"}
         )
-        st.dataframe(vehicle_preview, use_container_width=True)
+        st.dataframe(vehicle_preview, width='stretch')
 
     default_sheet = os.environ.get("VEHICLE_REPAIRS_SHEET_URL") or os.environ.get(
         "VEHICLE_REPAIRS_SHEET"
@@ -200,7 +211,7 @@ def render_vehicle_maintenance_tab(conn) -> None:
                 "last_service": "Most recent service",
             }
         ),
-        use_container_width=True,
+        width='stretch',
     )
 
     st.markdown("#### Repair log")
@@ -231,9 +242,9 @@ def render_vehicle_maintenance_tab(conn) -> None:
             }
         )
         merged["Daily check complete"] = merged["Daily check complete"].map({1: "Yes", 0: "No"})
-        st.dataframe(merged, use_container_width=True)
+        st.dataframe(merged, width='stretch')
     else:
-        st.dataframe(display_df, use_container_width=True)
+        st.dataframe(display_df, width='stretch')
 
 
 def _parse_sheet_id(sheet_reference: str) -> str:
@@ -350,6 +361,405 @@ def render_fleet_tab(conn) -> None:
             st.success("Readiness policy updated.")
             _trigger_rerun()
 
+    with st.expander("Role layout defaults", expanded=False):
+        available_tabs = [
+            "Histogram",
+            "Price history",
+            "Profitability insights",
+            "Live network overview",
+            "Route maps",
+            "Dispatch",
+            "Planner",
+            "Operations",
+            "Fleet",
+            "Vehicle maintenance",
+            "Quote builder",
+            "Calls",
+            "Kent tenders",
+            "Kent admin",
+            "Optimizer",
+            "Inventory",
+            "Staff",
+            "Driver shifts",
+        ]
+        role_layouts = get_dashboard_role_layouts(conn, available_tabs=available_tabs)
+        role_options = {row["label"]: row for row in role_layouts}
+        selected_role_label = st.selectbox(
+            "Role",
+            options=list(role_options.keys()),
+            key="dashboard_role_layout_selected_role",
+        )
+        selected_role = role_options[selected_role_label]
+        layout_cols = st.columns(3)
+        default_landing = layout_cols[0].selectbox(
+            "Default landing tab",
+            options=available_tabs,
+            index=available_tabs.index(selected_role["defaultLandingTab"]),
+            key="dashboard_role_layout_default_landing",
+        )
+        primary_tabs = layout_cols[1].multiselect(
+            "Primary tabs",
+            options=available_tabs,
+            default=selected_role["primaryTabs"],
+            key="dashboard_role_layout_primary_tabs",
+        )
+        hidden_tabs = layout_cols[2].multiselect(
+            "Hidden tabs",
+            options=[tab for tab in available_tabs if tab != default_landing],
+            default=[tab for tab in selected_role["hiddenTabs"] if tab != default_landing],
+            key="dashboard_role_layout_hidden_tabs",
+        )
+        if st.button("Save role layout defaults", key="dashboard_role_layout_save_button"):
+            try:
+                upsert_dashboard_role_layout(
+                    conn,
+                    role_key=selected_role["roleKey"],
+                    default_landing_tab=default_landing,
+                    primary_tabs=primary_tabs,
+                    hidden_tabs=hidden_tabs,
+                    available_tabs=available_tabs,
+                )
+            except Exception as exc:  # pragma: no cover
+                st.error(f"Failed to save role layout defaults: {exc}")
+            else:
+                st.success("Role layout defaults updated.")
+                _trigger_rerun()
+
+    with st.expander("Spreadsheet cutover admin", expanded=False):
+        cutover_rows = list_operations_cutover_rollout(conn)
+        if not cutover_rows:
+            st.info("No cutover workflows configured yet.")
+        else:
+            workflow_options = {
+                f"{row['label']} · {row['cutoverStatus']}": row for row in cutover_rows
+            }
+            selected_label = st.selectbox(
+                "Workflow",
+                options=list(workflow_options.keys()),
+                key="operations_cutover_selected_workflow",
+            )
+            selected = workflow_options[selected_label]
+            admin_cols = st.columns(4)
+            cutover_status = admin_cols[0].selectbox(
+                "Cutover status",
+                options=["sheet_primary", "dual_run", "native_primary", "fallback_only"],
+                index=["sheet_primary", "dual_run", "native_primary", "fallback_only"].index(
+                    selected["cutoverStatus"]
+                ),
+                key="operations_cutover_status",
+            )
+            owner_role = admin_cols[1].text_input(
+                "Owner role",
+                value=selected.get("ownerRole") or "",
+                key="operations_cutover_owner_role",
+            )
+            snapshot_mode = admin_cols[2].selectbox(
+                "Snapshot mode",
+                options=["none", "on_demand", "daily"],
+                index=["none", "on_demand", "daily"].index(selected["snapshotMode"]),
+                key="operations_cutover_snapshot_mode",
+            )
+            fallback_mode = admin_cols[3].selectbox(
+                "Fallback mode",
+                options=["import_only", "read_only_sheet", "manual_csv"],
+                index=["import_only", "read_only_sheet", "manual_csv"].index(
+                    selected["fallbackMode"]
+                ),
+                key="operations_cutover_fallback_mode",
+            )
+            metric_cols = st.columns(5)
+            cutover_target_percent = metric_cols[0].number_input(
+                "Target native usage %",
+                min_value=0.0,
+                max_value=100.0,
+                value=float(selected["metrics"]["cutoverTargetPercent"]),
+                key="operations_cutover_target_percent",
+            )
+            metric_cols[1].metric(
+                "Current native usage %",
+                f"{float(selected['metrics']['nativeUsagePercent']):.1f}",
+            )
+            metric_cols[2].metric(
+                "Fallback uses",
+                int(selected["metrics"]["fallbackUsageCount"]),
+            )
+            metric_cols[3].metric(
+                "Open issues",
+                int(selected["metrics"]["openIssueCount"]),
+            )
+            metric_cols[4].metric(
+                "Snapshot consumers",
+                int(selected["metrics"]["snapshotConsumerCount"]),
+            )
+            checklist_cols = st.columns(4)
+            native_ready = checklist_cols[0].checkbox(
+                "Native ready",
+                value=selected["checklist"]["nativeReady"],
+                key="operations_cutover_native_ready",
+            )
+            dual_run_complete = checklist_cols[1].checkbox(
+                "Dual-run complete",
+                value=selected["checklist"]["dualRunComplete"],
+                key="operations_cutover_dual_run_complete",
+            )
+            fallback_drill_complete = checklist_cols[2].checkbox(
+                "Fallback drill complete",
+                value=selected["checklist"]["fallbackDrillComplete"],
+                key="operations_cutover_fallback_drill_complete",
+            )
+            operator_trained = checklist_cols[3].checkbox(
+                "Operator trained",
+                value=selected["checklist"]["operatorTrained"],
+                key="operations_cutover_operator_trained",
+            )
+            snapshot_fields = st.text_input(
+                "Snapshot fields (comma-separated)",
+                value=", ".join(selected.get("snapshotFields", [])),
+                key="operations_cutover_snapshot_fields",
+            )
+            st.caption(
+                "Last review: "
+                + str(selected["metrics"].get("lastReviewAt") or "not recorded")
+                + " | Last fallback drill: "
+                + str(selected.get("lastDrillAt") or "not recorded")
+            )
+            recommendation = selected.get("recommendation", {})
+            approval = selected.get("approval", {})
+            st.info(
+                "Recommended transition: "
+                + str(recommendation.get("recommendedStatus") or selected["cutoverStatus"])
+                + " | "
+                + str(recommendation.get("reason") or "No recommendation")
+            )
+            approval_cols = st.columns(4)
+            approval_cols[0].metric("Approval status", str(approval.get("status") or "not_required"))
+            approval_cols[1].metric("Requested by", str(approval.get("requestedBy") or "-"))
+            approval_cols[2].metric("Approved by", str(approval.get("approvedBy") or "-"))
+            approval_cols[3].metric("Rejected by", str(approval.get("rejectedBy") or "-"))
+            if approval.get("requestNote"):
+                st.caption("Request note: " + str(approval["requestNote"]))
+            if approval.get("approvalNote"):
+                st.caption("Approval note: " + str(approval["approvalNote"]))
+            if approval.get("rejectionNote"):
+                st.caption("Rejection note: " + str(approval["rejectionNote"]))
+            if recommendation.get("blockedByApproval"):
+                st.warning(str(recommendation.get("reason") or "Approval chain is incomplete."))
+            rollback_instructions = st.text_area(
+                "Rollback instructions",
+                value=selected.get("rollbackInstructions") or "",
+                key="operations_cutover_rollback_instructions",
+            )
+            notes = st.text_area(
+                "Notes",
+                value=selected.get("notes") or "",
+                key="operations_cutover_notes",
+            )
+            if st.button("Save cutover workflow", key="operations_cutover_save_button"):
+                upsert_operations_cutover_workflow(
+                    conn,
+                    workflow_key=selected["workflowKey"],
+                    cutover_status=cutover_status,
+                    owner_role=owner_role.strip() or None,
+                    snapshot_mode=snapshot_mode,
+                    snapshot_fields=[field.strip() for field in snapshot_fields.split(",") if field.strip()],
+                    fallback_mode=fallback_mode,
+                    cutover_target_percent=float(cutover_target_percent),
+                    native_ready=native_ready,
+                    dual_run_complete=dual_run_complete,
+                    fallback_drill_complete=fallback_drill_complete,
+                    operator_trained=operator_trained,
+                    rollback_instructions=rollback_instructions.strip() or None,
+                    notes=notes.strip() or None,
+                )
+                st.success("Cutover workflow updated.")
+                _trigger_rerun()
+            promotion_actor = st.text_input(
+                "Promotion actor",
+                value="",
+                help="Ops manager requests; commercial owner approves or rejects.",
+                key="operations_cutover_promotion_actor",
+            )
+            promotion_note = st.text_input(
+                "Promotion note",
+                value="",
+                key="operations_cutover_promotion_note",
+            )
+            promotion_cols = st.columns(4)
+            if promotion_cols[0].button("Request promotion", key="operations_cutover_request_promotion_button"):
+                try:
+                    request_operations_cutover_promotion(
+                        conn,
+                        workflow_key=selected["workflowKey"],
+                        actor=promotion_actor.strip(),
+                        note=promotion_note.strip() or None,
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.success("Promotion request recorded.")
+                    _trigger_rerun()
+            if promotion_cols[1].button("Approve promotion", key="operations_cutover_approve_promotion_button"):
+                try:
+                    approve_operations_cutover_promotion(
+                        conn,
+                        workflow_key=selected["workflowKey"],
+                        actor=promotion_actor.strip(),
+                        note=promotion_note.strip() or None,
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.success("Promotion approval recorded.")
+                    _trigger_rerun()
+            if promotion_cols[2].button("Reject promotion", key="operations_cutover_reject_promotion_button"):
+                try:
+                    reject_operations_cutover_promotion(
+                        conn,
+                        workflow_key=selected["workflowKey"],
+                        actor=promotion_actor.strip(),
+                        note=promotion_note.strip(),
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.success("Promotion rejection recorded.")
+                    _trigger_rerun()
+            if recommendation.get("actionable"):
+                if promotion_cols[3].button(
+                    "Apply recommended transition",
+                    key="operations_cutover_apply_recommendation_button",
+                ):
+                    try:
+                        apply_operations_cutover_recommendation(
+                            conn,
+                            workflow_key=selected["workflowKey"],
+                            actor=promotion_actor.strip() or owner_role.strip() or None,
+                            note="Applied from Fleet cutover admin.",
+                        )
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.success("Recommended transition applied.")
+                        _trigger_rerun()
+            st.markdown("##### Cutover actions")
+            action_actor = st.text_input(
+                "Action actor",
+                value="",
+                help="Operator/manager identifier for review, drill, and fallback-use logs.",
+                key="operations_cutover_action_actor",
+            )
+            action_note = st.text_input(
+                "Action note",
+                value="",
+                key="operations_cutover_action_note",
+            )
+            snapshot_consumer = st.text_input(
+                "Snapshot consumer/team",
+                value="",
+                key="operations_cutover_snapshot_consumer",
+            )
+            action_cols = st.columns(4)
+            if action_cols[0].button("Record review", key="operations_cutover_record_review"):
+                record_operations_cutover_event(
+                    conn,
+                    workflow_key=selected["workflowKey"],
+                    event_type="review",
+                    actor=action_actor.strip() or None,
+                    note=action_note.strip() or None,
+                )
+                st.success("Review recorded.")
+                _trigger_rerun()
+            if action_cols[1].button("Record fallback drill", key="operations_cutover_record_drill"):
+                record_operations_cutover_event(
+                    conn,
+                    workflow_key=selected["workflowKey"],
+                    event_type="fallback_drill",
+                    actor=action_actor.strip() or None,
+                    note=action_note.strip() or None,
+                )
+                st.success("Fallback drill recorded.")
+                _trigger_rerun()
+            if action_cols[2].button("Record fallback use", key="operations_cutover_record_fallback"):
+                record_operations_cutover_event(
+                    conn,
+                    workflow_key=selected["workflowKey"],
+                    event_type="fallback_use",
+                    actor=action_actor.strip() or None,
+                    note=action_note.strip() or None,
+                )
+                st.success("Fallback use recorded.")
+                _trigger_rerun()
+            if action_cols[3].button("Record snapshot issued", key="operations_cutover_record_snapshot"):
+                record_operations_cutover_event(
+                    conn,
+                    workflow_key=selected["workflowKey"],
+                    event_type="snapshot_issued",
+                    actor=action_actor.strip() or None,
+                    note=action_note.strip() or None,
+                    event_value=snapshot_consumer.strip() or None,
+                )
+                st.success("Snapshot issuance recorded.")
+                _trigger_rerun()
+            recent_events = list_operations_cutover_events(
+                conn,
+                workflow_key=selected["workflowKey"],
+                limit=10,
+            )
+            if recent_events:
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {
+                                "When": row["createdAt"],
+                                "Type": row["eventType"],
+                                "Actor": row["actor"],
+                                "Value": row["eventValue"],
+                                "Note": row["note"],
+                            }
+                            for row in recent_events
+                        ]
+                    ),
+                    width='stretch',
+                    hide_index=True,
+                )
+
+    readiness_items = list_operational_readiness_items(conn)
+    blocked_items = [item for item in readiness_items if item["status"] == "blocked"]
+    warning_items = [item for item in readiness_items if item["status"] == "warning"]
+
+    st.markdown("#### Maintenance and compliance cockpit")
+    cockpit_cols = st.columns(4)
+    cockpit_cols[0].metric("Blocked items", len(blocked_items))
+    cockpit_cols[1].metric("Due soon", len(warning_items))
+    cockpit_cols[2].metric(
+        "Blocked vehicles",
+        len({item["resourceId"] for item in blocked_items if item["resourceType"] == "vehicle"}),
+    )
+    cockpit_cols[3].metric(
+        "Workers due/blocked",
+        len({item["resourceId"] for item in readiness_items if item["resourceType"] == "worker"}),
+    )
+
+    if readiness_items:
+        readiness_df = pd.DataFrame(
+            [
+                {
+                    "Status": item["status"],
+                    "Type": item["resourceType"],
+                    "Resource": item["resourceName"],
+                    "Rule": item["ruleType"],
+                    "Due": item["dueAt"],
+                    "Overrideable": item["overrideable"],
+                    "Details": item["details"],
+                    "Imported": item["sourceImportedAt"],
+                }
+                for item in readiness_items
+            ]
+        )
+        st.dataframe(readiness_df, width='stretch', hide_index=True)
+    else:
+        st.caption("No due-soon or blocked maintenance/compliance items detected.")
+
     with st.expander("Import/Export VEHICLE_DETAILS", expanded=False):
         sheet_input = st.text_input(
             "Google Sheets ID or URL",
@@ -429,7 +839,7 @@ def render_fleet_tab(conn) -> None:
     else:
         preview = filtered_df.copy()
         preview["active"] = preview["active"].map({1: "Yes", 0: "No"})
-        st.dataframe(preview, use_container_width=True)
+        st.dataframe(preview, width='stretch')
 
     st.markdown("#### Add or update vehicle")
     existing_ids = list(vehicle_df["truck_id"].dropna().unique()) if not vehicle_df.empty else []
@@ -565,7 +975,7 @@ def render_fleet_tab(conn) -> None:
                     for row in planned_segments
                 ]
             )
-            st.dataframe(planned_df, use_container_width=True, hide_index=True)
+            st.dataframe(planned_df, width='stretch', hide_index=True)
         else:
             st.caption("No planned job segments currently assign this vehicle.")
 

@@ -68,11 +68,12 @@ def render_operations_tab(conn: sqlite3.Connection) -> None:
                 for row in segments
             ]
         )
-        st.dataframe(overview, use_container_width=True, hide_index=True)
+        st.dataframe(overview, width='stretch', hide_index=True)
     else:
         st.info("No job segments found for the current filters.")
 
-    with st.expander("Create or update segment", expanded=False):
+    with st.expander("Advanced/manual segment editor", expanded=False):
+        st.caption("Use this only for advanced/manual correction or edge cases. Normal planning should start in Planner.")
         create_cols = st.columns(3)
         job_id = int(create_cols[0].number_input("Job ID", min_value=1, step=1, value=1))
         segment_sequence = int(
@@ -226,6 +227,6 @@ def render_operations_tab(conn: sqlite3.Connection) -> None:
     st.markdown("### Operational conflicts")
     conflicts = list_operational_conflicts(conn)
     if conflicts:
-        st.dataframe(pd.DataFrame(conflicts), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(conflicts), width='stretch', hide_index=True)
     else:
         st.caption("No active truck/worker conflicts detected.")

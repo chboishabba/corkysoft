@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import sqlite3
+import inspect
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -29,10 +30,9 @@ from analytics.price_distribution import (
 from analytics.routes_map import (
     build_job_route_map,
     fetch_job_route_rows,
-    populate_route_geometry,
 )
 from dashboard.components.maps import _hex_to_rgb, build_route_map
-from dashboard.map_provider import plotly_map_layout
+from dashboard.map_provider import folium_map_configuration, plotly_map_layout
 
 __all__ = ["render_route_maps_tab"]
 
@@ -284,7 +284,6 @@ def _render_route_lines_tab(map_df: pd.DataFrame, dataset_key: str, conn: Connec
             disabled=not show_routes,
         )
 
-    missing_route_ids: List[int] = []
     if use_route_geometry and show_routes:
         geometry_series = geocoded.get("route_geojson")
         if geometry_series is None:
@@ -296,41 +295,10 @@ def _render_route_lines_tab(map_df: pd.DataFrame, dataset_key: str, conn: Connec
                 st.info(
                     f"{missing_count} route{'s' if missing_count != 1 else ''} are missing stored geometry."
                 )
-                if "id" in geocoded.columns:
-                    route_ids = geocoded.loc[missing_mask, "id"].dropna()
-                    missing_route_ids = [int(value) for value in route_ids.tolist()]
-                else:
-                    st.caption("Add an 'id' column to populate geometry for the selected routes.")
-
-                if missing_route_ids and dataset_key in {"historical", "live"}:
-                    if st.button(
-                        "Populate route geometry",
-                        key="populate_route_geometry_button",
-                        help=(
-                            "Fetch routing-provider geometry for the filtered routes and store it for future map sessions."
-                        ),
-                    ):
-                        try:
-                            populated = populate_route_geometry(
-                                conn,
-                                missing_route_ids,
-                                dataset=dataset_key,
-                            )
-                        except Exception as exc:  # pragma: no cover - streamlit feedback only
-                            st.error(f"Failed to populate geometry: {exc}")
-                        else:
-                            if populated:
-                                st.success(
-                                    f"Stored geometry for {populated} route"
-                                    f"{'s' if populated != 1 else ''}."
-                                )
-                            else:
-                                st.warning(
-                                    "No route geometry could be retrieved for the current selection."
-                                )
-                            _rerun_app()
-                elif missing_route_ids:
-                    st.caption("Populate the historical or live job tables to store route geometry.")
+                st.caption(
+                    "Route geometry is enriched automatically during ingest/load paths. "
+                    "Any remaining gaps indicate rows that could not be resolved by the configured routing provider."
+                )
             else:
                 st.caption("All displayed routes already have stored geometry.")
 
@@ -733,7 +701,19 @@ def _render_saved_job_routes(conn: Connection) -> None:
             "Stored route geometry has not been captured yet; showing straight-line connections instead."
         )
 
-    folium_map = build_job_route_map(job_rows, include_actual=include_actual)
+    map_kwargs, tile_layer_kwargs = folium_map_configuration()
+    build_kwargs: dict[str, Any] = {"include_actual": include_actual}
+    try:
+        parameters = inspect.signature(build_job_route_map).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    if "map_kwargs" in parameters:
+        build_kwargs["map_kwargs"] = map_kwargs
+    if "tile_layer_kwargs" in parameters:
+        build_kwargs["tile_layer_kwargs"] = tile_layer_kwargs
+
+    normalised_rows = [dict(row) if hasattr(row, "keys") else row for row in job_rows]
+    folium_map = build_job_route_map(normalised_rows, **build_kwargs)
     st_folium(
         folium_map,
         height=520,

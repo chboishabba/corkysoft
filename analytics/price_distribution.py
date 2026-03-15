@@ -27,6 +27,7 @@ from .db import (
     set_parameter_value,
 )
 from .routing_provider import RoutingProvider, get_routing_provider
+from .routes_map import populate_route_geometry
 
 
 try:  # pragma: no cover - availability exercised via tests
@@ -92,6 +93,11 @@ PRICE_HISTORY_FREQUENCIES: dict[str, str] = {
     "MONTHLY": "M",
     "MONTH": "M",
 }
+
+
+def _has_geometry(value: Any) -> bool:
+    text = str(value or "").strip()
+    return bool(text and text not in {"{}", "[]", "null", "None"})
 
 
 def _profit_band_intensity(band: str) -> float:
@@ -860,31 +866,41 @@ def import_historical_jobs_from_dataframe(
             )
         )
 
+    inserted_ids: list[int] = []
     if to_insert:
-        conn.executemany(
-            """
-            INSERT INTO historical_jobs (
-                job_date,
-                client,
-                corridor_display,
-                price_per_m3,
-                revenue_total,
-                revenue,
-                volume_m3,
-                volume,
-                distance_km,
-                final_cost,
-                origin,
-                destination,
-                origin_postcode,
-                destination_postcode,
-                created_at,
-                updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            to_insert,
-        )
+        for row in to_insert:
+            cursor = conn.execute(
+                """
+                INSERT INTO historical_jobs (
+                    job_date,
+                    client,
+                    corridor_display,
+                    price_per_m3,
+                    revenue_total,
+                    revenue,
+                    volume_m3,
+                    volume,
+                    distance_km,
+                    final_cost,
+                    origin,
+                    destination,
+                    origin_postcode,
+                    destination_postcode,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                row,
+            )
+            inserted_ids.append(int(cursor.lastrowid))
         conn.commit()
+
+    if inserted_ids:
+        try:
+            populate_route_geometry(conn, inserted_ids, dataset="historical")
+        except Exception:
+            # Route enrichment is best-effort; imports should not fail because a provider is unavailable.
+            pass
 
     return len(to_insert), skipped
 
@@ -1171,6 +1187,19 @@ def load_historical_jobs(
         except Exception as exc:  # pragma: no cover - surfaces friendly error in UI
             raise RuntimeError("historical_jobs table is required for this view") from exc
 
+    if "id" in df.columns and "route_geojson" in df.columns:
+        missing_ids = [
+            int(value)
+            for value in df.loc[~df["route_geojson"].apply(_has_geometry), "id"].dropna().tolist()
+        ]
+        if missing_ids:
+            try:
+                populated = populate_route_geometry(conn, missing_ids, dataset="historical")
+            except Exception:
+                populated = 0
+            if populated:
+                df = pd.read_sql_query(query, conn)
+
     df = _deduplicate_columns(df)
     mapping = infer_columns(df)
     return _prepare_loaded_jobs(
@@ -1328,6 +1357,19 @@ def load_live_jobs(
         df = pd.read_sql_query("SELECT * FROM jobs", conn)
     except Exception as exc:
         raise RuntimeError("jobs table is required for live monitoring") from exc
+
+    if "id" in df.columns and "route_geojson" in df.columns:
+        missing_ids = [
+            int(value)
+            for value in df.loc[~df["route_geojson"].apply(_has_geometry), "id"].dropna().tolist()
+        ]
+        if missing_ids:
+            try:
+                populated = populate_route_geometry(conn, missing_ids, dataset="live")
+            except Exception:
+                populated = 0
+            if populated:
+                df = pd.read_sql_query("SELECT * FROM jobs", conn)
 
     df = _deduplicate_columns(df)
 

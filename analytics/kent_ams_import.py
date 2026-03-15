@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import date
 from datetime import UTC, datetime
 from typing import Iterable, Mapping, Sequence, Any
@@ -263,7 +264,10 @@ def _optional_parameter_updated_at(conn) -> str | None:
             KENT_TENDER_LOSS_ALERT_KEY,
         ),
     ).fetchone()
-    return _clean_str(row["updated_at"]) if row else None
+    if not row:
+        return None
+    updated_at = row["updated_at"] if isinstance(row, sqlite3.Row) else row[0]
+    return _clean_str(updated_at)
 
 
 def update_kent_tender_policy_config(

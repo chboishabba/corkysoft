@@ -64,10 +64,19 @@ System behavior:
 
 Downstream use:
 - dispatch can see policy context and operational fit
+- dispatch should operate from the native job-centric board rather than from the
+  source spreadsheets directly
 - dispatch/planning should assign trucks and staff at the `job_segments` level
+- `job_segments` are an internal planning artifact; the intended operator workflow is a higher-level planning surface that proposes legs from route, site, and corridor context rather than requiring manual segment record entry
 - operational spreadsheets inform availability/readiness but do not own final assignment truth
+- stock and supplier coordination should follow the same `job_segments` so segment-level execution is coherent
 - future optimization work must respect the original governance boundaries
+- future planner UX should expose route/site context, traffic/routing considerations, and corridor familiarity before resource allocation is confirmed
+- per-route and per-segment profitability should be visible during planning, not only in downstream analytics or tender triage
 - post-hoc calibration can compare predicted vs realized margin outcomes
+
+Planner interaction reference:
+- [Planner Interaction Model](planner_interaction_model.md)
 
 ## 6. Review Loop
 

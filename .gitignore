@@ -1,5 +1,8 @@
 **/__pycache__/**
 *.db
+*.db-*
+*.sqlite
+*.sqlite-*
 
 # Playwright
 node_modules/
