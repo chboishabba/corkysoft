@@ -214,6 +214,175 @@ Docs updated:
 Implementation changes:
 - None. Documentation-only update.
 
+## 2026-03-20 (Adaptive Learning Loop Context Sync)
+
+Resolved archived thread metadata and used it to sharpen repo-facing intent
+before making docs/TODO/code updates.
+
+Resolved thread:
+- title: Weather Handling Docs
+- online UUID: 69b7de6e-56dc-839e-b322-80af1804d40e
+- canonical thread ID: 269d31b5e8d7045653828e225297af0d1f235c59
+- source used: db (after live ingest into `~/chat_archive.sqlite`)
+
+Main topics pulled from the thread:
+- Corkysoft should ingest situational-awareness signals such as road closures,
+  weather events, and market/route disruption metadata where practical.
+- Those signals should feed a bounded operational learning loop rather than
+  trigger ad hoc pricing rewrites.
+- Learned policy state should be a small, explicit parameter set updated
+  slowly from realised jobs, with guardrails and operator review.
+
+Docs updated:
+- README.md
+- ROADMAP.md
+- docs/adaptive_learning_loop.md
+- docs/modules.md
+- docs/architecture.md
+
+Implementation changes:
+- Added minimal adaptive-policy helpers on top of the existing
+  `global_parameters` table plus focused tests.
+
+## 2026-03-20 (Operations Diary + Reconciliation)
+
+Added a manager-facing workflow definition and implementation slice for day/week
+operations review, job usage drill-down, and invoice/bill follow-through.
+
+Main topics pulled from the client story:
+- move from a diary/day view into invoicing, vehicle usage, staff usage, and
+  job-level requirement/utilization review
+- support planning across the day/week rather than treating Planner as only a
+  route-shaping surface
+- support late subcontractor and third-party bill review against completed jobs
+  and known operational truth
+
+Docs updated:
+- README.md
+- ROADMAP.md
+- docs/operator_user_stories.md
+- docs/planner_interaction_model.md
+- docs/commercial_workflow_lifecycle.md
+- docs/operations_diary_workflow.md
+- docs/job_cost_and_invoice_reconciliation.md
+- docs/modules.md
+- docs/architecture.md
+
+Implementation changes:
+- Added diary tasks plus customer-invoice and subcontractor-bill review tables.
+- Added operations-diary service helpers and a new `Operations diary` dashboard
+  tab.
+- Linked Planner and Dispatch into the diary and added focused service tests.
+
+## 2026-03-21 (Strategy / Positioning Context Sync)
+
+Resolved four archived threads and used them to tighten the repo-facing product
+framing without changing implementation scope.
+
+Resolved threads:
+- title: MoveWare vs Corkysoft Gaps
+- online UUID: 69bcd9fd-7fe4-83a0-8e8b-608d9ad2d54f
+- canonical thread ID: 05ed68f07441b7873a750ea1215b9554a4370ae8
+- source used: db
+- main topics: international/shipping paperwork gap; MoveWare's relative edge is
+  encoded requirements/proposal/governance (`R -> P -> G`) rather than better
+  operational compute/state/structure
+
+- title: Corkysoft ITIR Merge
+- online UUID: 69bcda66-0564-83a1-b2fe-965ea7ab8700
+- canonical thread ID: ddc7f5f5a101b41e04b9b1f71549abcf091dad0b
+- source used: db
+- main topics: Corkysoft is converging toward a provable logistics-state
+  compiler; pricing, routing, telemetry, evidence, and auditability belong in
+  one decision stack
+
+- title: Corkysoft Parity Strategy
+- online UUID: 69bcda38-1a74-839f-9415-f94de6f0169a
+- canonical thread ID: 956747b9f3d9214a3877b9c3f98f2385aeb91553
+- source used: db
+- main topics: Corkysoft should be framed as a system of decision rather than
+  only a system of record; parity matters, but superiority comes from better
+  decisions, not CRUD duplication
+
+- title: Weather Handling Docs
+- online UUID: 69b7de6e-56dc-839e-b322-80af1804d40e
+- canonical thread ID: 269d31b5e8d7045653828e225297af0d1f235c59
+- source used: db
+- main topics: weather/disruption inputs should remain bounded,
+  situational-awareness signals that feed explicit policy state and decision
+  proofs rather than opaque autonomous behavior
+
+Main decisions pulled into repo intent:
+- Corkysoft should be described as a system of decision over removals work,
+  not just a route-profitability dashboard or generic operational record store.
+- The current implementation remains deliberately staged: decision support,
+  planning, operations diary, usage review, and reconciliation come first.
+- A major documented gap is international/compliance-heavy work, where
+  requirements capture, proposal assembly, and governance evidence are not yet
+  formalized enough.
+- That gap should be treated as future `R -> P -> G` workflow work tied to
+  paperwork, insurance, tender, customs, and audit-heavy jobs rather than as a
+  vague "feature parity" request.
+
+Docs updated:
+- README.md
+- ROADMAP.md
+- docs/positioning.md
+- docs/operator_user_stories.md
+- docs/commercial_workflow_lifecycle.md
+
+Implementation changes:
+- None. Documentation/TODO/changelog alignment only.
+
+## 2026-03-21 (Corkysoft / SB / ITIR Boundary Audit)
+
+Locked the cross-project boundary more explicitly after checking the current
+diary/reconciliation implementation and the existing ITIR/StatiBaker docs.
+
+Main decisions:
+- Corkysoft is where removals workflow state changes happen: planner, diary,
+  tasks, assignments, invoice review, and subcontractor-bill review.
+- StatiBaker is downstream-only for this domain: interpretible logs, compiled
+  summaries, provenance, and review lenses across many sources.
+- ITIR remains the orchestration/context and contract layer across projects.
+- Corkysoft workflow learnings may later inform SB/ITIR lens design, but SB
+  must not become a second operational cockpit for removals execution.
+
+Docs updated:
+- README.md
+- ROADMAP.md
+- docs/architecture.md
+- docs/modules.md
+- docs/corkysoft_sb_itir_coverage_audit.md
+- docs/sb_itir_downstream_contract.md
+- docs/planner_diary_patterns_for_sb_itir.md
+
+Implementation changes:
+- None. This pass only added audit/contract/pattern documentation.
+
+## 2026-03-21 (Holiday Bill Aging / Exposure Model)
+
+Clarified the received-but-unprocessed Christmas / New Year bill story into a
+concrete reconciliation-aging model.
+
+Main decisions:
+- unresolved supplier liability should age from the bill-received / bill-action
+  date, not only from job execution
+- job execution date must still remain visible so delayed billing latency and
+  hidden-margin distortion are explicit
+- Corkysoft should get a thin manager-facing unresolved-exposure summary in the
+  diary
+- the heavier long-horizon timeline/lens treatment remains a better downstream
+  SB fit later
+
+Docs updated:
+- README.md
+- ROADMAP.md
+- docs/job_cost_and_invoice_reconciliation.md
+- docs/operations_diary_workflow.md
+- docs/operator_user_stories.md
+- docs/corkysoft_sb_itir_coverage_audit.md
+
 ## 2026-03-11 (Kent AMS Mapping + Roadmap)
 
 Expanded Kent integration documentation with an explicit field mapping table
@@ -1061,3 +1230,18 @@ Validation:
 - 2026-03-15: Extended payroll analytics with export-ready labor summaries and a basic explicit `worker_absence_records` model.
 - 2026-03-15: Added read-only labor-analytics absence/export endpoints plus mutating absence-record API creation, keeping Corkysoft at payroll-prep truth rather than payroll execution.
 - 2026-03-15: Replaced deferred absence status in the payroll cockpit with basic recorded absence/leave analytics grounded in explicit rows instead of inferred missing shifts.
+- 2026-03-21: Locked dashboard auth direction:
+  - use Streamlit's native Google OIDC support rather than inventing a separate cookie/session stack
+  - keep Corkysoft authorization local through a `dashboard_users` allowlist keyed by email
+  - shared/deployed environments should fail closed into auth-required mode
+  - anonymous UI access remains only for explicit local development runs via `CORKYSOFT_ENV=development` and `CORKYSOFT_ALLOW_ANONYMOUS_UI=1`
+  - bootstrap the first admin explicitly from env instead of allowing permissive first-login account creation
+- 2026-03-22: Auth red-team hardening direction:
+  - role-hidden tabs are part of the authz boundary for new auth-sensitive surfaces, not just cosmetic layout state
+  - query-param tab requests should not re-expose hidden admin tabs like `Kent admin`
+  - bootstrap-admin env seeding should behave as a first-user bootstrap only, not as a perpetual admin reassertion path if env vars linger
+- 2026-03-22: Implemented the first auth red-team hardening slice:
+  - added explicit auth red-team documentation and TODO alignment
+  - fixed hidden-tab query-param escalation in dashboard layout resolution
+  - made bootstrap-admin seeding no-op once dashboard users already exist
+  - added targeted auth/layout regression tests around those paths

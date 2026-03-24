@@ -14,4 +14,6 @@ REM Install/update dependencies
 pip install -r requirements.txt
 
 REM Run Streamlit app
+set CORKYSOFT_ENV=development
+set CORKYSOFT_ALLOW_ANONYMOUS_UI=1
 streamlit run dashboard/app.py

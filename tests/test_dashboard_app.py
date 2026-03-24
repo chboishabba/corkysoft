@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import os
 import sys
 from pathlib import Path
 
@@ -12,6 +13,9 @@ from streamlit.testing.v1 import AppTest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+os.environ.setdefault("CORKYSOFT_ENV", "development")
+os.environ.setdefault("CORKYSOFT_ALLOW_ANONYMOUS_UI", "1")
 
 
 def test_dashboard_app_module_importable() -> None:
@@ -33,12 +37,16 @@ def test_streamlit_entrypoint_exposed() -> None:
     module = importlib.import_module("dashboard.app")
     render = getattr(module, "render_price_distribution_dashboard", None)
     assert callable(render)
+    assert hasattr(module, "_render_authenticated_user_banner")
+    assert hasattr(module, "_render_anonymous_dev_banner")
 
 
 def test_planner_tab_is_rendered_in_dashboard_flow() -> None:
     module = importlib.import_module("dashboard.app")
     render = getattr(module, "render_price_distribution_dashboard")
     source = inspect.getsource(render)
+    assert "_render_authenticated_user_banner(auth_state)" in source
+    assert "_render_anonymous_dev_banner(auth_state)" in source
     assert 'with tab_map["Planner"]' in source
     assert "render_planner_tab(" in source
     assert 'with tab_map["Calls"]' in source
@@ -46,6 +54,12 @@ def test_planner_tab_is_rendered_in_dashboard_flow() -> None:
     assert 'with tab_map["Payroll / Labor analytics"]' in source
     assert "render_payroll_labor_analytics_tab(conn)" in source
     assert "Repair dispatcher layout" in source
+
+    auth_banner_source = inspect.getsource(getattr(module, "_render_authenticated_user_banner"))
+    assert "Authenticated via Google" in auth_banner_source
+
+    anon_banner_source = inspect.getsource(getattr(module, "_render_anonymous_dev_banner"))
+    assert "Anonymous development mode is active" in anon_banner_source
 
     payroll_source = inspect.getsource(getattr(module, "render_payroll_labor_analytics_tab"))
     assert "Export-ready Labor Summary" in payroll_source

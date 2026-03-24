@@ -21,6 +21,7 @@ __pycache__/
 dist/
 build/
 target/
+.streamlit/secrets.toml
 *.swp
 *.kate-swp
 .DS_Store

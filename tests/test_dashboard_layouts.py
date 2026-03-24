@@ -19,6 +19,7 @@ TABS = [
     "Calls",
     "Fleet",
     "Quote builder",
+    "Kent admin",
 ]
 
 
@@ -32,7 +33,22 @@ def test_role_layout_defaults_bootstrap() -> None:
     assert "Planner" in dispatcher["primaryTabs"]
 
 
-def test_resolve_dashboard_layout_respects_query_param_and_hidden_tabs() -> None:
+def test_resolve_dashboard_layout_does_not_reveal_hidden_tab_from_query_param() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_global_parameters_table(conn)
+    layout = next(
+        item for item in get_dashboard_role_layouts(conn, available_tabs=TABS) if item["roleKey"] == "dispatcher"
+    )
+    resolved = resolve_dashboard_layout(
+        available_tabs=TABS,
+        layout=layout,
+        requested_tab="Kent admin",
+    )
+    assert resolved["landingTab"] == "Dispatch"
+    assert "Kent admin" not in resolved["tabOrder"]
+
+
+def test_resolve_dashboard_layout_still_allows_visible_requested_tab() -> None:
     conn = sqlite3.connect(":memory:")
     ensure_global_parameters_table(conn)
     layout = next(

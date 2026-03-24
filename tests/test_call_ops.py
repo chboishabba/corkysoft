@@ -8,8 +8,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import hashlib
+import json
+
 from analytics.db import ensure_dashboard_tables, upsert_worker
 from corkysoft.call_ops import (
+    _emit_state_event,
     add_call_note,
     add_extracted_action,
     create_ambient_session,
@@ -18,6 +22,7 @@ from corkysoft.call_ops import (
     create_call_session,
     decide_extracted_action,
     decide_worker_time_capture_event,
+    ensure_call_ops_tables,
     generate_fake_ambient_transcript_artifact,
     generate_fake_transcript_artifact,
     get_ambient_session,
@@ -218,6 +223,7 @@ def test_call_session_tracks_legs_and_routing_chain() -> None:
         initial_destination_label="desk-1",
     )
     assert session["rootCallEventId"] is not None
+
     legs = list_call_legs(conn, call_session_id=session["id"])
     assert len(legs) == 1
     consult = create_call_leg(
@@ -239,6 +245,96 @@ def test_call_session_tracks_legs_and_routing_chain() -> None:
     assert "call_answered" in event_types
     fetched = get_call_session(conn, session["id"])
     assert fetched["legCount"] >= 2
+
+
+def test_state_egress_event_payload_contract() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    ensure_dashboard_tables(conn)
+    job_id = _job(conn)
+
+    call = create_call_event(
+        conn,
+        event_kind="client_call",
+        direction="inbound",
+        caller_phone="0400 111 222",
+        job_id=job_id,
+        title="Call for egress contract",
+    )
+
+    egress = list_state_egress_events(conn, limit=5)
+    call_event = next(
+        row for row in egress if row["eventType"] == "call_event_created"
+    )
+
+    payload = call_event["payload"]
+    assert payload["callEventId"] == call["id"]
+    assert payload["jobId"] == job_id
+    assert call_event["authorityClass"] == "compiled_state"
+
+    expected_hash = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    assert call_event["payloadHash"] == expected_hash
+    expected_idempotency = f"corkysoft:call_event_created:{call_event['sourceEntityId']}:{expected_hash}"
+    assert call_event["idempotencyKey"] == expected_idempotency
+
+
+def test_call_note_observer_authority_class() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    ensure_dashboard_tables(conn)
+    job_id = _job(conn)
+
+    call = create_call_event(
+        conn,
+        event_kind="ops_call",
+        direction="internal",
+        title="Note authority",
+        job_id=job_id,
+    )
+
+    add_call_note(
+        conn,
+        call_event_id=call["id"],
+        author="ops-1",
+        note_text="Observer note",
+        authoritative=False,
+    )
+
+    note_event = next(
+        row for row in list_state_egress_events(conn, limit=5) if row["eventType"] == "call_note_added"
+    )
+    assert note_event["authorityClass"] == "observer_capture_ref"
+    assert note_event["payload"]["authoritative"] is False
+
+
+def test_state_egress_idempotency_key_repeatable() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    ensure_call_ops_tables(conn)
+
+    payload = {"test": "repeatable"}
+    source = "test:ipc"
+    event_type = "idempotent_test"
+
+    _emit_state_event(
+        conn,
+        source_entity_id=source,
+        event_type=event_type,
+        payload=payload,
+        authority_class="observer_capture_ref",
+    )
+    _emit_state_event(
+        conn,
+        source_entity_id=source,
+        event_type=event_type,
+        payload=payload,
+        authority_class="observer_capture_ref",
+    )
+
+    rows = [row for row in list_state_egress_events(conn, limit=5) if row["eventType"] == event_type]
+    assert len(rows) == 2
+    assert rows[0]["idempotencyKey"] == rows[1]["idempotencyKey"]
+    assert rows[0]["ingestedAt"] >= rows[1]["ingestedAt"]
 
 
 def test_call_session_conflicting_manager_update_stays_traceable() -> None:

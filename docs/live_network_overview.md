@@ -55,6 +55,8 @@ These are not guaranteed by the current implementation:
 - corridor-level sparklines and recent exceptions
 - dedicated export flows from the live view
 - richer SLA/incident overlays
+- state/national closure, traffic, and weather overlays normalized into a
+  common situational-awareness layer
 
 If any of these are implemented, this document should be updated from
 "future enhancement" to "current MVP" only after code and tests exist.

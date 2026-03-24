@@ -47,14 +47,18 @@ from analytics.db import (
     INVENTORY_SUBSTITUTION_APPROVER_ROLES,
     INVENTORY_SUBSTITUTION_STATUSES,
     allocate_inventory_to_segment,
+    bootstrap_dashboard_admin,
+    create_worker_absence_record,
     decide_inventory_substitution,
     ensure_dashboard_tables,
     get_allowed_inventory_execution_stages,
+    get_dashboard_user_by_email,
     import_inventory_items_from_dataframe,
     import_inventory_movements_from_dataframe,
     import_suppliers_from_google_sheet,
     import_workers_from_google_sheet,
     import_workers_from_staff_sheet,
+    list_dashboard_users,
     list_inventory,
     list_inventory_balances,
     list_inventory_execution_events,
@@ -62,17 +66,18 @@ from analytics.db import (
     list_inventory_movements,
     list_inventory_requirements,
     list_inventory_substitution_reason_codes,
-    list_segment_inventory_coordination,
     list_inventory_substitutions,
+    list_segment_inventory_coordination,
+    normalize_user_email,
+    request_inventory_substitution,
+    record_dashboard_user_login,
     record_inventory_execution_event,
     record_inventory_movement,
-    create_worker_absence_record,
-    request_inventory_substitution,
+    resolve_ui_auth_policy,
     resolve_inventory_exception,
-    upsert_inventory_substitution_reason_code,
+    upsert_dashboard_user,
     upsert_inventory_requirement,
-    ensure_dashboard_tables,
-    import_workers_from_staff_sheet,
+    upsert_inventory_substitution_reason_code,
     upsert_worker,
 )
 from analytics.db_connection import connection_scope
@@ -150,6 +155,7 @@ from analytics.operations_assignment import (
 )
 from dashboard.components.operations import render_operations_tab
 from dashboard.components.dispatch import render_dispatch_tab
+from dashboard.components.operations_diary import render_operations_diary_tab
 from dashboard.components.planner import render_planner_tab
 from corkysoft.pricing import DEFAULT_MODIFIERS
 from corkysoft.quote_service import (
@@ -206,6 +212,7 @@ PRICE_DASHBOARD_TABS = [
     "Live network overview",
     "Route maps",
     "Dispatch",
+    "Operations diary",
     "Planner",
     "Operations",
     "Fleet",
@@ -580,6 +587,214 @@ def _rerun_app() -> None:
     raise RuntimeError("Streamlit rerun API is unavailable.")
 
 
+def _streamlit_auth_configured() -> bool:
+    user_obj = getattr(st, "user", None)
+    return getattr(user_obj, "is_logged_in", None) is not None
+
+
+def _streamlit_user_claims() -> Dict[str, Any]:
+    user_obj = getattr(st, "user", None)
+    if user_obj is None:
+        return {}
+    claims: Dict[str, Any] = {}
+    for key in ("email", "name", "sub"):
+        value = getattr(user_obj, key, None)
+        if isinstance(value, str) and value.strip():
+            claims[key] = value.strip()
+    claims["is_logged_in"] = bool(getattr(user_obj, "is_logged_in", False))
+    return claims
+
+
+def _resolve_dashboard_identity(
+    conn: sqlite3.Connection,
+) -> dict[str, Any]:
+    policy = resolve_ui_auth_policy()
+    bootstrap_dashboard_admin(conn, allowed_role_keys=tuple(ROLE_LAYOUT_DEFAULTS.keys()))
+
+    if not policy["requireAuth"]:
+        return {
+            "mode": "anonymous",
+            "policy": policy,
+            "user": None,
+            "claims": {},
+            "configured": _streamlit_auth_configured(),
+        }
+
+    configured = _streamlit_auth_configured()
+    claims = _streamlit_user_claims()
+    if not configured:
+        return {
+            "mode": "misconfigured",
+            "policy": policy,
+            "user": None,
+            "claims": claims,
+            "configured": False,
+        }
+
+    if not claims.get("is_logged_in"):
+        return {
+            "mode": "login_required",
+            "policy": policy,
+            "user": None,
+            "claims": claims,
+            "configured": True,
+        }
+
+    email = normalize_user_email(claims.get("email"))
+    local_user = get_dashboard_user_by_email(conn, email=email)
+    if local_user is None:
+        return {
+            "mode": "unauthorized",
+            "policy": policy,
+            "user": None,
+            "claims": claims,
+            "configured": True,
+        }
+    if not local_user["active"]:
+        return {
+            "mode": "inactive",
+            "policy": policy,
+            "user": local_user,
+            "claims": claims,
+            "configured": True,
+        }
+
+    refreshed_user = record_dashboard_user_login(
+        conn,
+        email=email,
+        google_sub=claims.get("sub"),
+        display_name=claims.get("name"),
+    ) or local_user
+    return {
+        "mode": "authenticated",
+        "policy": policy,
+        "user": refreshed_user,
+        "claims": claims,
+        "configured": True,
+    }
+
+
+def _render_auth_gate(auth_state: dict[str, Any]) -> None:
+    st.title("Corkysoft")
+    st.caption("Private dashboard access is controlled by Google sign-in plus a local Corkysoft allowlist.")
+
+    mode = str(auth_state["mode"])
+    if mode == "misconfigured":
+        st.error(
+            "UI auth is required but Streamlit OIDC is not configured. Add `.streamlit/secrets.toml` auth settings before starting this deployment."
+        )
+        st.stop()
+
+    if mode == "login_required":
+        st.info("Sign in with Google to continue.")
+        login = getattr(st, "login", None)
+        if not callable(login):
+            st.error("Streamlit login support is unavailable in this runtime.")
+        elif st.button("Sign in with Google", key="dashboard_auth_login_google"):
+            login("google")
+        st.stop()
+
+    claims = auth_state.get("claims", {})
+    email = claims.get("email") or "Unknown account"
+    if mode == "unauthorized":
+        st.error(f"`{email}` is not in the local Corkysoft allowlist.")
+    elif mode == "inactive":
+        st.error(f"`{email}` is currently inactive in Corkysoft.")
+    else:
+        st.error("Authentication failed.")
+
+    logout = getattr(st, "logout", None)
+    if callable(logout) and st.button("Sign out", key="dashboard_auth_logout_gate"):
+        logout()
+    st.stop()
+
+
+def _render_authenticated_user_banner(auth_state: dict[str, Any]) -> None:
+    user = auth_state.get("user") or {}
+    claims = auth_state.get("claims") or {}
+    display_name = user.get("displayName") or claims.get("name") or user.get("email") or "Unknown user"
+    email = user.get("email") or claims.get("email") or ""
+    role_key = user.get("roleKey") or "dispatcher"
+    role_label = ROLE_LAYOUT_DEFAULTS.get(role_key, {}).get("label", role_key)
+
+    st.success(
+        f"Authenticated via Google as {display_name} ({email}) · role: {role_label}"
+    )
+    banner_cols = st.columns([3, 2, 1])
+    banner_cols[0].caption(f"Google account: **{display_name}**")
+    banner_cols[1].caption(f"{email} · {role_label}")
+    logout = getattr(st, "logout", None)
+    if callable(logout) and banner_cols[2].button("Log out", key="dashboard_auth_logout_button"):
+        logout()
+
+
+def _render_anonymous_dev_banner(auth_state: dict[str, Any]) -> None:
+    policy = auth_state.get("policy") or {}
+    environment = str(policy.get("environment") or "development")
+    st.warning(
+        "Anonymous development mode is active. Google sign-in is bypassed for this local run."
+    )
+    st.caption(
+        f"Mode: anonymous local development · environment: {environment} · set `CORKYSOFT_REQUIRE_UI_AUTH=1` and unset `CORKYSOFT_ALLOW_ANONYMOUS_UI` to force login."
+    )
+
+
+def _render_dashboard_user_admin(
+    conn: sqlite3.Connection,
+    *,
+    current_role_key: str,
+) -> None:
+    if current_role_key != "system_rollout_admin":
+        return
+
+    st.markdown("#### Dashboard users")
+    users = list_dashboard_users(conn)
+    if users:
+        users_df = pd.DataFrame(
+            [
+                {
+                    "Email": item["email"],
+                    "Name": item["displayName"] or "",
+                    "Role": item["roleKey"],
+                    "Active": item["active"],
+                    "Provider": item["authProvider"],
+                    "Google sub": item["googleSub"] or "",
+                    "Last login": item["lastLoginAt"] or "",
+                }
+                for item in users
+            ]
+        )
+        st.dataframe(users_df, width="stretch", hide_index=True)
+    else:
+        st.caption("No local dashboard users have been created yet.")
+
+    with st.form("dashboard_user_admin_form"):
+        user_cols = st.columns(4)
+        email = user_cols[0].text_input("Email")
+        display_name = user_cols[1].text_input("Name")
+        role_key = user_cols[2].selectbox(
+            "Role",
+            options=list(ROLE_LAYOUT_DEFAULTS.keys()),
+            format_func=lambda key: str(ROLE_LAYOUT_DEFAULTS[key]["label"]),
+        )
+        active = user_cols[3].checkbox("Active", value=True)
+        if st.form_submit_button("Save dashboard user"):
+            try:
+                upsert_dashboard_user(
+                    conn,
+                    email=email,
+                    display_name=display_name or None,
+                    role_key=role_key,
+                    active=active,
+                    allowed_role_keys=tuple(ROLE_LAYOUT_DEFAULTS.keys()),
+                )
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                st.success("Dashboard user saved.")
+                _rerun_app()
+
+
 def _first_non_empty(route: pd.Series, columns: Sequence[str]) -> Optional[str]:
     for column in columns:
         if column in route and isinstance(route[column], str):
@@ -650,17 +865,32 @@ def _extract_route_volume(route: pd.Series, candidates: Sequence[str]) -> Option
     return None
 
 def render_price_distribution_dashboard():
-    st.title("Price distribution (Airbnb-style)")
-    st.caption(
-        "Visualise $ per m³ by corridor and client, with break-even bands to spot loss-leaders."
-    )
-
     tabs_placeholder = st.container()
 
     with connection_scope() as conn:
+        ensure_dashboard_tables(conn)
+        try:
+            auth_state = _resolve_dashboard_identity(conn)
+        except ValueError as exc:
+            st.title("Corkysoft")
+            st.error(str(exc))
+            return
+        if auth_state["mode"] != "anonymous" and auth_state["mode"] != "authenticated":
+            _render_auth_gate(auth_state)
+            return
+
+        st.title("Price distribution (Airbnb-style)")
+        st.caption(
+            "Visualise $ per m³ by corridor and client, with break-even bands to spot loss-leaders."
+        )
+
+        if auth_state["mode"] == "authenticated":
+            _render_authenticated_user_banner(auth_state)
+        elif auth_state["mode"] == "anonymous":
+            _render_anonymous_dev_banner(auth_state)
+
         break_even_value = ensure_break_even_parameter(conn)
         ensure_quote_schema(conn)
-        ensure_dashboard_tables(conn)
 
         df_all: pd.DataFrame = pd.DataFrame()
         mapping: ColumnMapping = _blank_column_mapping()
@@ -946,17 +1176,38 @@ def render_price_distribution_dashboard():
         tab_labels = PRICE_DASHBOARD_TABS
         role_layouts = get_dashboard_role_layouts(conn, available_tabs=tab_labels)
         role_labels = {item["label"]: item for item in role_layouts}
-        default_role_label = next((item["label"] for item in role_layouts if item["roleKey"] == "dispatcher"), role_layouts[0]["label"])
-        layout_cols = st.columns([2, 2, 2, 1])
-        selected_role_label = layout_cols[0].selectbox(
-            "Role layout",
-            options=list(role_labels.keys()),
-            index=list(role_labels.keys()).index(st.session_state.get("dashboard_active_role", default_role_label))
-            if st.session_state.get("dashboard_active_role", default_role_label) in role_labels
-            else 0,
-            key="dashboard_active_role",
+        auth_user = auth_state.get("user")
+        auth_role_key = str(auth_user.get("roleKey")) if isinstance(auth_user, dict) and auth_user.get("roleKey") else "dispatcher"
+        default_role_label = next(
+            (
+                item["label"]
+                for item in role_layouts
+                if item["roleKey"] == auth_role_key
+            ),
+            next((item["label"] for item in role_layouts if item["roleKey"] == "dispatcher"), role_layouts[0]["label"]),
         )
-        selected_role_layout = role_labels[selected_role_label]
+        layout_cols = st.columns([2, 2, 2, 1])
+        if auth_state["mode"] == "authenticated":
+            selected_role_layout = next(
+                (item for item in role_layouts if item["roleKey"] == auth_role_key),
+                role_layouts[0],
+            )
+            layout_cols[0].text_input(
+                "Role layout",
+                value=str(selected_role_layout["label"]),
+                disabled=True,
+                key="dashboard_active_role_locked",
+            )
+        else:
+            selected_role_label = layout_cols[0].selectbox(
+                "Role layout",
+                options=list(role_labels.keys()),
+                index=list(role_labels.keys()).index(st.session_state.get("dashboard_active_role", default_role_label))
+                if st.session_state.get("dashboard_active_role", default_role_label) in role_labels
+                else 0,
+                key="dashboard_active_role",
+            )
+            selected_role_layout = role_labels[selected_role_label]
         stale_primary_tabs = missing_recommended_primary_tabs(
             role_key=str(selected_role_layout["roleKey"]),
             layout=selected_role_layout,
@@ -1238,6 +1489,10 @@ def render_price_distribution_dashboard():
         if "Dispatch" in tab_map:
             with tab_map["Dispatch"]:
                 render_dispatch_tab(conn)
+
+        if "Operations diary" in tab_map:
+            with tab_map["Operations diary"]:
+                render_operations_diary_tab(conn)
 
         if "Planner" in tab_map:
             with tab_map["Planner"]:
@@ -2297,7 +2552,10 @@ def render_price_distribution_dashboard():
 
         if "Kent admin" in tab_map:
             with tab_map["Kent admin"]:
-                render_kent_admin_tab(conn)
+                render_kent_admin_tab(
+                    conn,
+                    current_role_key=auth_role_key if auth_state["mode"] == "authenticated" else None,
+                )
 
         if "Optimizer" in tab_map:
             with tab_map["Optimizer"]:
@@ -2553,11 +2811,18 @@ def render_kent_tenders_tab(conn: sqlite3.Connection) -> None:
                     st.caption("Enter an operator ID to record override actions.")
 
 
-def render_kent_admin_tab(conn: sqlite3.Connection) -> None:
+def render_kent_admin_tab(
+    conn: sqlite3.Connection,
+    *,
+    current_role_key: str | None = None,
+) -> None:
     st.subheader("Kent AMS admin")
     st.caption(
         "Use this surface for policy defaults, override reason governance, and review. Operators should work from the Kent tenders tab."
     )
+
+    if current_role_key:
+        _render_dashboard_user_admin(conn, current_role_key=current_role_key)
 
     policy = get_kent_tender_policy_config(conn)
     with st.form("kent_tender_policy_form"):

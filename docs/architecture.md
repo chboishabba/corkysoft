@@ -26,10 +26,15 @@ business logic lives under `corkysoft/`, analytics and data prep live under
 - `analytics/`: Data prep, analytics, and telemetry helpers.
   - `analytics/db.py`: Public exports for the analytics database layer.
   - `analytics/db/`: Inventory, fleet, shifts, and schema definitions.
+  - `analytics/adaptive_policy.py`: Adaptive policy parameter defaults, snapshots, and bounded update helpers.
+  - `analytics/operations_diary.py`: Day/week diary rollups, diary-task CRUD,
+    and invoice/bill review helpers.
   - `analytics/price_distribution.py`: Aggregations and chart helpers for the dashboard.
   - `analytics/live_data.py`: Live map helpers for trucks and routes.
 - `dashboard/`: Streamlit UI and reusable widgets.
   - `dashboard/components/`: Tab renderers and shared UI pieces.
+  - `dashboard/components/operations_diary.py`: Manager-facing diary screen for
+    job usage, tasks, and invoice/bill follow-through.
   - `dashboard/map_provider.py`: Mapbox, PyDeck, and Folium configuration.
 
 Note: `corkysoft/src/dashboard/` is a placeholder package stub for packaging.
@@ -44,6 +49,24 @@ The main Streamlit entry point remains `dashboard/app.py`.
    uses aggregation helpers in `analytics/price_distribution.py`.
 4. Telemetry ingestors populate `truck_positions` and `active_routes`, which
    `analytics/live_data.py` loads for the live map.
+5. Adaptive-policy helpers store small learned pricing/ETA/risk parameters in
+   `global_parameters` so later ingestion and review workflows can update them
+   without hidden spreadsheet drift.
+6. Operations diary helpers combine jobs, segments, tasks, labor actuals, and
+   invoice/bill review state into a manager-facing day/week workflow.
+
+## Cross-project boundary
+
+- Corkysoft is the workflow and operational-truth owner for removals planning,
+  diary tasks, invoice review, and subcontractor-bill reconciliation.
+- StatiBaker should consume append-only downstream summaries and reviewed-state
+  envelopes where useful, but should not become a second mutable workflow
+  database for these operations.
+- ITIR remains the orchestration/context layer that coordinates cross-project
+  contracts without taking ownership of Corkysoft business semantics.
+- Today, only the call-intelligence slice has an analogous downstream outbox
+  pattern in Corkysoft; diary/planner/reconciliation export is design-stage
+  only.
 
 ## Routing providers and configuration
 

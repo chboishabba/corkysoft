@@ -19,19 +19,19 @@ ROLE_LAYOUT_DEFAULTS: dict[str, dict[str, Any]] = {
     "dispatcher": {
         "label": "Dispatcher",
         "defaultLandingTab": "Dispatch",
-        "primaryTabs": ["Dispatch", "Calls", "Planner", "Kent tenders", "Operations"],
+        "primaryTabs": ["Dispatch", "Operations diary", "Calls", "Planner", "Kent tenders", "Operations"],
         "hiddenTabs": ["Kent admin"],
     },
     "fleet_operations_manager": {
         "label": "Fleet / Operations Manager",
-        "defaultLandingTab": "Operations",
-        "primaryTabs": ["Planner", "Operations", "Dispatch", "Calls", "Fleet", "Vehicle maintenance", "Payroll / Labor analytics"],
+        "defaultLandingTab": "Operations diary",
+        "primaryTabs": ["Operations diary", "Planner", "Operations", "Dispatch", "Calls", "Fleet", "Vehicle maintenance", "Payroll / Labor analytics"],
         "hiddenTabs": [],
     },
     "labor_planner": {
         "label": "Labor Planner / Staff Coordinator",
         "defaultLandingTab": "Staff",
-        "primaryTabs": ["Planner", "Staff", "Driver shifts", "Calls", "Operations", "Dispatch", "Payroll / Labor analytics"],
+        "primaryTabs": ["Operations diary", "Planner", "Staff", "Driver shifts", "Calls", "Operations", "Dispatch", "Payroll / Labor analytics"],
         "hiddenTabs": ["Kent admin"],
     },
     "maintenance_compliance": {
@@ -49,7 +49,7 @@ ROLE_LAYOUT_DEFAULTS: dict[str, dict[str, Any]] = {
     "commercial_owner": {
         "label": "Commercial Owner",
         "defaultLandingTab": "Quote builder",
-        "primaryTabs": ["Quote builder", "Payroll / Labor analytics", "Calls", "Kent tenders", "Kent admin", "Profitability insights"],
+        "primaryTabs": ["Quote builder", "Operations diary", "Payroll / Labor analytics", "Calls", "Kent tenders", "Kent admin", "Profitability insights"],
         "hiddenTabs": ["Vehicle maintenance"],
     },
     "system_rollout_admin": {
@@ -190,8 +190,6 @@ def resolve_dashboard_layout(
     primary_tabs = _normalise_tabs(session_primary_tabs or layout.get("primaryTabs", []), base_order)
     hidden_tabs = [] if show_all_tabs else _normalise_tabs(session_hidden_tabs or layout.get("hiddenTabs", []), base_order)
     visible_tabs = [tab for tab in base_order if tab not in hidden_tabs]
-    if requested_tab and requested_tab in base_order and requested_tab not in visible_tabs:
-        visible_tabs.append(requested_tab)
     ordered: list[str] = []
     for tab in primary_tabs:
         if tab in visible_tabs and tab not in ordered:

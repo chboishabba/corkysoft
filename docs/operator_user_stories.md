@@ -22,17 +22,23 @@ Required inputs:
 - volume or size estimate
 - estimated sale price or target margin
 - known modifiers and site constraints
+- paperwork/compliance requirements when the job is international,
+  insurance-heavy, tender-driven, or otherwise governance-sensitive
 
 Expected system outputs:
 - quoted amount and cost breakdown
 - profitability policy pass/fail state
 - reasons when policy does not pass
 - operational fit signals that may affect confidence
+- visibility into missing requirement/proposal/governance state when paperwork
+  or compliance completeness materially changes quote quality
 
 Operator actions:
 - accept the recommendation
 - adjust margin/price inputs
 - record a manual override when commercial context justifies it
+- flag missing paperwork/compliance structure for follow-up rather than letting
+  it stay implicit
 
 ## Dispatcher
 
@@ -73,6 +79,7 @@ Operator actions:
 ## Fleet / Operations Manager
 
 Primary surfaces:
+- `Operations diary`
 - `Operations`
 - `Dispatch`
 - `Fleet`
@@ -90,19 +97,77 @@ Required inputs:
 - readiness warnings and blocks
 - observed capacity pressure
 - current job/segment plan
+- diary tasks and unresolved operational follow-ups
+- customer invoice state and subcontractor-bill exceptions
+- plan-vs-actual truck/staff/supplier usage signals
 - override history and cutover status
 
 Expected system outputs:
 - segment-based planning truth
+- a day/week manager cockpit that links jobs, tasks, usage, and reconciliation
 - visibility into blocked and due-soon items
 - operator/admin separation where governance is required
 - auditable policy and override changes
 
 Operator actions:
+- review the day/week diary to decide what needs action now
+- add, remove, or re-scope operational diary tasks
 - create or update segments
 - assign trucks and workers
+- drill into job usage, vehicle usage, staff usage, and invoicing/reconciliation
 - approve or escalate operational overrides
 - review capacity pressure and planning drift
+
+## Operations Manager Diary / Reconciliation
+
+Primary surfaces:
+- `Operations diary`
+
+Secondary surfaces:
+- `Planner`
+- `Dispatch`
+- `Payroll / Labor analytics`
+
+Trigger:
+- A manager needs one day/week view of work in motion, required vs utilized
+  resources, and invoice/bill follow-through.
+
+Primary decisions:
+- Which jobs need attention today or this week?
+- Which jobs are missing required trucks, workers, supplier coverage, or
+  follow-up tasks?
+- Which completed jobs are ready for customer invoicing?
+- Which subcontractor or third-party bills match the known operational truth,
+  and which need escalation?
+- Which received third-party bills have been sitting unresolved for too long,
+  and which job/account is carrying that exposure?
+
+Required inputs:
+- jobs and `job_segments`
+- diary tasks linked to a job, segment, day, or week
+- truck and worker assignments
+- imported/reviewed actual labor signals
+- supplier and subcontractor context
+- customer invoice review state
+- subcontractor bill review state
+
+Expected system outputs:
+- day and week diary views
+- job-level required vs utilized summaries
+- vehicle and staff usage drill-through
+- clear invoice and bill exception categories
+- operational follow-up task list that survives beyond raw segment planning
+- unresolved supplier-exposure summary with aging and latency cues
+
+Operator actions:
+- open the diary from Planner or Dispatch context
+- review jobs by day or week
+- add/remove/update diary tasks
+- inspect vehicle usage for a job
+- inspect staff usage for a job
+- review customer invoice readiness
+- reconcile subcontractor or supplier bills against job truth
+- open the most over-aged unresolved supplier rows and resolve or escalate them
 
 ## Commercial Owner
 
@@ -127,18 +192,59 @@ Required inputs:
 - override trends
 - lane and route performance summaries
 - rollout approval state when promotions are requested
+- requirement/proposal/governance gaps for compliance-heavy work
 
 Expected system outputs:
 - explainable policy framework
 - confidence that operators can override within governance
 - documented workflow from quote to awarded work
 - auditable approval history for governed promotions
+- visibility into where the current product still lacks explicit paperwork,
+  insurance, tender, customs, or audit-state modeling
 
 Operator actions:
 - approve policy changes
 - approve or reject rollout promotions
 - request calibration/tuning work
 - decide where to invest operational attention
+- prioritize requirement/proposal/governance formalization where external
+  paperwork quality is currently driving margin or risk
+
+## Compliance-Heavy / International Workflow Owner
+
+Primary surfaces:
+- `Quote builder`
+- `Kent tenders`
+- `Operations diary`
+
+Trigger:
+- A job, tender, or customer workflow depends on international shipping,
+  customs, insurance, tender compliance, or audit-heavy paperwork.
+
+Primary decisions:
+- Are the job's requirement states explicit enough to price and accept safely?
+- Is the proposal/document package complete enough to submit or execute?
+- Is the governance/evidence trail sufficient for later dispute, insurer,
+  subcontractor, or customer review?
+
+Required inputs:
+- commercial quote/tender context
+- paperwork and compliance checklist state
+- known external authority requirements
+- job/segment operational truth
+- invoice/bill review history when work is already complete
+
+Expected system outputs:
+- explicit requirement completeness state
+- proposal/document-package gaps
+- governance/evidence gaps tied to the job
+- clear handoff into operations diary and reconciliation when execution starts
+
+Operator actions:
+- halt or escalate work that lacks required paperwork/governance coverage
+- request missing requirements/proposal data
+- review late supplier/subcontractor paperwork against operational truth
+- hand complete work forward into quoting, dispatch, diary review, or invoicing
 
 ## Labor Planner / Staff Coordinator
 
@@ -160,6 +266,8 @@ Required inputs:
 - worker roster and active status
 - imported `VEHICLE_DRIVER` shift feed
 - worker roles, compliances, and readiness alerts
+- operations diary context when a manager wants staff usage reviewed from a
+  specific job or day
 
 Expected system outputs:
 - native planned labor roster
@@ -170,6 +278,7 @@ Expected system outputs:
 Operator actions:
 - maintain roster details
 - review planned segment assignments per worker
+- open staff-usage drill-down from the diary when job-level mismatches exist
 - reconcile imported shifts against the native plan
 - assign or update worker roles and compliances
 - review accepted labor actuals quality before payroll-prep truth is trusted
@@ -178,6 +287,7 @@ Operator actions:
 ## Owner / Commercial / Finance-facing Manager
 
 Primary surfaces:
+- `Operations diary`
 - future `Payroll / Labor analytics`
 
 Secondary surfaces:
@@ -187,6 +297,7 @@ Secondary surfaces:
 
 Trigger:
 - Labor cost patterns, payroll exposure, or workforce exceptions need review.
+- Customer invoice or subcontractor-bill discrepancies need job-level review.
 
 Primary decisions:
 - How much should labor/pay likely cost over a selected period or date range?
@@ -200,6 +311,7 @@ Required inputs:
 - accepted worker-time events
 - anomaly and review backlog
 - labor cost rollups by worker/team/job/client/corridor
+- job-level invoice and subcontractor-bill review state
 
 Expected system outputs:
 - pay forecasting by worker/team/date range
@@ -208,10 +320,13 @@ Expected system outputs:
 - absence / sick-day summaries
 - payroll-prep confidence signals
 - aggregate-first insight with justified drill-down to individual workers
+- job-level visibility into whether invoice and bill reviews match operational
+  truth
 
 Operator actions:
 - review labor trends and outliers
 - forecast payroll exposure
+- open diary-led reconciliation when a job-level exception needs explanation
 - inspect unresolved anomalies that reduce confidence
 - prepare export-ready labor summaries for external payroll/accounting tools
 - follow up only where patterns imply cost, staffing, or review action
@@ -256,6 +371,7 @@ Primary surfaces:
 
 Secondary surfaces:
 - `Dispatch`
+- `Operations diary`
 
 Trigger:
 - Planned work is moving from requirement/allocation into physical execution.

@@ -1,7 +1,8 @@
 pandas>=2.1
 numpy>=1.25
 plotly>=5.20
-streamlit>=1.36
+streamlit>=1.42
+Authlib>=1.3.2
 pydeck>=0.8
 folium>=0.15
 streamlit-folium>=0.18

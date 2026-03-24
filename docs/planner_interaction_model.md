@@ -149,6 +149,8 @@ It should include:
 Current status:
 - the dedicated `Planner` tab and lightweight role-based layout defaults are implemented
 - current planner behavior supports both job-first and corridor-first planning over historical route/profitability context
+- current planner should expose a day view anchored on the selected move date so proposed legs can be compared against already-planned segments, trucks, and workers for that day
+- planner day view should link into the separate manager-facing `Operations diary` once the operator needs job usage, vehicle usage, staff usage, invoice state, or subcontractor-bill review rather than only route/leg shaping
 - current proposals surface routing context and resource-fit alongside corridor familiarity before confirmation
 - current proposals also surface weak-confidence warnings before confirmation into `job_segments`
 - current planner site context includes first-pass street-level imagery when Google Maps is the active provider and imagery is available
@@ -242,7 +244,7 @@ Priority note:
   bridge rather than a large standalone optimization project
 
 It should not yet require:
-- external auth or user identity management
+- bespoke planner-only auth or identity logic beyond the dashboard auth shell
 - a full spatial freehand editing system
 - exact global optimization
 - removal of the existing `Operations` assignment workflow

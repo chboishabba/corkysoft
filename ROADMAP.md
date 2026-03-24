@@ -12,12 +12,19 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Add analytics documentation once the historical import and lane model ship.
 - Add a system architecture diagram (truck ↔ server ↔ cloud).
 - Keep `docs/positioning.md` aligned with supported integrations and product focus.
+- Keep product framing consistent: Corkysoft is a system of decision layered
+  over removals operations, not merely a dashboard or passive system of record.
 - Maintain `docs/operator_user_stories.md` as the actor-based product truth, including role coverage for labor, maintenance/compliance, inventory/suppliers, and system admin.
 - Maintain `docs/usage_onboarding_guide.md` as the formal onboarding/help truth for daily usage.
 - Maintain `docs/ui_role_coverage_matrix.md` as the canonical role-to-surface ownership map.
 - Maintain `docs/payroll_and_labor_analytics.md` as the canonical payroll-preparation and labor-statistics truth.
 - Maintain `docs/naive_user_tester_notes.md` as the plain-language user-testing log and convert repeated friction into backlog items.
 - Maintain `docs/commercial_workflow_lifecycle.md` as the quote -> tender -> awarded-work lifecycle truth.
+- Add a dedicated workflow spec for international/compliance-heavy work so
+  paperwork, insurance, tender, customs, and audit requirements are modeled as
+  explicit requirements/proposal/governance states rather than left implicit.
+- Maintain the Corkysoft/SB/ITIR boundary explicitly: Corkysoft is workflow
+  truth, SB is downstream interpretible state, and ITIR is orchestration/context.
 - Maintain `docs/corridor_detection.md` alongside corridor model updates.
 - Keep `docs/corridor_schema_plan.md` aligned with corridor table changes.
 - Maintain `docs/corridor_defaults.md` and `docs/cluster_template_au.md` when thresholds or clusters change.
@@ -27,17 +34,34 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Add a "Move/Job Lifecycle" doc that maps current CLI + dashboard flow states end-to-end.
 - Add a data-model glossary mapping relocation terms (assignee/move/shipment) to Corkysoft table and field names.
 - Add a pricing-engine documentation page that lists margin inputs, formulas, and data dependencies.
+- Maintain `docs/adaptive_learning_loop.md` as the canonical bounded-learning spec for situational-awareness inputs, learned policy state, and staged rollout boundaries.
 - Validate and maintain `docs/kent_ams_integration.md` against real Kent AMS payloads and auth constraints.
 - Execute `docs/kent_ams_integration_roadmap.md` Phase 0 contract lock with sample payload coverage and enum catalog.
 - Expand Kent adapter from import-only to operator triage with tender pre-scoring calibration and peak-season weighting validation.
 - Review `GET /kent-ams/tenders/calibration` weekly and tune score weights only when band monotonicity and margin-error metrics improve.
 - Validate route/location scoring against historical lane outcomes to avoid over-prioritizing unfamiliar but risky tenders.
 - Integrate en-route spare capacity signals into quote creation outputs and ingestion triage so operators can combine price and operational fit.
+- Normalize state/national closure, traffic, and weather signals into a common disruption input layer before using them in quote or ETA policy updates.
+- Keep adaptive policy learning bounded and reviewable: bootstrap explicit parameters first, then add proposal generation, then approval/audit flows.
 - Maintain `docs/multi_truck_route_load_optimization.md` and align implementation milestones to its transfer/split/sequence constraints.
 - Maintain `docs/planner_interaction_model.md` as the canonical planner-UX spec above `job_segments`.
+- Maintain `docs/operations_diary_workflow.md` as the canonical manager-facing day/week cockpit spec across planning, usage review, and financial follow-through.
+- Maintain `docs/job_cost_and_invoice_reconciliation.md` as the canonical invoice/bill review spec tied to job and segment truth.
+- Maintain `docs/corkysoft_sb_itir_coverage_audit.md` as the truth table for
+  what Corkysoft already covers versus what is only conceptual or planned in
+  SB/ITIR.
+- Maintain `docs/sb_itir_downstream_contract.md` as the transport-agnostic
+  downstream contract for Corkysoft diary/planner/reconciliation outputs.
+- Maintain `docs/planner_diary_patterns_for_sb_itir.md` as the pattern-extraction
+  note for future SB/ITIR lens design.
 - Maintain the implemented hybrid planner: job-first and map/corridor-first selection, historical overlap surfacing, and profitability-aware draft leg generation before assignment.
-- Refine the implemented role-layout defaults and manual role switcher without introducing auth/profile complexity.
+- Replace the anonymous/manual role switcher with Google-authenticated local users while keeping role-layout policy simple and reviewable.
+- Follow the first Google-auth/dashboard-user slice with per-action audit attribution and tighter admin/user governance.
+- Maintain a focused auth red-team plan and expand it into executable browser-based checks after the current unit/static hardening pass.
+- Treat role-hidden admin tabs as part of the authz boundary; do not allow query-param navigation or stale session state to re-expose them.
+- Keep bootstrap-admin seeding one-shot and explicit; do not let lingering env vars silently reassert admin access after user setup exists.
 - Deepen the `Planner` tab from the current hybrid scaffold toward richer site-aware and more interactive visual planning.
+- Add a separate `Operations diary` above Planner and Dispatch so managers can review day/week workload, usage, tasks, and invoice/bill exceptions without collapsing those concerns back into the route-planning UI.
 - Google/ORS parity is now aligned across Planner preview and saved-route Folium overlays; continue auditing remaining route/map surfaces and fallback behavior for strict parity.
 - Planner now supports accepted site-risk interpretation plus Google-first 360/media attachment, advisory CV/volume scaffolding, and first derived site constraints. The current priority should favor real media/CV ingestion and reviewed outputs; deeper interpreted constraint logic should follow once that evidence pipeline is more real.
 - Route geometry should be enriched automatically during ingest/load/seed flows; manual population is no longer the intended operator path.
@@ -53,6 +77,9 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Maintain `docs/inventory_execution_workflow.md` as the canonical workflow spec for pick / pack / load, substitution, and container-heavy execution.
 - Implemented the routed call-intelligence foundation: `Calls` tab, call sessions, call legs, routing-event history, ambient office transcript sessions, transcript artifacts, extracted-action review, worker time capture events, and append-only downstream egress preparation.
 - Keep fake transcript generation as the default workflow-testing ingest path for both phone and ambient-session workflows until live telephony/IVR is implemented.
+- Treat WhisperX-WebUI, or a directly compatible successor, as the default external ASR/call-intelligence backend for Corkysoft rather than embedding transcription logic locally.
+- Implement and harden the Corkysoft send/receive interface to WhisperX-WebUI: audio submission, async task polling, transcript/artifact finalization, service separation, and failure/retry handling.
+- Fold newer livestreaming transcription-completion concepts back into the WhisperX-WebUI seam where practical so Corkysoft only has one reviewed transcription ingress contract.
 - Continue worker time capture rollout across app, WhatsApp, and voice/landline call-in paths with transcription/review for low-confidence events.
 - Fixed the live rerun-compatibility blocker in `Calls` and `Inventory`; continue checking other operator surfaces for any remaining direct `st.experimental_rerun()` usage under the current Streamlit build.
 - Bring dispatcher role-layout defaults into line with the live role story; the current default focus tabs still omit `Calls` even though routed call handling is now part of dispatcher work.
@@ -84,6 +111,16 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Replace `VEHICLE_DRIVER` as the primary roster/planning surface with native labor planning and imported-shift reconciliation.
 - Link inventory allocation and supplier coordination directly to `job_segments` so stock planning cooperates with truck/worker planning.
 - Make the Dispatch tab the primary job-centric execution surface across trucks, workers, inventory, suppliers, and readiness flags.
+- Add a manager-facing day/week diary that links jobs, tasks, vehicle usage, staff usage, customer invoice readiness, and subcontractor-bill reconciliation.
+- Add persistent diary tasks for day/week/job/segment follow-through that do not need to masquerade as `job_segments`.
+- Add invoice and subcontractor-bill review records tied to jobs, with explicit exception states when operational truth is incomplete.
+- Add append-only downstream envelopes for diary/planner/reconciliation review
+  state only after the SB/ITIR contract is ratified.
+- Reuse Corkysoft planner/diary workflow patterns in SB/ITIR only as downstream
+  summary/review lenses, not as a second operational cockpit.
+- Add unresolved supplier-exposure aging inside Corkysoft so managers can see
+  received-but-unreconciled liabilities, billing latency, and top overdue jobs
+  before the fuller SB time surface exists.
 - Add cutover metrics, rollback instructions, and CSV snapshot/export rules for controlled spreadsheet decommissioning.
 - Track spreadsheet decommissioning workflow-by-workflow with explicit cutover status, fallback mode, checklist completion, and last-drill timestamps.
 - Use workflow-level native-usage, fallback-use, open-issue, and snapshot-consumer metrics to decide when each sheet can move to fallback-only.
@@ -238,6 +275,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Routing, costing, caching, database schema, and core CLI are in place.
 - Streamlit dashboard is implemented and used as the main operator surface.
 - Kent tender triage exists internally with provisional governance and contract assumptions.
+- Adaptive policy learning is now documented as a first-stage bounded parameter system; only parameter storage/helpers are implemented, not autonomous learning or external disruption ingest.
 
 ### Highest-Priority Remaining Work
 
@@ -245,6 +283,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 2. Validate Kent against real payloads and real operator behavior.
 3. Tighten governance for overrides, hard-blocks, and policy review.
 4. Formalize corridor/lane and multi-truck policy before deeper optimization work.
+5. Define and stage situational-awareness ingest plus adaptive policy review before any automatic quote recalibration.
 
 ---
 
@@ -257,6 +296,8 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - End-to-end dashboard workflow clarity (ensure docs and UX use the same operator story).
 - Phantom corridor detection + gravity model exploration.
 - Opportunity scoring that combines gravity demand with $/m3 distributions.
+- External disruption ingest coverage for road closures, weather, and route exceptions.
+- Adaptive-policy proposal logic derived from realised outcomes.
 
 ## High-Leverage Near-Term Features
 
@@ -269,3 +310,4 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Corridor profitability heatmap layer.
 - Automated corridor pricing adjustments.
 - Kent ranking correctness, admin/operator separation, and governed hard-block handling.
+- Situational-awareness overlays and bounded adaptive-policy review flows.

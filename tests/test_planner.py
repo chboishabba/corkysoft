@@ -7,7 +7,9 @@ import pandas as pd
 
 from analytics.db import ensure_dashboard_tables, upsert_truck, upsert_vehicle_details, upsert_worker
 from analytics.db.site_media import create_media_inference_result, upsert_site_assessment
+from analytics.operations_assignment import assign_segment_resources, ensure_segment
 from analytics.planner import (
+    build_planner_day_view,
     build_planner_proposal,
     infer_planner_corridor_for_job,
     list_planner_corridor_candidates,
@@ -244,6 +246,82 @@ def test_build_planner_proposal_warns_when_resources_are_blocked() -> None:
 
     assert proposal["resourceContext"]["blockedVehicles"] >= 1
     assert any("blocked" in warning.lower() or "resource" in warning.lower() for warning in proposal["warnings"])
+
+
+def test_build_planner_day_view_filters_and_prioritises_focus_job() -> None:
+    conn = _seed_conn()
+    worker = conn.execute("SELECT id FROM workers LIMIT 1").fetchone()
+    job = conn.execute("SELECT id FROM jobs LIMIT 1").fetchone()
+    other_job_id = conn.execute(
+        """
+        INSERT INTO jobs (
+            client, origin, destination, origin_resolved, destination_resolved, job_date,
+            distance_km, volume_m3, origin_lat, origin_lon, dest_lat, dest_lon, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "Other Client",
+            "Brisbane",
+            "Sydney",
+            "Brisbane",
+            "Sydney",
+            "2026-03-21",
+            900.0,
+            20.0,
+            -27.47,
+            153.02,
+            -33.87,
+            151.21,
+            "2026-03-12T00:00:00+00:00",
+        ),
+    ).lastrowid
+    focus_segment = ensure_segment(
+        conn,
+        job_id=int(job["id"]),
+        segment_sequence=1,
+        from_location="Brisbane",
+        to_location="Cairns",
+        planned_start="2026-03-20T08:00:00+00:00",
+        planned_end="2026-03-20T12:00:00+00:00",
+    )
+    assign_segment_resources(
+        conn,
+        segment_id=int(focus_segment["id"]),
+        truck_ids=["TRK-1"],
+        worker_assignments=[{"workerId": int(worker["id"])}],
+    )
+    ensure_segment(
+        conn,
+        job_id=int(other_job_id),
+        segment_sequence=1,
+        from_location="Brisbane",
+        to_location="Sydney",
+        planned_start="2026-03-20T13:00:00+00:00",
+        planned_end="2026-03-20T16:00:00+00:00",
+    )
+    ensure_segment(
+        conn,
+        job_id=int(other_job_id),
+        segment_sequence=2,
+        from_location="Sydney",
+        to_location="Depot",
+        planned_start="2026-03-21T08:00:00+00:00",
+        planned_end="2026-03-21T10:00:00+00:00",
+    )
+
+    day_view = build_planner_day_view(
+        conn,
+        selected_date="2026-03-20",
+        focus_job_id=int(job["id"]),
+    )
+
+    assert day_view["summary"]["segmentCount"] == 2
+    assert day_view["summary"]["jobCount"] == 2
+    assert day_view["summary"]["focusJobSegmentCount"] == 1
+    assert day_view["summary"]["truckCount"] == 1
+    assert day_view["summary"]["workerCount"] == 1
+    assert day_view["segments"][0]["jobId"] == int(job["id"])
+    assert day_view["segments"][0]["isFocusJob"] is True
 
 
 def test_build_planner_preview_figure_uses_provider_aware_layout_and_route_line() -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import math
 import json
+from datetime import date
 from typing import Any
 
 import pandas as pd
@@ -27,6 +28,7 @@ from analytics.db.site_media import (
 from analytics.live_data import extract_route_path
 from analytics.operations_assignment import ensure_segment
 from analytics.planner import (
+    build_planner_day_view,
     build_planner_proposal,
     infer_planner_corridor_for_job,
     list_planner_corridor_candidates,
@@ -243,6 +245,33 @@ def render_planner_tab(filtered_df: pd.DataFrame, conn: sqlite3.Connection) -> N
             f"Planned labor on selected day: {proposal['resourceContext']['plannedLaborAssignments'] if proposal['resourceContext']['plannedLaborAssignments'] is not None else 'n/a'}"
         )
 
+    selected_day_default = proposal["resourceContext"].get("plannedDate") or (
+        proposal.get("jobContext") or {}
+    ).get("jobDate")
+    selected_day = st.date_input(
+        "Planner day view",
+        value=_date_input_value(selected_day_default),
+        key="planner_day_view_date",
+        help="Shows existing planned segments for the selected day so proposed legs can be compared against the live schedule.",
+    )
+    day_view = build_planner_day_view(
+        conn,
+        selected_date=selected_day.isoformat(),
+        focus_job_id=int(target_job_id) if target_job_id is not None else None,
+    )
+    _render_planner_day_view(day_view=day_view)
+    if st.button(
+        "Open selected day/job in Operations diary",
+        key="planner_open_operations_diary",
+    ):
+        _set_query_params(
+            view="Operations diary",
+            diary_view="day",
+            diary_date=selected_day.isoformat(),
+            diary_job=str(target_job_id or ""),
+        )
+        _rerun_app()
+
     if inventory_requirements:
         st.markdown("#### Inventory fit")
         inventory_cols = st.columns(3)
@@ -369,6 +398,67 @@ def _format_job_label(job: dict[str, Any]) -> str:
         f"#{job['id']} · {job.get('client') or 'Unknown client'} · "
         f"{job.get('origin_resolved') or job.get('origin') or '?'} → "
         f"{job.get('destination_resolved') or job.get('destination') or '?'}"
+    )
+
+
+def _set_query_params(**params: str) -> None:
+    query_params = getattr(st, "query_params", None)
+    if query_params is not None:
+        query_params.from_dict(params)
+        return
+    st.experimental_set_query_params(**params)
+
+
+def _date_input_value(value: Any) -> date:
+    if isinstance(value, date):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return date.today()
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return date.today()
+
+
+def _render_planner_day_view(*, day_view: dict[str, Any]) -> None:
+    st.markdown("#### Day view")
+    summary = day_view.get("summary", {})
+    metric_cols = st.columns(5)
+    metric_cols[0].metric("Segments", int(summary.get("segmentCount") or 0))
+    metric_cols[1].metric("Jobs", int(summary.get("jobCount") or 0))
+    metric_cols[2].metric("Trucks", int(summary.get("truckCount") or 0))
+    metric_cols[3].metric("Workers", int(summary.get("workerCount") or 0))
+    metric_cols[4].metric("Focus-job segments", int(summary.get("focusJobSegmentCount") or 0))
+
+    segments = day_view.get("segments", [])
+    if not segments:
+        st.caption("No planned segments exist for the selected day yet.")
+        return
+
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "Focus": "Current job" if row["isFocusJob"] else "",
+                    "Job": row["jobId"],
+                    "Client": row["jobClient"] or "Unknown client",
+                    "Segment": row["segmentSequence"],
+                    "From": row["fromLocation"],
+                    "To": row["toLocation"],
+                    "Planned start": row["plannedStart"],
+                    "Planned end": row["plannedEnd"],
+                    "Status": row["assignmentStatus"],
+                    "Trucks": ", ".join(row["truckIds"]),
+                    "Workers": ", ".join(row["workerNames"]),
+                    "Warnings": row["warningCount"],
+                    "Blocks": row["blockingCount"],
+                }
+                for row in segments
+            ]
+        ),
+        width="stretch",
+        hide_index=True,
     )
 
 

@@ -22,6 +22,13 @@
 [Quote to Award Lifecycle](docs/commercial_workflow_lifecycle.md)
 [Spreadsheet Replacement Plan](docs/spreadsheet_replacement_plan.md)
 [Planner Interaction Model](docs/planner_interaction_model.md)
+[Operations Diary Workflow](docs/operations_diary_workflow.md)
+[Job Cost and Invoice Reconciliation](docs/job_cost_and_invoice_reconciliation.md)
+[Adaptive Learning Loop](docs/adaptive_learning_loop.md)
+[Auth Red-Team Plan](docs/auth_red_team_plan.md)
+[Corkysoft / SB / ITIR Coverage Audit](docs/corkysoft_sb_itir_coverage_audit.md)
+[Corkysoft -> SB / ITIR Downstream Contract](docs/sb_itir_downstream_contract.md)
+[Planner / Diary Patterns For SB / ITIR](docs/planner_diary_patterns_for_sb_itir.md)
 [Inventory Execution Workflow](docs/inventory_execution_workflow.md)
 [Worker Time Capture Workflow](docs/worker_time_capture_workflow.md)
 [Payroll and Labor Analytics](docs/payroll_and_labor_analytics.md)
@@ -39,6 +46,12 @@ Run `./start_app.sh` or `start_app.bat` to run the app.
 - Estimator / quoting flow: [Quote to Award Lifecycle](docs/commercial_workflow_lifecycle.md)
 - Dispatch / jobs / execution flow: [Spreadsheet Replacement Plan](docs/spreadsheet_replacement_plan.md)
 - Planner UX target: [Planner Interaction Model](docs/planner_interaction_model.md)
+- Manager day/week cockpit: [Operations Diary Workflow](docs/operations_diary_workflow.md)
+- Job cost and invoicing review: [Job Cost and Invoice Reconciliation](docs/job_cost_and_invoice_reconciliation.md)
+- Adaptive pricing/ETA/risk policy intent: [Adaptive Learning Loop](docs/adaptive_learning_loop.md)
+- Auth hardening and red-team coverage: [Auth Red-Team Plan](docs/auth_red_team_plan.md)
+- Cross-project coverage and boundary audit: [Corkysoft / SB / ITIR Coverage Audit](docs/corkysoft_sb_itir_coverage_audit.md)
+- Downstream contract for SB/ITIR consumers: [Corkysoft -> SB / ITIR Downstream Contract](docs/sb_itir_downstream_contract.md)
 - Planner now supports both job-first and map/corridor-first planning, confirms draft legs into `job_segments`, uses the shared provider-aware routing preview, keeps saved-route overlays aligned with the active provider, surfaces first-pass street-level and Google-first 360 site context, and can store accepted site-risk assessments plus advisory media/CV outputs against jobs; the existing `Operations` segment form remains advanced/manual fallback.
 - Inventory execution workflow: [Inventory Execution Workflow](docs/inventory_execution_workflow.md)
 - Dispatch / tender triage flow: [Kent AMS Integration Spec](docs/kent_ams_integration.md)
@@ -53,7 +66,7 @@ Run `./start_app.sh` or `start_app.bat` to run the app.
 
 - `Estimator`: starts in `Quote builder`.
 - `Dispatcher`: starts in `Dispatch` and `Kent tenders`.
-- `Fleet / Operations Manager`: starts in `Operations`, with `Fleet` for readiness and policy context.
+- `Fleet / Operations Manager`: starts in `Operations diary`, with `Operations` and `Fleet` for readiness/policy detail.
 - `Labor Planner / Staff Coordinator`: starts in `Staff` and `Driver shifts`.
 - `Maintenance / Compliance Coordinator`: starts in `Fleet` and `Vehicle maintenance`.
 - `Inventory / Supplier Coordinator`: starts in `Inventory`, with `Dispatch` as execution context.
@@ -81,12 +94,27 @@ Main blockers to reach the next phase:
 - historical job ingestion validation (to unlock reliable analytics)
 - corridor / lane data model formalization
 - operator workflow and governance completion
+- manager-facing day/week diary workflow above Planner, Dispatch, and reconciliation
 - Kent contract validation against real payloads and real operator usage
 
 High-leverage next features:
 - historical job import hardening (CSV + MoveWare exports)
 - corridor / lane detection + rollups
 - route and tender calibration against live operator feedback
+- operations diary day/week cockpit linking planning, assignments, usage, and invoicing
+- customer invoice and subcontractor-bill reconciliation against job usage truth
+- situational-awareness ingest for closures, weather, and disruption signals
+- bounded adaptive policy updates from realised job outcomes
+- requirements/proposal/governance formalization for international and
+  compliance-heavy jobs
+- paperwork, insurance, tender, customs, and audit package completeness review
+  before quote/award/dispatch decisions
+- transport-agnostic downstream diary/reconciliation export contract for
+  StatiBaker / ITIR consumers
+- pattern extraction from Corkysoft planner/diary workflows for future SB/ITIR
+  lens design without making SB the workflow owner
+- dual-marker reconciliation aging so delayed supplier bills can be reviewed by
+  job execution date, bill receipt date, latency, and unresolved age
 - Kent admin/operator workflow split
 - backhaul detection and discount suggestions
 - multi-truck transfer and split policy definition before solver work
@@ -130,6 +158,12 @@ Explore the main dashboard workflows currently deployable locally.
   - [AU cluster template](docs/cluster_template_au.md)
   - [Corridor opportunity report](docs/corridor_opportunity_report.md)
   - [Corridor opportunity view](docs/corridor_opportunity_view.md)
+  - [Operations diary workflow](docs/operations_diary_workflow.md)
+  - [Job cost and invoice reconciliation](docs/job_cost_and_invoice_reconciliation.md)
+  - [Adaptive learning loop](docs/adaptive_learning_loop.md)
+  - [Corkysoft / SB / ITIR coverage audit](docs/corkysoft_sb_itir_coverage_audit.md)
+  - [Corkysoft -> SB / ITIR downstream contract](docs/sb_itir_downstream_contract.md)
+  - [Planner / diary patterns for SB / ITIR](docs/planner_diary_patterns_for_sb_itir.md)
 - [Roadmap](#roadmap)
 
 ## Overview
@@ -138,10 +172,27 @@ Explore the main dashboard workflows currently deployable locally.
 - Routing via [OpenRouteService](https://openrouteservice.org) with caching, address normalisation, and SQLite persistence.
 - A Streamlit dashboard for exploring $/m³ distribution, lane margins, profitability overlays, and historical trends.
 - Batch import/export helpers, mock telemetry ingestion, and a simplex-based profit optimiser to support planning exercises.
+- A manager-facing operations layer where planning, assignments, usage review,
+  and invoicing/reconciliation converge around the same day/week and job
+  context.
+- A staged adaptive-learning layer that stores bounded policy parameters for
+  lane pricing, ETA, and risk calibration.
 
 Positioning:
-- Corkysoft is a pricing intelligence layer for removals operators, not a full operational CRM.
-- The goal is to integrate with incumbents (MoveWare, SmartMoving, fleet trackers, accounting) and provide profitability, pricing, and lane analytics on top.
+- Corkysoft should be treated as a system of decision for removals operators:
+  it should help decide what to quote, accept, assign, defer, reconcile, and
+  escalate.
+- It is not trying to replace every incumbent record system on day one.
+  Instead, it should integrate with incumbents (MoveWare, SmartMoving, fleet
+  trackers, accounting) while selectively formalizing the workflows where
+  margin, risk, and governance depend on better decisions.
+- One documented strategic gap is international/compliance-heavy work, where
+  paperwork, insurance, tender, customs, and audit requirements need a more
+  explicit requirements/proposal/governance workflow than the current MVP
+  provides.
+- Realised jobs and disruption signals such as closures, weather, and route
+  exceptions should feed an explicit, reviewable policy state rather than drive
+  ad hoc pricing rewrites.
 See `docs/positioning.md` for the competitive landscape and integration strategy.
 
 ## Project Layout
@@ -180,6 +231,7 @@ dashboard screenshots and `MIGRATE_AWAY_FROM_streamlit_price_distribution.py` fo
 - `dashboard/components/`: Reusable Streamlit widgets.
 - `analytics/`: Data access, pricing insights, export helpers, and live data processing.
 - `analytics/db.py`: Connection helpers and schema bootstrap.
+- `analytics/adaptive_policy.py`: Adaptive policy parameter bootstrap, reads, and bounded updates.
 - `docs/`: Feature specs such as `live_network_overview.md` and `price_history.md`.
 - `routes_to_sqlite.py`: CLI for geocoding, routing, and cost capture.
 - `tests/`: Pytest suites mirroring the main feature areas.
@@ -368,7 +420,35 @@ Common commands:
 - Fake transcript generation remains the current practical ingest surface for call-session and ambient-session workflow testing while live telephony remains pending.
 - Accommodation availability should be treated as an operational support signal for remote/peak-period work, not as a separate travel product.
 - Treat the current live profitability/network views as MVP analytics surfaces; advanced drill-down and auto-refresh behavior remain future work unless explicitly documented elsewhere.
-- Role-aware tab defaults are planned as lightweight app config, not auth-bound profiles; manager/admin sets role defaults and users can override them in-session.
+- Dashboard access now supports Google sign-in through Streamlit OIDC, backed by a local allowlist of Corkysoft users and role keys. See [Authentication and Users](docs/authentication_and_users.md).
+- Role-aware tab defaults remain the role-surface contract, but authenticated users now resolve into those roles from local user records instead of relying only on anonymous in-session switching.
+- The dashboard should visibly indicate whether the current run is authenticated via Google or operating in explicit anonymous local-development mode.
+- Hidden tabs should not be treated as mere presentation preferences for auth-sensitive surfaces. Query-param navigation should not re-expose role-hidden admin tabs.
+
+### Authentication And Users
+
+Corkysoft now supports Google sign-in for the dashboard shell using Streamlit's built-in OIDC support.
+
+- Google establishes identity; Corkysoft decides access and role assignment locally.
+- Allowed users live in the local `dashboard_users` table and are matched by email.
+- Shared/deployed environments should run with UI auth enabled and no anonymous entry path.
+- Local development can still run anonymously, but only when `CORKYSOFT_ENV=development` and `CORKYSOFT_ALLOW_ANONYMOUS_UI=1` are set explicitly.
+
+For Google sign-in, configure Streamlit secrets plus Authlib:
+
+```toml
+# .streamlit/secrets.toml
+[auth]
+redirect_uri = "http://localhost:8501/oauth2callback"
+cookie_secret = "replace-me"
+
+[auth.google]
+client_id = "..."
+client_secret = "..."
+server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
+```
+
+See [Authentication and Users](docs/authentication_and_users.md) for the full environment and bootstrap model.
 
 ### Telemetry & Live Data
 

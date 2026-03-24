@@ -200,6 +200,15 @@ def render_dispatch_tab(conn: sqlite3.Connection) -> None:
     metric_cols[1].metric("Warnings", selected["warningCount"])
     metric_cols[2].metric("Blocks", selected["blockingCount"])
     metric_cols[3].metric("Override flags", selected["overrideableCount"])
+    if st.button("Open in Operations diary", key="dispatch_open_operations_diary"):
+        diary_date = str(selected.get("plannedStart") or "")[:10]
+        _set_query_params(
+            view="Operations diary",
+            diary_view="day",
+            diary_date=diary_date or "",
+            diary_job=str(selected["jobId"]),
+        )
+        _rerun()
 
     st.markdown("#### Segment detail")
     segment_df = pd.DataFrame(
@@ -231,3 +240,19 @@ def render_dispatch_tab(conn: sqlite3.Connection) -> None:
         ]
     )
     st.dataframe(segment_df, width='stretch', hide_index=True)
+
+
+def _set_query_params(**params: str) -> None:
+    query_params = getattr(st, "query_params", None)
+    if query_params is not None:
+        query_params.from_dict(params)
+        return
+    st.experimental_set_query_params(**params)
+
+
+def _rerun() -> None:
+    rerun = getattr(st, "rerun", None)
+    if callable(rerun):
+        rerun()
+    else:
+        st.experimental_rerun()

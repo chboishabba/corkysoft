@@ -542,6 +542,8 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
     _ensure_site_assessments_table(conn)
     _ensure_media_inference_results_table(conn)
     _ensure_worker_absence_records_table(conn)
+    _ensure_operations_diary_tables(conn)
+    _ensure_dashboard_user_tables(conn)
     conn.commit()
 
     for table_name in (
@@ -560,11 +562,241 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
         "trucks",
         "vehicle_repairs",
         "shipments",
+        "operations_diary_tasks",
+        "customer_invoice_reviews",
+        "subcontractor_bill_reviews",
+        "dashboard_users",
     ):
         if not _table_exists(conn, table_name):
             conn.execute(
                 f"SELECT RAISE(FAIL, 'Failed to create {table_name} during bootstrap')"
             )
+
+
+def _ensure_dashboard_user_tables(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "dashboard_users"):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dashboard_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL UNIQUE,
+                display_name TEXT,
+                auth_provider TEXT NOT NULL DEFAULT 'google',
+                google_sub TEXT,
+                role_key TEXT NOT NULL DEFAULT 'dispatcher',
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_login_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_dashboard_users_role_active
+                ON dashboard_users(role_key, active)
+            """
+        )
+    else:
+        columns = _table_columns(conn, "dashboard_users")
+        declarations = {
+            "email": "TEXT",
+            "display_name": "TEXT",
+            "auth_provider": "TEXT NOT NULL DEFAULT 'google'",
+            "google_sub": "TEXT",
+            "role_key": "TEXT NOT NULL DEFAULT 'dispatcher'",
+            "active": "INTEGER NOT NULL DEFAULT 1",
+            "created_at": "TEXT",
+            "updated_at": "TEXT",
+            "last_login_at": "TEXT",
+        }
+        for column, declaration in declarations.items():
+            if column not in columns:
+                conn.execute(f"ALTER TABLE dashboard_users ADD COLUMN {column} {declaration}")
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_dashboard_users_role_active
+                ON dashboard_users(role_key, active)
+            """
+        )
+
+
+def _ensure_operations_diary_tables(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "operations_diary_tasks"):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS operations_diary_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER,
+                segment_id INTEGER,
+                task_date TEXT NOT NULL,
+                task_scope TEXT NOT NULL DEFAULT 'day',
+                task_type TEXT NOT NULL DEFAULT 'follow_up',
+                title TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                assigned_worker_id INTEGER,
+                assigned_truck_id TEXT,
+                planned_start TEXT,
+                planned_end TEXT,
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+                FOREIGN KEY(segment_id) REFERENCES job_segments(id) ON DELETE CASCADE,
+                FOREIGN KEY(assigned_worker_id) REFERENCES workers(id) ON DELETE SET NULL,
+                FOREIGN KEY(assigned_truck_id) REFERENCES trucks(truck_id) ON DELETE SET NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_operations_diary_tasks_date
+                ON operations_diary_tasks(task_date, status)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_operations_diary_tasks_job
+                ON operations_diary_tasks(job_id, segment_id)
+            """
+        )
+    else:
+        columns = _table_columns(conn, "operations_diary_tasks")
+        declarations = {
+            "job_id": "INTEGER",
+            "segment_id": "INTEGER",
+            "task_date": "TEXT",
+            "task_scope": "TEXT NOT NULL DEFAULT 'day'",
+            "task_type": "TEXT NOT NULL DEFAULT 'follow_up'",
+            "title": "TEXT",
+            "status": "TEXT NOT NULL DEFAULT 'open'",
+            "assigned_worker_id": "INTEGER",
+            "assigned_truck_id": "TEXT",
+            "planned_start": "TEXT",
+            "planned_end": "TEXT",
+            "notes": "TEXT",
+            "created_at": "TEXT",
+            "updated_at": "TEXT",
+        }
+        for column, declaration in declarations.items():
+            if column not in columns:
+                conn.execute(f"ALTER TABLE operations_diary_tasks ADD COLUMN {column} {declaration}")
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_operations_diary_tasks_date
+                ON operations_diary_tasks(task_date, status)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_operations_diary_tasks_job
+                ON operations_diary_tasks(job_id, segment_id)
+            """
+        )
+
+    if not _table_exists(conn, "customer_invoice_reviews"):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS customer_invoice_reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL UNIQUE,
+                invoice_status TEXT NOT NULL DEFAULT 'not_ready',
+                invoice_reference TEXT,
+                invoice_date TEXT,
+                invoice_amount REAL,
+                resolved_at TEXT,
+                note TEXT,
+                reviewed_by TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_customer_invoice_reviews_status
+                ON customer_invoice_reviews(invoice_status, invoice_date)
+            """
+        )
+    else:
+        columns = _table_columns(conn, "customer_invoice_reviews")
+        declarations = {
+            "job_id": "INTEGER",
+            "invoice_status": "TEXT NOT NULL DEFAULT 'not_ready'",
+            "invoice_reference": "TEXT",
+            "invoice_date": "TEXT",
+            "invoice_amount": "REAL",
+            "resolved_at": "TEXT",
+            "note": "TEXT",
+            "reviewed_by": "TEXT",
+            "created_at": "TEXT",
+            "updated_at": "TEXT",
+        }
+        for column, declaration in declarations.items():
+            if column not in columns:
+                conn.execute(f"ALTER TABLE customer_invoice_reviews ADD COLUMN {column} {declaration}")
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_customer_invoice_reviews_status
+                ON customer_invoice_reviews(invoice_status, invoice_date)
+            """
+        )
+
+    if not _table_exists(conn, "subcontractor_bill_reviews"):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subcontractor_bill_reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                segment_id INTEGER,
+                supplier_id INTEGER,
+                bill_status TEXT NOT NULL DEFAULT 'awaiting_bill',
+                bill_reference TEXT,
+                bill_date TEXT,
+                amount REAL,
+                resolved_at TEXT,
+                note TEXT,
+                reviewed_by TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+                FOREIGN KEY(segment_id) REFERENCES job_segments(id) ON DELETE SET NULL,
+                FOREIGN KEY(supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_subcontractor_bill_reviews_job
+                ON subcontractor_bill_reviews(job_id, bill_status, bill_date)
+            """
+        )
+    else:
+        columns = _table_columns(conn, "subcontractor_bill_reviews")
+        declarations = {
+            "job_id": "INTEGER",
+            "segment_id": "INTEGER",
+            "supplier_id": "INTEGER",
+            "bill_status": "TEXT NOT NULL DEFAULT 'awaiting_bill'",
+            "bill_reference": "TEXT",
+            "bill_date": "TEXT",
+            "amount": "REAL",
+            "resolved_at": "TEXT",
+            "note": "TEXT",
+            "reviewed_by": "TEXT",
+            "created_at": "TEXT",
+            "updated_at": "TEXT",
+        }
+        for column, declaration in declarations.items():
+            if column not in columns:
+                conn.execute(f"ALTER TABLE subcontractor_bill_reviews ADD COLUMN {column} {declaration}")
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_subcontractor_bill_reviews_job
+                ON subcontractor_bill_reviews(job_id, bill_status, bill_date)
+            """
+        )
 
 
 def _ensure_shipment_columns(conn: sqlite3.Connection) -> None:

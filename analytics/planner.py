@@ -11,6 +11,7 @@ import pandas as pd
 from analytics.operational_signals import compute_route_spare_capacity_signal
 from analytics.operations_assignment import (
     list_operational_readiness_items,
+    list_segment_readiness,
     list_planned_labor_assignments,
 )
 from analytics.db.site_media import accepted_site_context
@@ -262,6 +263,64 @@ def build_planner_proposal(
         "template": template,
         "warnings": warnings,
         "explainability": explainability,
+    }
+
+
+def build_planner_day_view(
+    conn: sqlite3.Connection,
+    *,
+    selected_date: str | None,
+    focus_job_id: int | None = None,
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for segment in list_segment_readiness(conn):
+        planned_start = segment.get("plannedStart")
+        planned_date = _job_date_only(planned_start)
+        if selected_date and planned_date != selected_date:
+            continue
+        truck_ids = [assignment["truckId"] for assignment in segment.get("truckAssignments", [])]
+        worker_names = [assignment["workerName"] for assignment in segment.get("workerAssignments", [])]
+        rows.append(
+            {
+                "segmentId": int(segment["segmentId"]),
+                "jobId": int(segment["jobId"]),
+                "jobClient": segment.get("jobClient"),
+                "segmentSequence": int(segment["segmentSequence"]),
+                "fromLocation": segment.get("fromLocation") or segment.get("jobOrigin"),
+                "toLocation": segment.get("toLocation") or segment.get("jobDestination"),
+                "plannedStart": planned_start,
+                "plannedEnd": segment.get("plannedEnd"),
+                "assignmentStatus": segment.get("assignmentStatus"),
+                "truckIds": truck_ids,
+                "workerNames": [name for name in worker_names if name],
+                "warningCount": len(segment.get("warningFlags", [])),
+                "blockingCount": len(segment.get("blockingFlags", [])),
+                "isFocusJob": bool(focus_job_id is not None and int(segment["jobId"]) == int(focus_job_id)),
+            }
+        )
+    rows.sort(
+        key=lambda item: (
+            0 if item["isFocusJob"] else 1,
+            str(item.get("plannedStart") or ""),
+            str(item.get("jobId") or ""),
+            str(item.get("segmentSequence") or ""),
+        )
+    )
+    unique_jobs = {int(item["jobId"]) for item in rows}
+    unique_trucks = {truck_id for item in rows for truck_id in item["truckIds"]}
+    unique_workers = {name for item in rows for name in item["workerNames"]}
+    return {
+        "selectedDate": selected_date,
+        "segments": rows,
+        "summary": {
+            "segmentCount": len(rows),
+            "jobCount": len(unique_jobs),
+            "truckCount": len(unique_trucks),
+            "workerCount": len(unique_workers),
+            "blockedSegmentCount": sum(1 for item in rows if item["blockingCount"] > 0),
+            "warningSegmentCount": sum(1 for item in rows if item["warningCount"] > 0),
+            "focusJobSegmentCount": sum(1 for item in rows if item["isFocusJob"]),
+        },
     }
 
 
@@ -751,6 +810,7 @@ def _draft_legs_for_template(
 
 
 __all__ = [
+    "build_planner_day_view",
     "build_planner_proposal",
     "infer_planner_corridor_for_job",
     "list_planner_corridor_candidates",

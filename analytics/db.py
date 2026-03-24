@@ -82,6 +82,22 @@ from .db.schema import (
     migrate_geojson_to_routes,
     ensure_historical_job_routes_table,
 )
+from .auth import (
+    bootstrap_dashboard_admin,
+    get_dashboard_user_by_email,
+    list_dashboard_users,
+    normalize_user_email,
+    record_dashboard_user_login,
+    resolve_ui_auth_policy,
+    upsert_dashboard_user,
+)
+from .adaptive_policy import (
+    ADAPTIVE_POLICY_DEFAULTS,
+    AdaptivePolicySnapshot,
+    apply_bounded_parameter_target,
+    ensure_adaptive_policy_defaults,
+    load_adaptive_policy_snapshot,
+)
 
 
 __all__ = [
@@ -96,8 +112,20 @@ __all__ = [
     "get_parameter_value",
     "set_parameter_value",
     "bootstrap_parameters",
+    "ADAPTIVE_POLICY_DEFAULTS",
+    "AdaptivePolicySnapshot",
+    "apply_bounded_parameter_target",
+    "ensure_adaptive_policy_defaults",
+    "load_adaptive_policy_snapshot",
     "ensure_dashboard_tables",
     "migrate_geojson_to_routes",
+    "bootstrap_dashboard_admin",
+    "get_dashboard_user_by_email",
+    "list_dashboard_users",
+    "normalize_user_email",
+    "record_dashboard_user_login",
+    "resolve_ui_auth_policy",
+    "upsert_dashboard_user",
     "upsert_inventory_item",
     "upsert_inventory_requirement",
     "upsert_inventory_substitution_reason_code",
