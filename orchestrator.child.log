@@ -1,0 +1,400 @@
+[2026-03-24T13:11:51Z] +        params.extend(sorted(types))
+[2026-03-24T13:11:51Z] +
+[2026-03-24T13:11:51Z] +    query = f"""
+[2026-03-24T13:11:51Z]      SELECT event_type, SUM(severity) as total_severity
+[2026-03-24T13:11:51Z]      FROM disruption_events
+[2026-03-24T13:11:51Z]      WHERE start_time >= ?
+[2026-03-24T13:11:51Z] +    {filter_clause}
+[2026-03-24T13:11:51Z]      GROUP BY event_type
+[2026-03-24T13:11:51Z]      """
+[2026-03-24T13:11:51Z] -    rows = conn.execute(query, (since_time,)).fetchall()
+[2026-03-24T13:11:51Z] +    rows = conn.execute(query, params).fetchall()
+[2026-03-24T13:11:51Z]      totals: dict[str, float] = {}
+[2026-03-24T13:11:51Z]      for event_type, total in rows:
+[2026-03-24T13:11:51Z] -        if types and event_type not in types:
+[2026-03-24T13:11:51Z] -            continue
+[2026-03-24T13:11:51Z]          totals[event_type] = float(total or 0.0)
+[2026-03-24T13:11:51Z] -    if not totals and types:
+[2026-03-24T13:11:51Z] +    if types:
+[2026-03-24T13:11:51Z]          for event_type in types:
+[2026-03-24T13:11:51Z]              totals.setdefault(event_type, 0.0)
+[2026-03-24T13:11:51Z]      return totals
+[2026-03-24T13:11:51Z] @@ -149,9 +155,11 @@
+[2026-03-24T13:11:51Z]      weather_target = 1.0 + summary.get(EVENT_TYPE_WEATHER, 0.0) * weather_scale
+[2026-03-24T13:11:51Z]      closure_target = 1.0 + summary.get(EVENT_TYPE_CLOSURE, 0.0) * closure_scale
+[2026-03-24T13:11:51Z]      eta_target = 1.0 + summary.get(EVENT_TYPE_TRAFFIC, 0.0) * traffic_scale
+[2026-03-24T13:11:51Z] +    has_activity = any(value for value in summary.values())
+[2026-03-24T13:11:51Z]      meta_description = description or (
+[2026-03-24T13:11:51Z] -        f"auto update from situational summary {summary}" if summary else
+[2026-03-24T13:11:51Z] -        "auto update from situational summary (no events)"
+[2026-03-24T13:11:51Z] +        f"auto update from situational summary {summary}"
+[2026-03-24T13:11:51Z] +        if has_activity
+[2026-03-24T13:11:51Z] +        else "auto update from situational summary (no events)"
+[2026-03-24T13:11:51Z]      )
+[2026-03-24T13:11:51Z]      weather_value = apply_bounded_parameter_target(
+[2026-03-24T13:11:51Z]          conn,
+[2026-03-24T13:11:51Z] diff --git a/docs/adaptive_learning_loop.md b/docs/adaptive_learning_loop.md
+[2026-03-24T13:11:51Z] index 5685fa53e618410e31f5d8642807a34631214439..3ef0a7d9ecab9c41bab759188e563fb392424cfa
+[2026-03-24T13:11:51Z] --- a/docs/adaptive_learning_loop.md
+[2026-03-24T13:11:51Z] +++ b/docs/adaptive_learning_loop.md
+[2026-03-24T13:11:51Z] @@ -85,3 +85,12 @@
+[2026-03-24T13:11:51Z]  - surface adaptive-policy review in dashboard/admin workflows
+[2026-03-24T13:11:51Z]  - add audit history for accepted and rejected policy proposals
+[2026-03-24T13:11:51Z]  - wire approved parameters into quoting, ETA, and lane analytics paths
+[2026-03-24T13:11:51Z] +
+[2026-03-24T13:11:51Z] +## Situational-Awareness Implementation Status
+[2026-03-24T13:11:51Z] +
+[2026-03-24T13:11:51Z] +- `analytics/situational_awareness.DisruptionEvent` records weather, traffic, and closure severity events plus optional source/location metadata.
+[2026-03-24T13:11:51Z] +- `analytics/situational_awareness.insert_disruption_event` populates the new `disruption_events` table defined in `analytics/db/schema.py`; the helper also normalizes timestamps and clamps severity to non-negative values.
+[2026-03-24T13:11:51Z] +- `analytics.situational_awareness.update_adaptive_policy_from_disruptions` summarizes recent severity totals, computes bounded targets for the weather, closure, and lane-ETA multipliers, and runs `apply_bounded_parameter_target` so policy state nudges remain auditable.
+[2026-03-24T13:11:51Z] +- Tests (`tests/test_situational_awareness.py`) verify severity aggregation, table persistence, and parameter updates.
+[2026-03-24T13:11:51Z] +
+[2026-03-24T13:11:51Z] +Future work now focuses on exposing the proposed updates for operator review before affecting quotes or ETA guidance.
+[2026-03-24T13:11:51Z] diff --git a/docs/progress_status_board.md b/docs/progress_status_board.md
+[2026-03-24T13:11:51Z] index e628bf113bfc91257a7bf0434f13e52e15df9522..ba048df08d1fb277b3faaff756008b3b0a1e0ddc
+[2026-03-24T13:11:51Z] --- a/docs/progress_status_board.md
+[2026-03-24T13:11:51Z] +++ b/docs/progress_status_board.md
+[2026-03-24T13:11:51Z] @@ -16,7 +16,7 @@
+[2026-03-24T13:11:51Z]  - Inventory execution maturity beyond baseline: **🟡 in progress**
+[2026-03-24T13:11:51Z]  - Adaptive policy: **🟡 parameter framework implemented, auto-recalibration pending**
+[2026-03-24T13:11:51Z]  - Kent payload governance and operator workflow validation: **🔴 pending**
+[2026-03-24T13:11:51Z] -- Situation-awareness/disruption ingestion and bounded auto-policy use: **🔴 pending**
+[2026-03-24T13:11:51Z] +- Situation-awareness/disruption ingestion and bounded auto-policy use: **🟢 implemented**
+[2026-03-24T13:11:51Z]  
+[2026-03-24T13:11:51Z]  ## Active TODO Alignment (Current Wave)
+[2026-03-24T13:11:51Z]  
+[2026-03-24T13:11:51Z] @@ -28,6 +28,7 @@
+[2026-03-24T13:11:51Z]  - Extend operations inventory with barcode/QR and container-specific execution controls.
+[2026-03-24T13:11:51Z]  - Add explicit evidence-backed site/media/CV ingestion before deeper constraint automation.
+[2026-03-24T13:11:51Z]  - Add and maintain explicit policy/override governance for hard-block categories.
+[2026-03-24T13:11:51Z] +- Build the adaptive policy review/approval workflow that gates disruption-sourced nudges before they affect quotes or ETA guidance.
+[2026-03-24T13:11:51Z]  
+[2026-03-24T13:11:51Z]  ## Non-blocking documentation tasks
+[2026-03-24T13:11:51Z]  
+[2026-03-24T13:11:51Z] diff --git a/status.json b/status.json
+[2026-03-24T13:11:51Z] index 93af55e1d942567cce05671c7646ee6002221598..d7df2ea0b63544c8c6d14fc8521a1f743a0b919e
+[2026-03-24T13:11:51Z] --- a/status.json
+[2026-03-24T13:11:51Z] +++ b/status.json
+[2026-03-24T13:11:51Z] @@ -5,9 +5,9 @@
+[2026-03-24T13:11:51Z]    "docs": "aligned",
+[2026-03-24T13:11:51Z]    "external_reasoning": "off",
+[2026-03-24T13:11:51Z]    "last_action": "long-running-development",
+[2026-03-24T13:11:51Z] -  "last_cycle_finished_at": "2026-03-24T13:00:13Z",
+[2026-03-24T13:11:51Z] -  "last_cycle_started_at": "2026-03-24T13:01:57Z",
+[2026-03-24T13:11:51Z] -  "last_exit_code": 1,
+[2026-03-24T13:11:51Z] -  "milestones_remaining": 1,
+[2026-03-24T13:11:51Z] +  "last_cycle_finished_at": "2026-03-24T13:09:32Z",
+[2026-03-24T13:11:51Z] +  "last_cycle_started_at": "2026-03-24T13:05:34Z",
+[2026-03-24T13:11:51Z] +  "last_exit_code": 0,
+[2026-03-24T13:11:51Z] +  "milestones_remaining": 0,
+[2026-03-24T13:11:51Z]    "tests": "passing_targeted"
+[2026-03-24T13:11:51Z]  }
+[2026-03-24T13:11:51Z] diff --git a/tests/test_situational_awareness.py b/tests/test_situational_awareness.py
+[2026-03-24T13:11:51Z] index ade0983715d68a11680f15f79a8b2592f3174781..3e250575828ae620c7accc43cb2c9fba11c22d73
+[2026-03-24T13:11:51Z] --- a/tests/test_situational_awareness.py
+[2026-03-24T13:11:51Z] +++ b/tests/test_situational_awareness.py
+[2026-03-24T13:11:51Z] @@ -3,6 +3,8 @@
+[2026-03-24T13:11:51Z]  import sqlite3
+[2026-03-24T13:11:51Z]  from datetime import datetime, timedelta, timezone
+[2026-03-24T13:11:51Z]  
+[2026-03-24T13:11:51Z] +import pytest
+[2026-03-24T13:11:51Z] +
+[2026-03-24T13:11:51Z]  from analytics.situational_awareness import (
+[2026-03-24T13:11:51Z]      DisruptionEvent,
+[2026-03-24T13:11:51Z]      EVENT_TYPE_CLOSURE,
+[2026-03-24T13:11:51Z] @@ -94,12 +96,12 @@
+[2026-03-24T13:11:51Z]          traffic_scale=0.12,
+[2026-03-24T13:11:51Z]      )
+[2026-03-24T13:11:51Z]  
+[2026-03-24T13:11:51Z] -    assert result["weather_risk_multiplier"] == 1.08  # 1 + 0.4 * 0.2
+[2026-03-24T13:11:51Z] -    assert result["closure_delay_factor"] == 1.045  # 1 + 0.3 * 0.15
+[2026-03-24T13:11:51Z] -    assert result["lane_eta_multiplier"] == 1.024  # 1 + 0.2 * 0.12
+[2026-03-24T13:11:51Z] +    assert result["weather_risk_multiplier"] == pytest.approx(1.08)
+[2026-03-24T13:11:51Z] +    assert result["closure_delay_factor"] == pytest.approx(1.045)
+[2026-03-24T13:11:51Z] +    assert result["lane_eta_multiplier"] == pytest.approx(1.024)
+[2026-03-24T13:11:51Z]  
+[2026-03-24T13:11:51Z]      row = conn.execute(
+[2026-03-24T13:11:51Z]          "SELECT key, value_numeric FROM global_parameters WHERE key = ?",
+[2026-03-24T13:11:51Z]          ("adaptive.weather_risk_multiplier",),
+[2026-03-24T13:11:51Z]      ).fetchone()
+[2026-03-24T13:11:51Z] -    assert row is not None and row[1] == 1.08
+[2026-03-24T13:11:51Z] +    assert row is not None and row[1] == pytest.approx(1.08)
+[2026-03-24T13:11:51Z] 
+[2026-03-24T13:11:59Z] exec
+[2026-03-24T13:11:59Z] /usr/bin/bash -lc "nl -ba tests/test_situational_awareness.py | sed -n '1,200p'" in /home/c/Documents/code/corkysoft succeeded in 0ms:
+[2026-03-24T13:11:59Z]      1	from __future__ import annotations
+[2026-03-24T13:11:59Z]      2	
+[2026-03-24T13:11:59Z]      3	import sqlite3
+[2026-03-24T13:11:59Z]      4	from datetime import datetime, timedelta, timezone
+[2026-03-24T13:11:59Z]      5	
+[2026-03-24T13:11:59Z]      6	import pytest
+[2026-03-24T13:11:59Z]      7	
+[2026-03-24T13:11:59Z]      8	from analytics.situational_awareness import (
+[2026-03-24T13:11:59Z]      9	    DisruptionEvent,
+[2026-03-24T13:11:59Z]     10	    EVENT_TYPE_CLOSURE,
+[2026-03-24T13:11:59Z]     11	    EVENT_TYPE_TRAFFIC,
+[2026-03-24T13:11:59Z]     12	    EVENT_TYPE_WEATHER,
+[2026-03-24T13:11:59Z]     13	    insert_disruption_event,
+[2026-03-24T13:11:59Z]     14	    summarize_disruption_severity,
+[2026-03-24T13:11:59Z]     15	    update_adaptive_policy_from_disruptions,
+[2026-03-24T13:11:59Z]     16	)
+[2026-03-24T13:11:59Z]     17	
+[2026-03-24T13:11:59Z]     18	
+[2026-03-24T13:11:59Z]     19	def build_conn() -> sqlite3.Connection:
+[2026-03-24T13:11:59Z]     20	    return sqlite3.connect(":memory:")
+[2026-03-24T13:11:59Z] file update:
+[2026-03-24T13:11:59Z] diff --git a/CHANGELOG.md b/CHANGELOG.md
+[2026-03-24T13:11:59Z] index c23cb50ece035ef603444cb3cff17f49aa1872b6..6a0c6930fb3b9aaedf4f008a877b3a77ed969cda
+[2026-03-24T13:11:59Z] --- a/CHANGELOG.md
+[2026-03-24T13:11:59Z] +++ b/CHANGELOG.md
+[2026-03-24T13:11:59Z] @@ -41,3 +41,4 @@
+[2026-03-24T13:11:59Z]  - added `docs/progress_status_board.md` to keep feature progress visibility and TODO alignment centralized
+[2026-03-24T13:11:59Z]  - linked `README.md` and `ROADMAP.md` to the new progress board and added explicit documentation alignment guidance
+[2026-03-24T13:11:59Z]  - updated `COMPACTIFIED_CONTEXT.md` with the tracking decision context
+[2026-03-24T13:11:59Z] +- added `disruption_events` persistence plus `analytics/situational_awareness.py` to ingest closure/weather/traffic severity signals and nudge adaptive-policy multipliers inside bounded updates, with tests covering aggregation and parameter rewrites
+[2026-03-24T13:11:59Z] diff --git a/COMPACTIFIED_CONTEXT.md b/COMPACTIFIED_CONTEXT.md
+[2026-03-24T13:11:59Z] index 902da801c101cdadaaa8e1daa6b4e0c37e0634b1..1d6b345ca4b7f459b1f5137841e3eea8a9bd6c19
+[2026-03-24T13:11:59Z] --- a/COMPACTIFIED_CONTEXT.md
+[2026-03-24T13:11:59Z] +++ b/COMPACTIFIED_CONTEXT.md
+[2026-03-24T13:11:59Z] @@ -1246,6 +1246,7 @@
+[2026-03-24T13:11:59Z]    - made bootstrap-admin seeding no-op once dashboard users already exist
+[2026-03-24T13:11:59Z]    - added targeted auth/layout regression tests around those paths
+[2026-03-24T13:11:59Z]  - 2026-03-24: Added a dedicated progress-tracking board in `docs/progress_status_board.md` and linked it from README and ROADMAP so documentation/TODO/changelog updates can be coordinated around one source of truth.
+[2026-03-24T13:11:59Z] +
+[2026-03-24T13:11:59Z]  ## 2026-03-24 (Situational-Awareness Ingestion)
+[2026-03-24T13:11:59Z]  
+[2026-03-24T13:11:59Z]  - Added the `disruption_events` table plus `analytics/situational_awareness.py` so closure, weather, and traffic severity events can be persisted together with location/source metadata and normalized timestamps.
+[2026-03-24T13:11:59Z] diff --git a/README.md b/README.md
+[2026-03-24T13:11:59Z] index 8500f5a03078f4f4dfe4c50aa4670316784a677f..54950c519e3938521d3b9cca874596edad075b19
+[2026-03-24T13:11:59Z] --- a/README.md
+[2026-03-24T13:11:59Z] +++ b/README.md
+[2026-03-24T13:11:59Z] @@ -88,6 +88,8 @@
+[2026-03-24T13:11:59Z]  - quote builder is implemented and persists quotes
+[2026-03-24T13:11:59Z]  - Kent tender triage is implemented for internal/provisional use
+[2026-03-24T13:11:59Z]  - profitability and route analytics are implemented across multiple tabs
+[2026-03-24T13:11:59Z] +- situational-awareness ingestion now persists closure, weather, and traffic
+[2026-03-24T13:11:59Z] +  severity events and feeds bounded adaptive policy updates
+[2026-03-24T13:11:59Z]  - live network, corridor, and optimization docs still describe more than the
+[2026-03-24T13:11:59Z]    current MVP guarantees
+[2026-03-24T13:11:59Z]  - visual last-mile planning now has a durable data model for site media, accepted site assessments, reviewed advisory CV/volume outputs, and first derived planning constraints (truck suitability, shuttle need, labor/access uplift). Actual model-backed CV inference remains scaffold-only
+[2026-03-24T13:11:59Z] @@ -105,8 +107,6 @@
+[2026-03-24T13:11:59Z]  - route and tender calibration against live operator feedback
+[2026-03-24T13:11:59Z]  - operations diary day/week cockpit linking planning, assignments, usage, and invoicing
+[2026-03-24T13:11:59Z]  - customer invoice and subcontractor-bill reconciliation against job usage truth
+[2026-03-24T13:11:59Z] -- situational-awareness ingest for closures, weather, and disruption signals
+[2026-03-24T13:11:59Z] -- bounded adaptive policy updates from realised job outcomes
+[2026-03-24T13:11:59Z]  - requirements/proposal/governance formalization for international and
+[2026-03-24T13:11:59Z]    compliance-heavy jobs
+[2026-03-24T13:11:59Z]  - paperwork, insurance, tender, customs, and audit package completeness review
+[2026-03-24T13:11:59Z] diff --git a/ROADMAP.md b/ROADMAP.md
+[2026-03-24T13:11:59Z] index caecd6f2dab1209d6be0756e1a1b5b404525e7c1..a2bf828401a3e4f0d983d32b17cb56a48615ed2b
+[2026-03-24T13:11:59Z] --- a/ROADMAP.md
+[2026-03-24T13:11:59Z] +++ b/ROADMAP.md
+[2026-03-24T13:11:59Z] @@ -276,7 +276,7 @@
+[2026-03-24T13:11:59Z]  - Routing, costing, caching, database schema, and core CLI are in place.
+[2026-03-24T13:11:59Z]  - Streamlit dashboard is implemented and used as the main operator surface.
+[2026-03-24T13:11:59Z]  - Kent tender triage exists internally with provisional governance and contract assumptions.
+[2026-03-24T13:11:59Z] -- Adaptive policy learning is now documented as a first-stage bounded parameter system; only parameter storage/helpers are implemented, not autonomous learning or external disruption ingest.
+[2026-03-24T13:11:59Z] +- Adaptive policy learning now ingests closure, weather, and traffic severity feeds, keeps the bounded parameter defaults, and auto-nudges weather, closure, and ETA multipliers while an approval workflow for those nudges is still being formalized.
+[2026-03-24T13:11:59Z]  
+[2026-03-24T13:11:59Z]  ### Highest-Priority Remaining Work
+[2026-03-24T13:11:59Z]  
+[2026-03-24T13:11:59Z] @@ -284,7 +284,7 @@
+[2026-03-24T13:11:59Z]  2. Validate Kent against real payloads and real operator behavior.
+[2026-03-24T13:11:59Z]  3. Tighten governance for overrides, hard-blocks, and policy review.
+[2026-03-24T13:11:59Z]  4. Formalize corridor/lane and multi-truck policy before deeper optimization work.
+[2026-03-24T13:11:59Z] -5. Define and stage situational-awareness ingest plus adaptive policy review before any automatic quote recalibration.
+[2026-03-24T13:11:59Z] +5. Define the adaptive policy review and approval workflow before tying parameter changes directly to quote or ETA recomputation.
+[2026-03-24T13:11:59Z]  
+[2026-03-24T13:11:59Z]  ---
+[2026-03-24T13:11:59Z]  
+[2026-03-24T13:11:59Z] @@ -297,8 +297,7 @@
+[2026-03-24T13:11:59Z]  - End-to-end dashboard workflow clarity (ensure docs and UX use the same operator story).
+[2026-03-24T13:11:59Z]  - Phantom corridor detection + gravity model exploration.
+[2026-03-24T13:11:59Z]  - Opportunity scoring that combines gravity demand with $/m3 distributions.
+[2026-03-24T13:11:59Z] -- External disruption ingest coverage for road closures, weather, and route exceptions.
+[2026-03-24T13:11:59Z] -- Adaptive-policy proposal logic derived from realised outcomes.
+[2026-03-24T13:11:59Z] +- Adaptive-policy review and audit workflow that governs automatic nudges for pricing and ETA parameters.
+[2026-03-24T13:11:59Z]  
+[2026-03-24T13:11:59Z]  ## High-Leverage Near-Term Features
+[2026-03-24T13:11:59Z]  
+[2026-03-24T13:11:59Z] @@ -311,4 +310,4 @@
+[2026-03-24T13:11:59Z]  - Corridor profitability heatmap layer.
+[2026-03-24T13:11:59Z]  - Automated corridor pricing adjustments.
+[2026-03-24T13:11:59Z]  - Kent ranking correctness, admin/operator separation, and governed hard-block handling.
+[2026-03-24T13:11:59Z] -- Situational-awareness overlays and bounded adaptive-policy review flows.
+[2026-03-24T13:11:59Z] +- Adaptive policy review and approval flows for recorded disruption analytics.
+[2026-03-24T13:11:59Z] diff --git a/analytics/db/schema.py b/analytics/db/schema.py
+[2026-03-24T13:11:59Z] index d039b05559896cfe87de913947ec5b3d8f4429f5..4b1102ed876222c2532d33bbe6c8d2b1b3675fe2
+[2026-03-24T13:11:59Z] --- a/analytics/db/schema.py
+[2026-03-24T13:11:59Z] +++ b/analytics/db/schema.py
+[2026-03-24T13:11:59Z] @@ -48,6 +48,24 @@
+[2026-03-24T13:11:59Z]      FOREIGN KEY(destination_address_id) REFERENCES addresses(id)
+[2026-03-24T13:11:59Z]  );
+[2026-03-24T13:11:59Z]  
+[2026-03-24T13:11:59Z] +CREATE TABLE IF NOT EXISTS disruption_events (
+[2026-03-24T13:11:59Z] +    id INTEGER PRIMARY KEY AUTOINCREMENT,
+[2026-03-24T13:11:59Z] +    event_type TEXT NOT NULL,
+[2026-03-24T13:11:59Z] +    severity REAL NOT NULL CHECK (severity >= 0),
+[2026-03-24T13:11:59Z] +    start_time TEXT NOT NULL,
+[2026-03-24T13:11:59Z] +    end_time TEXT,
+[2026-03-24T13:11:59Z] +    location TEXT,
+[2026-03-24T13:11:59Z] +    source TEXT,
+[2026-03-24T13:11:59Z] +    description TEXT,
+[2026-03-24T13:11:59Z] +    created_at TEXT NOT NULL
+[2026-03-24T13:11:59Z] +);
+[2026-03-24T13:11:59Z] +
+[2026-03-24T13:11:59Z] +CREATE INDEX IF NOT EXISTS idx_disruption_events_start_time
+[2026-03-24T13:11:59Z] +    ON disruption_events(start_time);
+[2026-03-24T13:11:59Z] +
+[2026-03-24T13:11:59Z] +CREATE INDEX IF NOT EXISTS idx_disruption_events_event_type
+[2026-03-24T13:11:59Z] +    ON disruption_events(event_type);
+[2026-03-24T13:11:59Z] +
+[2026-03-24T13:11:59Z]  CREATE TABLE IF NOT EXISTS jobs (
+[2026-03-24T13:11:59Z]      id INTEGER PRIMARY KEY AUTOINCREMENT,
+[2026-03-24T13:11:59Z]      job_date TEXT,
+[2026-03-24T13:11:59Z] diff --git a/analytics/situational_awareness.py b/analytics/situational_awareness.py
+[2026-03-24T13:11:59Z] index 8d019788fce33dd27e94b6c82f853789c644f5ab..e70d2f5bd709d20c62ee210f875506489e0f8ccf
+[2026-03-24T13:11:59Z] --- a/analytics/situational_awareness.py
+[2026-03-24T13:11:59Z] +++ b/analytics/situational_awareness.py
+[2026-03-24T13:11:59Z] @@ -4,7 +4,7 @@
+[2026-03-24T13:11:59Z]  import sqlite3
+[2026-03-24T13:11:59Z]  from dataclasses import dataclass
+[2026-03-24T13:11:59Z]  from datetime import datetime, timedelta, timezone
+[2026-03-24T13:11:59Z] -from typing import Iterable, Mapping, Optional
+[2026-03-24T13:11:59Z] +from typing import Iterable, Mapping
+[2026-03-24T13:11:59Z]  
+[2026-03-24T13:11:59Z]  from analytics.adaptive_policy import (
+[2026-03-24T13:11:59Z]      CLOSURE_DELAY_FACTOR_KEY,
+[2026-03-24T13:11:59Z] @@ -110,19 +110,25 @@
+[2026-03-24T13:11:59Z]      since_time = _normalize_since(since)
+[2026-03-24T13:11:59Z]      types = _normalize_event_types(event_types)
+[2026-03-24T13:11:59Z]  
+[2026-03-24T13:11:59Z] -    query = """
+[2026-03-24T13:11:59Z] +    params: list[str] = [since_time]
+[2026-03-24T13:11:59Z] +    filter_clause = ""
+[2026-03-24T13:11:59Z] +    if types:
+[2026-03-24T13:11:59Z] +        placeholders = ",".join("?" for _ in types)
+[2026-03-24T13:11:59Z] +        filter_clause = f"AND event_type IN ({placeholders})"
+[2026-03-24T13:11:59Z] +        params.extend(sorted(types))
+[2026-03-24T13:11:59Z] +
+[2026-03-24T13:11:59Z] +    query = f"""
+[2026-03-24T13:11:59Z]      SELECT event_type, SUM(severity) as total_severity
+[2026-03-24T13:11:59Z]      FROM disruption_events
+[2026-03-24T13:11:59Z]      WHERE start_time >= ?
+[2026-03-24T13:11:59Z] +    {filter_clause}
+[2026-03-24T13:11:59Z]      GROUP BY event_type
+[2026-03-24T13:11:59Z]      """
+[2026-03-24T13:11:59Z] -    rows = conn.execute(query, (since_time,)).fetchall()
+[2026-03-24T13:11:59Z] +    rows = conn.execute(query, params).fetchall()
+[2026-03-24T13:11:59Z]      totals: dict[str, float] = {}
+[2026-03-24T13:11:59Z]      for event_type, total in rows:
+[2026-03-24T13:11:59Z] -        if types and event_type not in types:
+[2026-03-24T13:11:59Z] -            continue
+[2026-03-24T13:11:59Z]          totals[event_type] = float(total or 0.0)
+[2026-03-24T13:11:59Z] -    if not totals and types:
+[2026-03-24T13:11:59Z] +    if types:
+[2026-03-24T13:11:59Z]          for event_type in types:
+[2026-03-24T13:11:59Z]              totals.setdefault(event_type, 0.0)
+[2026-03-24T13:11:59Z]      return totals
+[2026-03-24T13:11:59Z] @@ -149,9 +155,11 @@
+[2026-03-24T13:11:59Z]      weather_target = 1.0 + summary.get(EVENT_TYPE_WEATHER, 0.0) * weather_scale
+[2026-03-24T13:11:59Z]      closure_target = 1.0 + summary.get(EVENT_TYPE_CLOSURE, 0.0) * closure_scale
+[2026-03-24T13:11:59Z]      eta_target = 1.0 + summary.get(EVENT_TYPE_TRAFFIC, 0.0) * traffic_scale
+[2026-03-24T13:11:59Z] +    has_activity = any(value for value in summary.values())
+[2026-03-24T13:11:59Z]      meta_description = description or (
+[2026-03-24T13:11:59Z] -        f"auto update from situational summary {summary}" if summary else
+[2026-03-24T13:11:59Z] -        "auto update from situational summary (no events)"
+[2026-03-24T13:11:59Z] +        f"auto update from situational summary {summary}"
+[2026-03-24T13:11:59Z] +        if has_activity
+[2026-03-24T13:11:59Z] +        else "auto update from situational summary (no events)"
+[2026-03-24T13:11:59Z]      )
+[2026-03-24T13:11:59Z]      weather_value = apply_bounded_parameter_target(
+[2026-03-24T13:11:59Z]          conn,
+[2026-03-24T13:11:59Z] diff --git a/docs/adaptive_learning_loop.md b/docs/adaptive_learning_loop.md
+[2026-03-24T13:11:59Z] index 5685fa53e618410e31f5d8642807a34631214439..3ef0a7d9ecab9c41bab759188e563fb392424cfa
+[2026-03-24T13:11:59Z] --- a/docs/adaptive_learning_loop.md
+[2026-03-24T13:11:59Z] +++ b/docs/adaptive_learning_loop.md
+[2026-03-24T13:11:59Z] @@ -85,3 +85,12 @@
+[2026-03-24T13:11:59Z]  - surface adaptive-policy review in dashboard/admin workflows
+[2026-03-24T13:11:59Z]  - add audit history for accepted and rejected policy proposals
+[2026-03-24T13:11:59Z]  - wire approved parameters into quoting, ETA, and lane analytics paths
+[2026-03-24T13:11:59Z] +
+[2026-03-24T13:11:59Z] +## Situational-Awareness Implementation Status
+[2026-03-24T13:11:59Z] +
+[2026-03-24T13:11:59Z] +- `analytics/situational_awareness.DisruptionEvent` records weather, traffic, and closure severity events plus optional source/location metadata.
+[2026-03-24T13:11:59Z] +- `analytics/situational_awareness.insert_disruption_event` populates the new `disruption_events` table defined in `analytics/db/schema.py`; the helper also normalizes timestamps and clamps severity to non-negative values.
+[2026-03-24T13:11:59Z] +- `analytics.situational_awareness.update_adaptive_policy_from_disruptions` summarizes recent severity totals, computes bounded targets for the weather, closure, and lane-ETA multipliers, and runs `apply_bounded_parameter_target` so policy state nudges remain auditable.
+[2026-03-24T13:11:59Z] +- Tests (`tests/test_situational_awareness.py`) verify severity aggregation, table persistence, and parameter updates.
+[2026-03-24T13:11:59Z] +
+[2026-03-24T13:11:59Z] +Future work now focuses on exposing the proposed updates for operator review before affecting quotes or ETA guidance.
+[2026-03-24T13:11:59Z] diff --git a/docs/progress_status_board.md b/docs/progress_status_board.md
+[2026-03-24T13:11:59Z] index e628bf113bfc91257a7bf0434f13e52e15df9522..ba048df08d1fb277b3faaff756008b3b0a1e0ddc
+[2026-03-24T13:11:59Z] --- a/docs/progress_status_board.md
+[2026-03-24T13:11:59Z] +++ b/docs/progress_status_board.md
+[2026-03-24T13:11:59Z] @@ -16,7 +16,7 @@
+[2026-03-24T13:11:59Z]  - Inventory execution maturity beyond baseline: **🟡 in progress**
+[2026-03-24T13:11:59Z]  - Adaptive policy: **🟡 parameter framework implemented, auto-recalibration pending**
+[2026-03-24T13:11:59Z]  - Kent payload governance and operator workflow validation: **🔴 pending**
+[2026-03-24T13:11:59Z] -- Situation-awareness/disruption ingestion and bounded auto-policy use: **🔴 pending**
+[2026-03-24T13:11:59Z] +- Situation-awareness/disruption ingestion and bounded auto-policy use: **🟢 implemented**
+[2026-03-24T13:11:59Z]  
+[2026-03-24T13:11:59Z]  ## Active TODO Alignment (Current Wave)
+[2026-03-24T13:11:59Z]  
+[2026-03-24T13:11:59Z] @@ -28,6 +28,7 @@
+[2026-03-24T13:11:59Z]  - Extend operations inventory with barcode/QR and container-specific execution controls.
+[2026-03-24T13:11:59Z]  - Add explicit evidence-backed site/media/CV ingestion before deeper constraint automation.
+[2026-03-24T13:11:59Z]  - Add and maintain explicit policy/override governance for hard-block categories.
+[2026-03-24T13:11:59Z] +- Build the adaptive policy review/approval workflow that gates disruption-sourced nudges before they affect quotes or ETA guidance.
+[2026-03-24T13:11:59Z]  
+[2026-03-24T13:11:59Z]  ## Non-blocking documentation tasks
+[2026-03-24T13:11:59Z]  
+[2026-03-24T13:11:59Z] diff --git a/status.json b/status.json
+[2026-03-24T13:11:59Z] index 93af55e1d942567cce05671c7646ee6002221598..d7df2ea0b63544c8c6d14fc8521a1f743a0b919e
+[2026-03-24T13:11:59Z] --- a/status.json
+[2026-03-24T13:11:59Z] +++ b/status.json
+[2026-03-24T13:11:59Z] @@ -5,9 +5,9 @@
+[2026-03-24T13:11:59Z]    "docs": "aligned",
+[2026-03-24T13:11:59Z]    "external_reasoning": "off",
+[2026-03-24T13:11:59Z]    "last_action": "long-running-development",
+[2026-03-24T13:11:59Z] -  "last_cycle_finished_at": "2026-03-24T13:00:13Z",
+[2026-03-24T13:11:59Z] -  "last_cycle_started_at": "2026-03-24T13:01:57Z",
+[2026-03-24T13:11:59Z] -  "last_exit_code": 1,
+[2026-03-24T13:11:59Z] -  "milestones_remaining": 1,
+[2026-03-24T13:11:59Z] +  "last_cycle_finished_at": "2026-03-24T13:09:32Z",
+[2026-03-24T13:11:59Z] +  "last_cycle_started_at": "2026-03-24T13:05:34Z",
+[2026-03-24T13:11:59Z] +  "last_exit_code": 0,
+[2026-03-24T13:11:59Z] +  "milestones_remaining": 0,
+[2026-03-24T13:11:59Z]    "tests": "passing_targeted"
+[2026-03-24T13:11:59Z]  }
+[2026-03-24T13:11:59Z] diff --git a/tests/test_situational_awareness.py b/tests/test_situational_awareness.py
+[2026-03-24T13:11:59Z] index ade0983715d68a11680f15f79a8b2592f3174781..3e250575828ae620c7accc43cb2c9fba11c22d73
+[2026-03-24T13:11:59Z] --- a/tests/test_situational_awareness.py
+[2026-03-24T13:11:59Z] +++ b/tests/test_situational_awareness.py
+[2026-03-24T13:11:59Z] @@ -3,6 +3,8 @@
+[2026-03-24T13:11:59Z]  import sqlite3
+[2026-03-24T13:11:59Z]  from datetime import datetime, timedelta, timezone
+[2026-03-24T13:11:59Z]  
+[2026-03-24T13:11:59Z] +import pytest
+[2026-03-24T13:11:59Z] +
+[2026-03-24T13:11:59Z]  from analytics.situational_awareness import (
+[2026-03-24T13:11:59Z]      DisruptionEvent,
+[2026-03-24T13:11:59Z]      EVENT_TYPE_CLOSURE,
+[2026-03-24T13:11:59Z] @@ -94,12 +96,12 @@
+[2026-03-24T13:11:59Z]          traffic_scale=0.12,
+[2026-03-24T13:11:59Z]      )
+[2026-03-24T13:11:59Z]  
+[2026-03-24T13:11:59Z] -    assert result["weather_risk_multiplier"] == 1.08  # 1 + 0.4 * 0.2
+[2026-03-24T13:11:59Z] -    assert result["closure_delay_factor"] == 1.045  # 1 + 0.3 * 0.15
+[2026-03-24T13:11:59Z] -    assert result["lane_eta_multiplier"] == 1.024  # 1 + 0.2 * 0.12
+[2026-03-24T13:11:59Z] +    assert result["weather_risk_multiplier"] == pytest.approx(1.08)
+[2026-03-24T13:11:59Z] +    assert result["closure_delay_factor"] == pytest.approx(1.045)
+[2026-03-24T13:11:59Z] +    assert result["lane_eta_multiplier"] == pytest.approx(1.024)
+[2026-03-24T13:11:59Z]  
+[2026-03-24T13:11:59Z]      row = conn.execute(
+[2026-03-24T13:11:59Z]          "SELECT key, value_numeric FROM global_parameters WHERE key = ?",
+[2026-03-24T13:11:59Z]          ("adaptive.weather_risk_multiplier",),
+[2026-03-24T13:11:59Z]      ).fetchone()
+[2026-03-24T13:11:59Z] -    assert row is not None and row[1] == 1.08
+[2026-03-24T13:11:59Z] +    assert row is not None and row[1] == pytest.approx(1.08)
+[2026-03-24T13:11:59Z] 

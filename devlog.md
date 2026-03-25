@@ -252,3 +252,9 @@
 - Implemented read-only labor-analytics API endpoints for summary, pay forecast, overtime distribution, confidence/anomaly summary, and cost-driver groupings.
 - Shipped the first payroll cockpit as aggregate-first without inferring absence/sick days from weak signals; later added a basic explicit absence/leave record model instead of building those analytics from missing shifts.
 - Extended payroll analytics beyond the initial cockpit: added export-ready worker labor summaries for payroll/accounting handoff, a basic explicit worker absence/leave record model, absence-aware summaries in the dashboard/API, and a manager-facing absence/leave recording form inside `Payroll / Labor analytics`.
+## 2026-03-24 (Situational-Awareness Ingestion)
+
+- Added the `disruption_events` table and `analytics.situational_awareness.py` so closure, weather, and traffic severity events are captured with normalized timestamps, sources, and optional location context.
+- `update_adaptive_policy_from_disruptions` now summarizes recent disruption severity, nudges the weather/closure/lane-ETA multipliers via `apply_bounded_parameter_target`, and keeps the policy state contractive; the helper plus `DisruptionEvent` dataclass are covered by new tests.
+- Updated documentation (`README.md`, `ROADMAP.md`, `docs/adaptive_learning_loop.md`, `docs/progress_status_board.md`, `CHANGELOG.md`, `COMPACTIFIED_CONTEXT.md`) to reflect the implemented ingestion and bounded policy step.
+- Validation: `python -m py_compile analytics/situational_awareness.py tests/test_situational_awareness.py` and `python3 -m pytest tests/test_adaptive_policy.py tests/test_situational_awareness.py`.

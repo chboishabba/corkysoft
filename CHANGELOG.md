@@ -36,3 +36,9 @@
 - added a focused auth red-team plan, hardened hidden-tab handling so query
   params cannot re-expose role-hidden admin tabs, and made bootstrap-admin
   seeding one-shot once dashboard users exist
+## 2026-03-24
+
+- added `docs/progress_status_board.md` to keep feature progress visibility and TODO alignment centralized
+- linked `README.md` and `ROADMAP.md` to the new progress board and added explicit documentation alignment guidance
+- updated `COMPACTIFIED_CONTEXT.md` with the tracking decision context
+- added `disruption_events` persistence plus `analytics/situational_awareness.py` to ingest closure/weather/traffic severity signals and nudge adaptive-policy multipliers inside bounded updates, with tests covering aggregation and parameter rewrites

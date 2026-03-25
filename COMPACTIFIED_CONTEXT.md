@@ -1245,3 +1245,11 @@ Validation:
   - fixed hidden-tab query-param escalation in dashboard layout resolution
   - made bootstrap-admin seeding no-op once dashboard users already exist
   - added targeted auth/layout regression tests around those paths
+- 2026-03-24: Added a dedicated progress-tracking board in `docs/progress_status_board.md` and linked it from README and ROADMAP so documentation/TODO/changelog updates can be coordinated around one source of truth.
+
+## 2026-03-24 (Situational-Awareness Ingestion)
+
+- Added the `disruption_events` table plus `analytics/situational_awareness.py` so closure, weather, and traffic severity events can be persisted together with location/source metadata and normalized timestamps.
+- `update_adaptive_policy_from_disruptions` now summarizes recent severity totals and nudges the weather, closure, and lane-ETA multipliers via `apply_bounded_parameter_target`; severity-agnostic defaults and bounded deltas keep the policy state contractive.
+- Tests (`tests/test_situational_awareness.py`) cover event aggregation, severity filtering, and parameter updates against the shadow global-parameter store.
+- Docs updated: `README.md`, `ROADMAP.md`, `docs/adaptive_learning_loop.md`, `docs/progress_status_board.md`, and `CHANGELOG.md` now describe the ingestion + adaptive-policy step.

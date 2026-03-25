@@ -5,6 +5,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 ## Documentation TODOs
 
 - Keep `spec.md`, `plan.md`, `status.json`, and `devlog.md` current during the remediation milestone.
+- Keep `docs/progress_status_board.md` and this roadmap synchronized after any feature status changes.
 - Validate the deliverable status tables against the current code and tests.
 - Decide whether `corkysoft/src/dashboard` remains a packaging stub or should be wired to the main Streamlit entry point.
 - Add a short contributor note on how to keep README and docs in sync with new features.
@@ -275,7 +276,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Routing, costing, caching, database schema, and core CLI are in place.
 - Streamlit dashboard is implemented and used as the main operator surface.
 - Kent tender triage exists internally with provisional governance and contract assumptions.
-- Adaptive policy learning is now documented as a first-stage bounded parameter system; only parameter storage/helpers are implemented, not autonomous learning or external disruption ingest.
+- Adaptive policy learning now ingests closure, weather, and traffic severity feeds, keeps the bounded parameter defaults, and auto-nudges weather, closure, and ETA multipliers while an approval workflow for those nudges is still being formalized.
 
 ### Highest-Priority Remaining Work
 
@@ -283,7 +284,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 2. Validate Kent against real payloads and real operator behavior.
 3. Tighten governance for overrides, hard-blocks, and policy review.
 4. Formalize corridor/lane and multi-truck policy before deeper optimization work.
-5. Define and stage situational-awareness ingest plus adaptive policy review before any automatic quote recalibration.
+5. Define the adaptive policy review and approval workflow before tying parameter changes directly to quote or ETA recomputation.
 
 ---
 
@@ -296,8 +297,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - End-to-end dashboard workflow clarity (ensure docs and UX use the same operator story).
 - Phantom corridor detection + gravity model exploration.
 - Opportunity scoring that combines gravity demand with $/m3 distributions.
-- External disruption ingest coverage for road closures, weather, and route exceptions.
-- Adaptive-policy proposal logic derived from realised outcomes.
+- Adaptive-policy review and audit workflow that governs automatic nudges for pricing and ETA parameters.
 
 ## High-Leverage Near-Term Features
 
@@ -310,4 +310,4 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Corridor profitability heatmap layer.
 - Automated corridor pricing adjustments.
 - Kent ranking correctness, admin/operator separation, and governed hard-block handling.
-- Situational-awareness overlays and bounded adaptive-policy review flows.
+- Adaptive policy review and approval flows for recorded disruption analytics.

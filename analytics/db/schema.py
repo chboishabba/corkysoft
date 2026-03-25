@@ -48,6 +48,24 @@ CREATE TABLE IF NOT EXISTS historical_jobs (
     FOREIGN KEY(destination_address_id) REFERENCES addresses(id)
 );
 
+CREATE TABLE IF NOT EXISTS disruption_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    severity REAL NOT NULL CHECK (severity >= 0),
+    start_time TEXT NOT NULL,
+    end_time TEXT,
+    location TEXT,
+    source TEXT,
+    description TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_disruption_events_start_time
+    ON disruption_events(start_time);
+
+CREATE INDEX IF NOT EXISTS idx_disruption_events_event_type
+    ON disruption_events(event_type);
+
 CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_date TEXT,

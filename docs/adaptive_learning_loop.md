@@ -85,3 +85,12 @@ The current implementation does not yet guarantee:
 - surface adaptive-policy review in dashboard/admin workflows
 - add audit history for accepted and rejected policy proposals
 - wire approved parameters into quoting, ETA, and lane analytics paths
+
+## Situational-Awareness Implementation Status
+
+- `analytics/situational_awareness.DisruptionEvent` records weather, traffic, and closure severity events plus optional source/location metadata.
+- `analytics/situational_awareness.insert_disruption_event` populates the new `disruption_events` table defined in `analytics/db/schema.py`; the helper also normalizes timestamps and clamps severity to non-negative values.
+- `analytics.situational_awareness.update_adaptive_policy_from_disruptions` summarizes recent severity totals, computes bounded targets for the weather, closure, and lane-ETA multipliers, and runs `apply_bounded_parameter_target` so policy state nudges remain auditable.
+- Tests (`tests/test_situational_awareness.py`) verify severity aggregation, table persistence, and parameter updates.
+
+Future work now focuses on exposing the proposed updates for operator review before affecting quotes or ETA guidance.

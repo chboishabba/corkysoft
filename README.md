@@ -78,7 +78,9 @@ Run `./start_app.sh` or `start_app.bat` to run the app.
 
 See [UI Role Coverage Matrix](docs/ui_role_coverage_matrix.md) for the authoritative tab ownership map.
 
-## Current Status (2026-03-12)
+## Current Status (2026-03-24)
+
+Latest tracking page: [Progress status board](docs/progress_status_board.md)
 
 Core routing + costing are stable. The Streamlit dashboard is implemented and
 usable, but some workflows remain provisional or governance-light:
@@ -86,6 +88,8 @@ usable, but some workflows remain provisional or governance-light:
 - quote builder is implemented and persists quotes
 - Kent tender triage is implemented for internal/provisional use
 - profitability and route analytics are implemented across multiple tabs
+- situational-awareness ingestion now persists closure, weather, and traffic
+  severity events and feeds bounded adaptive policy updates
 - live network, corridor, and optimization docs still describe more than the
   current MVP guarantees
 - visual last-mile planning now has a durable data model for site media, accepted site assessments, reviewed advisory CV/volume outputs, and first derived planning constraints (truck suitability, shuttle need, labor/access uplift). Actual model-backed CV inference remains scaffold-only
@@ -103,8 +107,6 @@ High-leverage next features:
 - route and tender calibration against live operator feedback
 - operations diary day/week cockpit linking planning, assignments, usage, and invoicing
 - customer invoice and subcontractor-bill reconciliation against job usage truth
-- situational-awareness ingest for closures, weather, and disruption signals
-- bounded adaptive policy updates from realised job outcomes
 - requirements/proposal/governance formalization for international and
   compliance-heavy jobs
 - paperwork, insurance, tender, customs, and audit package completeness review
