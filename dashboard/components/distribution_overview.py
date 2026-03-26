@@ -8,6 +8,10 @@ import pandas as pd
 import streamlit as st
 
 from analytics.live_data import load_active_routes, load_truck_positions
+from analytics.margin_regression import (
+    build_margin_regression_preview,
+    summarise_margin_regression,
+)
 from analytics.price_distribution import (
     ColumnMapping,
     DistributionSummary,
@@ -242,6 +246,49 @@ def render_distribution_analytics_surface(
                         high_cols.dataframe(ranked.tail(5).iloc[::-1][display_fields])
                     else:
                         st.info("No margin data available to highlight outliers yet.")
+
+                if {"margin_per_m3", "distance_km", "job_date"}.issubset(profitability_df.columns):
+                    regression_summary = summarise_margin_regression(profitability_df)
+                    if regression_summary.fitted_job_count >= 4:
+                        st.markdown("#### Margin regression baseline")
+                        st.caption(
+                            "Baseline prediction of margin per m³ from historical distance and season. "
+                            "This is a review aid, not an automatic pricing or dispatch policy."
+                        )
+                        regression_cols = st.columns(4)
+                        regression_cols[0].metric("Jobs fitted", regression_summary.fitted_job_count)
+                        regression_cols[1].metric(
+                            "Distance slope /100 km",
+                            f"${regression_summary.distance_coeff_per_100km:.2f}",
+                        )
+                        regression_cols[2].metric(
+                            "R²",
+                            "n/a" if pd.isna(regression_summary.r_squared) else f"{regression_summary.r_squared:.2f}",
+                        )
+                        regression_cols[3].metric(
+                            "RMSE",
+                            "n/a" if pd.isna(regression_summary.rmse) else f"${regression_summary.rmse:.2f}",
+                        )
+                        st.caption(
+                            f"Baseline season: {regression_summary.baseline_season.title()} | "
+                            f"intercept ${regression_summary.intercept:.2f} margin per m³"
+                        )
+                        seasonal_rows = pd.DataFrame(
+                            [
+                                {
+                                    "Season": season.title(),
+                                    "Adjustment vs baseline": round(
+                                        regression_summary.seasonal_effects.get(season, float("nan")), 2
+                                    ),
+                                    "Jobs": regression_summary.seasonal_job_counts.get(season, 0),
+                                }
+                                for season in ("summer", "autumn", "winter", "spring")
+                            ]
+                        )
+                        st.dataframe(seasonal_rows, width="stretch", hide_index=True)
+                        preview_df = build_margin_regression_preview(regression_summary)
+                        if not preview_df.empty:
+                            st.dataframe(preview_df, width="stretch", hide_index=True)
             elif dataset_error:
                 st.error("Unable to calculate profitability without job data.")
             else:

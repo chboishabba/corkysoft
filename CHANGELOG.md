@@ -67,3 +67,4 @@
 - surfaced persisted spare-capacity signals and container-pressure rollups in the Dispatch board so operations can review backhaul/container-fit context after award, not only during quoting
 - added operator-facing share/reallocation recommendations in Dispatch based on spare-capacity and container-pressure signals, without yet introducing automatic reassignment
 - added explicit Dispatch response actions for share/reallocation and utilisation handling, including persisted action/status logging on recommendation candidates
+- added a first regression/modeling baseline for profitability: historical margin-per-m³ regression over distance and season, surfaced inside profitability insights with fit metrics and scenario previews

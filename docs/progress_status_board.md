@@ -25,12 +25,14 @@ Use it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and [COMPACT
 - Quote recommendation and benchmarking overlays: **🟢 implemented** (live quote workflow now shows benchmark guidance and recommendation overlays)
 - Backhaul-aware quote discount guidance: **🟢 implemented** (quote workflow now surfaces backhaul discount headroom and recommendation support)
 - Broader backhaul / container-sharing operational visibility: **🟡 in progress** (Dispatch now surfaces persisted spare-capacity signals, container pressure, share/reallocation recommendations, and explicit operator response actions; deeper execution handling still pending)
+- Regression / corridor modeling: **🟡 in progress** (profitability insights now include a baseline margin-per-m³ regression over distance and season; corridor-aware prediction and stronger evaluation are still pending)
 - App/API/pricing decomposition pass: **🟢 implemented** (major shell/router/pricing hotspots collapsed into bounded modules with compatibility facades preserved)
 
 ## Active TODO Alignment (Current Wave)
 
 - Continue operations-diary expansion toward fuller job/staff/invoice reconciliation workflow.
 - Extend dispatch/inventory handling from explicit response actions into fuller execution flows for backhaul/container-sharing and under-/over-utilisation response.
+- Extend the new margin-regression baseline into corridor-aware prediction, validation metrics, and operator-safe interpretation.
 - Add delivery receipt / watermark semantics to the observer outbox when deployment posture matters.
 - Extend operations inventory with barcode/QR and container-specific execution controls.
 - Add explicit evidence-backed site/media/CV ingestion before deeper constraint automation.
