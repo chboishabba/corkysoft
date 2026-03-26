@@ -4,8 +4,6 @@ import json
 import sqlite3
 from typing import Any, Sequence
 
-from corkysoft.whisperx_adapter import fetch_task_status, submit_transcription
-
 from .call_ops import (
     CALL_TRANSCRIPT_STATUSES,
     _emit_state_event,
@@ -246,7 +244,9 @@ def submit_call_audio_for_transcription(
             call_event_id = leg["rootCallEventId"]
     if call_event_id is not None:
         get_call_event(conn, int(call_event_id))
-    payload = submit_transcription(
+    from . import call_ops as call_ops_module
+
+    payload = call_ops_module.submit_transcription(
         service_key=service_key,
         file_bytes=file_bytes,
         filename=filename,
@@ -268,7 +268,9 @@ def poll_transcript_artifact(conn: sqlite3.Connection, *, artifact_id: int) -> d
     artifact = get_transcript_artifact(conn, artifact_id)
     if not artifact["externalTaskId"]:
         raise ValueError("Transcript artifact has no external task id")
-    payload = fetch_task_status(
+    from . import call_ops as call_ops_module
+
+    payload = call_ops_module.fetch_task_status(
         service_key=str(artifact["serviceKey"]),
         identifier=str(artifact["externalTaskId"]),
     )
