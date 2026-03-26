@@ -8,6 +8,7 @@ import pytest
 from analytics.margin_regression import (
     build_corridor_margin_preview,
     summarise_corridor_margin_model,
+    summarise_corridor_margin_validation,
     build_margin_regression_preview,
     summarise_margin_regression,
 )
@@ -168,3 +169,83 @@ def test_summarise_corridor_margin_model_uses_corridor_group_key_when_available(
     summary = summarise_corridor_margin_model(df)
 
     assert summary.corridor_column == "corridor_group_key"
+
+
+def test_summarise_corridor_margin_validation_reports_reviewable_when_corridor_model_beats_baseline() -> None:
+    df = pd.DataFrame(
+        {
+            "job_date": [
+                "2026-01-01",
+                "2026-01-05",
+                "2026-01-10",
+                "2026-01-15",
+                "2026-01-20",
+                "2026-01-25",
+                "2026-02-01",
+                "2026-02-05",
+                "2026-02-10",
+                "2026-02-15",
+                "2026-02-20",
+                "2026-02-25",
+            ],
+            "distance_km": [100, 200, 300, 100, 200, 300, 100, 200, 300, 100, 200, 300],
+            "corridor_display": [
+                "Alpha",
+                "Alpha",
+                "Alpha",
+                "Beta",
+                "Beta",
+                "Beta",
+                "Alpha",
+                "Alpha",
+                "Alpha",
+                "Beta",
+                "Beta",
+                "Beta",
+            ],
+            "margin_per_m3": [95, 90, 85, 70, 65, 60, 94, 89, 84, 69, 64, 59],
+        }
+    )
+
+    summary = summarise_corridor_margin_validation(df)
+
+    assert summary.train_job_count == 9
+    assert summary.holdout_job_count == 3
+    assert summary.holdout_rmse < summary.baseline_holdout_rmse
+    assert summary.rmse_improvement > 0
+    assert summary.trust_label == "reviewable"
+
+
+def test_summarise_corridor_margin_validation_reports_low_support_for_novel_holdout_corridors() -> None:
+    df = pd.DataFrame(
+        {
+            "job_date": [
+                "2026-01-01",
+                "2026-01-05",
+                "2026-01-10",
+                "2026-01-15",
+                "2026-01-20",
+                "2026-01-25",
+                "2026-02-01",
+                "2026-02-05",
+            ],
+            "distance_km": [100, 200, 300, 100, 200, 300, 150, 250],
+            "corridor_display": [
+                "Alpha",
+                "Alpha",
+                "Alpha",
+                "Beta",
+                "Beta",
+                "Beta",
+                "Novel-1",
+                "Novel-2",
+            ],
+            "margin_per_m3": [95, 90, 85, 70, 65, 60, 82, 78],
+        }
+    )
+
+    summary = summarise_corridor_margin_validation(df)
+
+    assert summary.holdout_job_count == 2
+    assert summary.novel_holdout_corridor_count >= 2
+    assert summary.trust_label == "low_support"

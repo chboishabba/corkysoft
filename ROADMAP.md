@@ -208,7 +208,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 | **Airbnb-style $/m³ histogram**        |    ✅   | Jobs sorted left→right by $/m³; bar = count. |
 | **Break-even + margin bands**          |    ✅   | Visual overlay on histogram.                 |
 | **Loss-leader detection**              |    ✅   | Identify sub-margin jobs.                    |
-| **Regression / corridor model**        |   🧩   | Profitability insights now include baseline and corridor-aware margin-per-m³ regression over distance/season, plus fit-improvement reporting; stronger validation and model-governance work remain pending. |
+| **Regression / corridor model**        |   🧩   | Profitability insights now include baseline and corridor-aware margin-per-m³ regression over distance/season, fit-improvement reporting, and holdout trust signals; stronger model-governance work remains pending. |
 | **Terrain & temperature factors**      |   🔜   | Weight costs for harsh routes.               |
 | **Driver / truck performance metrics** |   🔜   | Wear, reliability, fuel efficiency.          |
 

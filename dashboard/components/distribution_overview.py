@@ -12,6 +12,7 @@ from analytics.margin_regression import (
     build_corridor_margin_preview,
     build_margin_regression_preview,
     summarise_corridor_margin_model,
+    summarise_corridor_margin_validation,
     summarise_margin_regression,
 )
 from analytics.price_distribution import (
@@ -340,6 +341,58 @@ def render_distribution_analytics_surface(
                             corridor_preview_df = build_corridor_margin_preview(corridor_summary)
                             if not corridor_preview_df.empty:
                                 st.dataframe(corridor_preview_df, width="stretch", hide_index=True)
+                            validation_summary = summarise_corridor_margin_validation(profitability_df)
+                            st.markdown("#### Holdout validation")
+                            validation_cols = st.columns(4)
+                            validation_cols[0].metric("Train jobs", validation_summary.train_job_count)
+                            validation_cols[1].metric("Holdout jobs", validation_summary.holdout_job_count)
+                            validation_cols[2].metric(
+                                "Holdout RMSE",
+                                "n/a"
+                                if pd.isna(validation_summary.holdout_rmse)
+                                else f"${validation_summary.holdout_rmse:.2f}",
+                            )
+                            validation_cols[3].metric(
+                                "Trust",
+                                validation_summary.trust_label.replace("_", " ").title(),
+                            )
+                            validation_detail_cols = st.columns(4)
+                            validation_detail_cols[0].metric(
+                                "Baseline holdout RMSE",
+                                "n/a"
+                                if pd.isna(validation_summary.baseline_holdout_rmse)
+                                else f"${validation_summary.baseline_holdout_rmse:.2f}",
+                            )
+                            validation_detail_cols[1].metric(
+                                "RMSE improvement",
+                                "n/a"
+                                if pd.isna(validation_summary.rmse_improvement)
+                                else f"${validation_summary.rmse_improvement:+.2f}",
+                            )
+                            validation_detail_cols[2].metric(
+                                "Novel holdout corridors",
+                                validation_summary.novel_holdout_corridor_count,
+                            )
+                            validation_detail_cols[3].metric(
+                                "Trusted holdout corridors",
+                                validation_summary.trusted_corridor_count,
+                            )
+                            if validation_summary.trust_label == "reviewable":
+                                st.success(
+                                    "The corridor-aware model is outperforming the baseline on recent holdout jobs and has enough seen-corridor support for review."
+                                )
+                            elif validation_summary.trust_label == "caution":
+                                st.warning(
+                                    "The corridor-aware model is not clearly beating the baseline on recent holdout jobs. Treat outputs as exploratory only."
+                                )
+                            elif validation_summary.trust_label == "low_support":
+                                st.warning(
+                                    "Recent holdout jobs include too many unseen or weak-support corridors. Prefer baseline judgment and direct operator review."
+                                )
+                            else:
+                                st.info(
+                                    "There is not enough recent history to validate the corridor-aware model safely yet."
+                                )
                             st.caption(
                                 "Operator-safe interpretation: use this as a historical tendency signal, not as an automatic pricing or dispatch decision."
                             )
