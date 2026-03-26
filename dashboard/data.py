@@ -42,7 +42,7 @@ class PreparedDashboardData:
     has_filtered_data: bool
 
 
-def _blank_column_mapping() -> ColumnMapping:
+def blank_column_mapping() -> ColumnMapping:
     return ColumnMapping(
         date=None,
         client=None,
@@ -137,11 +137,11 @@ def _load_dataset(
     try:
         df, mapping = loader(conn)
     except RuntimeError as exc:
-        return pd.DataFrame(), _blank_column_mapping(), str(exc)
+        return pd.DataFrame(), blank_column_mapping(), str(exc)
     except Exception as exc:
         return (
             pd.DataFrame(),
-            _blank_column_mapping(),
+            blank_column_mapping(),
             f"Failed to load {dataset_label.lower()} data: {exc}",
         )
     return df, mapping, None
@@ -168,7 +168,7 @@ def _sidebar_filters(
     dataset_error: Optional[str] = None
     empty_dataset_message: Optional[str] = None
     df_all: pd.DataFrame = pd.DataFrame()
-    mapping: ColumnMapping = _blank_column_mapping()
+    mapping: ColumnMapping = blank_column_mapping()
 
     start_date: Optional[date] = None
     end_date: Optional[date] = None

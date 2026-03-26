@@ -1,4 +1,9 @@
-"""Helpers for the price-distribution Streamlit view."""
+"""Pricing facade for dashboard analytics and compatibility imports.
+
+This module is intentionally thin: domain subsystems now live in dedicated
+modules while callers continue importing the established pricing surface from
+here.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -86,6 +91,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 else:
     ORSClient = Any  # type: ignore[misc, assignment]
 
+# Local constants and lightweight helpers that still belong to the facade.
 METRO_HISTOGRAM_BINS = 15
 
 
@@ -133,6 +139,8 @@ BASE_COST_DEFAULTS: Sequence[tuple[str, float, str]] = (
     ),
     (OVERHEAD_COST_KEY, DEFAULT_OVERHEAD_COST_PER_JOB, "Fixed overhead per job (AUD)"),
 )
+
+
 @dataclass(frozen=True)
 class BaseCostConfig:
     fuel_per_km: float

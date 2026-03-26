@@ -143,6 +143,7 @@ from dashboard.components.route_maps import render_route_maps_tab
 from dashboard.components.calls import render_calls_tab
 from dashboard.components.optimizer import render_optimizer
 from dashboard.components.quote_builder import render_quote_builder
+from dashboard.data import blank_column_mapping
 from dashboard.map_provider import (
     folium_map_configuration,
     google_maps_api_key,
@@ -302,20 +303,6 @@ def _render_pin_picker(
     entry["lat"] = current_lat
     st.session_state["quote_pin_override"] = st.session_state.get("quote_pin_override", {})
     return current_lon, current_lat
-
-def _blank_column_mapping() -> ColumnMapping:
-    return ColumnMapping(
-        date=None,
-        client=None,
-        price=None,
-        revenue=None,
-        volume=None,
-        origin=None,
-        destination=None,
-        corridor=None,
-        distance=None,
-        final_cost=None,
-    )
 
 def _set_query_params(**params: str) -> None:
     """Set Streamlit query parameters using the stable API when available."""
@@ -656,7 +643,7 @@ def render_price_distribution_dashboard():
         ensure_quote_schema(conn)
 
         df_all: pd.DataFrame = pd.DataFrame()
-        mapping: ColumnMapping = _blank_column_mapping()
+        mapping: ColumnMapping = blank_column_mapping()
         dataset_loader = load_historical_jobs
         dataset_key = "historical"
         dataset_label = "Historical quotes"
