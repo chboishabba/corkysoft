@@ -8,6 +8,7 @@ from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
+from analytics.lane_assignment import LANE_STATUS_ASSIGNED
 from analytics.operational_signals import compute_route_spare_capacity_signal
 from analytics.operations_assignment import (
     list_operational_readiness_items,
@@ -32,9 +33,27 @@ def list_planner_corridor_candidates(df: pd.DataFrame) -> list[dict[str, Any]]:
         if column in working.columns:
             working[column] = pd.to_numeric(working[column], errors="coerce")
     payload: list[dict[str, Any]] = []
-    grouped = working.groupby("corridor_display", dropna=False)
+    assigned_mask = (
+        working.get("lane_assignment_status", pd.Series("", index=working.index))
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .eq(LANE_STATUS_ASSIGNED)
+    )
+    lane_keys = (
+        working.get("lane_key", pd.Series("", index=working.index))
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+    planner_group = working["corridor_display"].fillna("").astype(str).str.strip()
+    planner_group = planner_group.where(~assigned_mask | lane_keys.eq(""), lane_keys)
+    working["_planner_group"] = planner_group
+    grouped = working.groupby("_planner_group", dropna=False)
     for corridor, group in grouped:
-        corridor_label = str(corridor or "Unknown corridor")
+        corridor_label = str(group["corridor_display"].iloc[0] or corridor or "Unknown corridor")
+        lane_key = str(group.get("lane_key", pd.Series([""])).iloc[0] or "").strip()
         job_count = int(len(group))
         overlap_score = float(job_count)
         familiarity = min(job_count / 10.0, 1.0)
@@ -69,6 +88,7 @@ def list_planner_corridor_candidates(df: pd.DataFrame) -> list[dict[str, Any]]:
         payload.append(
             {
                 "corridor": corridor_label,
+                "laneKey": lane_key,
                 "jobCount": job_count,
                 "overlapScore": round(overlap_score, 2),
                 "familiarityScore": round(familiarity, 2),

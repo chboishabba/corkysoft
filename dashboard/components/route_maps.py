@@ -129,6 +129,38 @@ def render_route_maps_tab(
     """Render the Route maps tab contents."""
 
     st.markdown("### Corridor visualisation")
+    scoped_input_df = filtered_df.copy()
+    if "lane_assignment_status" in scoped_input_df.columns:
+        normalized_status = (
+            scoped_input_df["lane_assignment_status"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .replace("", "unassigned")
+        )
+        scoped_input_df = scoped_input_df.assign(lane_assignment_status=normalized_status)
+        lane_status_options = [
+            status
+            for status in ("assigned", "ambiguous", "unassigned")
+            if normalized_status.eq(status).any()
+        ]
+        if lane_status_options:
+            selected_lane_statuses = st.multiselect(
+                "Lane assignment scope",
+                options=lane_status_options,
+                default=["assigned"] if "assigned" in lane_status_options else lane_status_options,
+                help=(
+                    "Route maps default to canonically assigned lane history. "
+                    "Include ambiguous or unassigned rows only when exploring unresolved records."
+                ),
+                key="route_maps_lane_assignment_scope",
+            )
+            scoped_input_df = scoped_input_df.loc[
+                scoped_input_df["lane_assignment_status"].isin(selected_lane_statuses)
+            ].copy()
+            st.caption(f"Route-map dataset rows after lane-status filter: {len(scoped_input_df)}")
+
     map_mode = st.radio(
         "Visualisation mode",
         ("Routes/points", "Heatmap", "Isochrones"),
@@ -147,7 +179,7 @@ def render_route_maps_tab(
     )
 
     scoped_df = _filter_by_distance(
-        filtered_df, metro_only=metro_only, max_distance_km=metro_distance_km
+        scoped_input_df, metro_only=metro_only, max_distance_km=metro_distance_km
     )
     map_df = scoped_df.copy()
 
@@ -216,7 +248,7 @@ def render_route_maps_tab(
     if map_mode == "Routes/points":
         _render_route_lines_tab(map_df, dataset_key, conn)
     elif map_mode == "Heatmap":
-        _render_heatmap_tab(filtered_df, map_df)
+        _render_heatmap_tab(scoped_input_df, map_df)
     else:
         _render_isochrone_tab(map_df)
 

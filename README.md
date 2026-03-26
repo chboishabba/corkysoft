@@ -78,7 +78,7 @@ Run `./start_app.sh` or `start_app.bat` to run the app.
 
 See [UI Role Coverage Matrix](docs/ui_role_coverage_matrix.md) for the authoritative tab ownership map.
 
-## Current Status (2026-03-24)
+## Current Status (2026-03-25)
 
 Latest tracking page: [Progress status board](docs/progress_status_board.md)
 
@@ -90,20 +90,24 @@ usable, but some workflows remain provisional or governance-light:
 - profitability and route analytics are implemented across multiple tabs
 - situational-awareness ingestion now persists closure, weather, and traffic
   severity events and feeds bounded adaptive policy updates
+- historical ingest now records run-level coverage, row-level issues, and
+  readiness status, with Fleet-admin visibility for ingest health
+- corridor / lane formalization now has canonical cluster, directional-lane,
+  and corridor-group persistence; historical/live rows carry assignment status,
+  Fleet admin exposes assignment health plus promotion governance, and Planner
+  plus analytics tabs default to canonically assigned lane history unless
+  operators opt into ambiguous or unassigned rows; grouped lane-promotion
+  review is available for repeated candidate cluster pairs
 - live network, corridor, and optimization docs still describe more than the
   current MVP guarantees
 - visual last-mile planning now has a durable data model for site media, accepted site assessments, reviewed advisory CV/volume outputs, and first derived planning constraints (truck suitability, shuttle need, labor/access uplift). Actual model-backed CV inference remains scaffold-only
 
 Main blockers to reach the next phase:
-- historical job ingestion validation (to unlock reliable analytics)
-- corridor / lane data model formalization
 - operator workflow and governance completion
 - manager-facing day/week diary workflow above Planner, Dispatch, and reconciliation
 - Kent contract validation against real payloads and real operator usage
 
 High-leverage next features:
-- historical job import hardening (CSV + MoveWare exports)
-- corridor / lane detection + rollups
 - route and tender calibration against live operator feedback
 - operations diary day/week cockpit linking planning, assignments, usage, and invoicing
 - customer invoice and subcontractor-bill reconciliation against job usage truth

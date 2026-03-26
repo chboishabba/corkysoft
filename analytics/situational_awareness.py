@@ -7,11 +7,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable, Mapping
 
 from analytics.adaptive_policy import (
+    AdaptivePolicyProposalItem,
     CLOSURE_DELAY_FACTOR_KEY,
     LANE_ETA_MULTIPLIER_KEY,
     WEATHER_RISK_MULTIPLIER_KEY,
     apply_bounded_parameter_target,
+    create_adaptive_policy_proposal,
     ensure_adaptive_policy_defaults,
+    load_adaptive_policy_snapshot,
 )
 
 DEFAULT_LOOKBACK_HOURS = 6
@@ -137,14 +140,17 @@ def summarize_disruption_severity(
 def update_adaptive_policy_from_disruptions(
     conn: sqlite3.Connection,
     *,
+    actor: str | None = None,
+    approval_mode: str = "proposal",
     lookback: timedelta = timedelta(hours=DEFAULT_LOOKBACK_HOURS),
     max_delta: float = 0.1,
     weather_scale: float = 0.1,
     closure_scale: float = 0.12,
     traffic_scale: float = 0.08,
     description: str | None = None,
-) -> Mapping[str, float]:
-    """Nudge adaptive policy parameters using recent disruption summaries."""
+    note: str | None = None,
+) -> Mapping[str, float | int | str]:
+    """Create or apply bounded adaptive-policy changes using recent disruptions."""
 
     ensure_disruption_events_table(conn)
     ensure_adaptive_policy_defaults(conn)
@@ -161,6 +167,67 @@ def update_adaptive_policy_from_disruptions(
         if has_activity
         else "auto update from situational summary (no events)"
     )
+    snapshot = load_adaptive_policy_snapshot(conn)
+    bounded_targets = {
+        "weather_risk_multiplier": min(
+            weather_target,
+            snapshot.weather_risk_multiplier + max_delta,
+        ),
+        "closure_delay_factor": min(
+            closure_target,
+            snapshot.closure_delay_factor + max_delta,
+        ),
+        "lane_eta_multiplier": min(
+            eta_target,
+            snapshot.lane_eta_multiplier + max_delta,
+        ),
+    }
+    if approval_mode == "proposal":
+        proposal = create_adaptive_policy_proposal(
+            conn,
+            proposal_type="situational_awareness",
+            actor=str(actor or "").strip(),
+            note=note or meta_description,
+            source_summary={
+                "lookbackHours": lookback.total_seconds() / 3600,
+                "summary": summary,
+            },
+            items=[
+                AdaptivePolicyProposalItem(
+                    key=WEATHER_RISK_MULTIPLIER_KEY,
+                    current_value=snapshot.weather_risk_multiplier,
+                    proposed_value=float(bounded_targets["weather_risk_multiplier"]),
+                    target_value=weather_target,
+                    max_delta=max_delta,
+                    description=f"weather {meta_description}",
+                ),
+                AdaptivePolicyProposalItem(
+                    key=CLOSURE_DELAY_FACTOR_KEY,
+                    current_value=snapshot.closure_delay_factor,
+                    proposed_value=float(bounded_targets["closure_delay_factor"]),
+                    target_value=closure_target,
+                    max_delta=max_delta,
+                    description=f"closure {meta_description}",
+                ),
+                AdaptivePolicyProposalItem(
+                    key=LANE_ETA_MULTIPLIER_KEY,
+                    current_value=snapshot.lane_eta_multiplier,
+                    proposed_value=float(bounded_targets["lane_eta_multiplier"]),
+                    target_value=eta_target,
+                    max_delta=max_delta,
+                    description=f"traffic {meta_description}",
+                ),
+            ],
+        )
+        return {
+            "proposal_id": int(proposal["id"]),
+            "status": str(proposal["status"]),
+            "weather_risk_multiplier": float(bounded_targets["weather_risk_multiplier"]),
+            "closure_delay_factor": float(bounded_targets["closure_delay_factor"]),
+            "lane_eta_multiplier": float(bounded_targets["lane_eta_multiplier"]),
+        }
+    if approval_mode != "apply":
+        raise ValueError("approval_mode must be either 'proposal' or 'apply'")
     weather_value = apply_bounded_parameter_target(
         conn,
         WEATHER_RISK_MULTIPLIER_KEY,

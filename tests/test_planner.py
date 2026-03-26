@@ -23,6 +23,9 @@ def _frame() -> pd.DataFrame:
         [
             {
                 "corridor_display": "Brisbane → Cairns",
+                "lane_assignment_status": "assigned",
+                "lane_key": "postcode:4000->postcode:4870",
+                "corridor_group_key": "postcode:4000<->postcode:4870",
                 "origin": "Brisbane",
                 "destination": "Cairns",
                 "margin_per_m3_pct": 22.0,
@@ -37,6 +40,9 @@ def _frame() -> pd.DataFrame:
             },
             {
                 "corridor_display": "Brisbane → Cairns",
+                "lane_assignment_status": "assigned",
+                "lane_key": "postcode:4000->postcode:4870",
+                "corridor_group_key": "postcode:4000<->postcode:4870",
                 "origin": "Brisbane",
                 "destination": "Cairns",
                 "margin_per_m3_pct": 18.0,
@@ -51,6 +57,9 @@ def _frame() -> pd.DataFrame:
             },
             {
                 "corridor_display": "Brisbane → Sydney",
+                "lane_assignment_status": "assigned",
+                "lane_key": "postcode:4000->postcode:2000",
+                "corridor_group_key": "postcode:2000<->postcode:4000",
                 "origin": "Brisbane",
                 "destination": "Sydney",
                 "margin_per_m3_pct": 5.0,
@@ -138,6 +147,7 @@ def _seed_conn() -> sqlite3.Connection:
 def test_list_planner_corridor_candidates_ranks_by_score() -> None:
     rows = list_planner_corridor_candidates(_frame())
     assert rows[0]["corridor"] == "Brisbane → Cairns"
+    assert rows[0]["laneKey"] == "postcode:4000->postcode:4870"
     assert rows[0]["jobCount"] == 2
 
 

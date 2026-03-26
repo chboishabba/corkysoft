@@ -36,14 +36,45 @@ def render_price_history_tab(
     end_date: Optional[date],
 ) -> None:
     """Render the price history dashboard tab."""
-    has_filtered_data = not filtered_df.empty
+    scoped_df = filtered_df.copy()
+    if "lane_assignment_status" in scoped_df.columns:
+        normalized_status = (
+            scoped_df["lane_assignment_status"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .replace("", "unassigned")
+        )
+        scoped_df = scoped_df.assign(lane_assignment_status=normalized_status)
+        lane_status_options = [
+            status
+            for status in ("assigned", "ambiguous", "unassigned")
+            if normalized_status.eq(status).any()
+        ]
+        if lane_status_options:
+            selected_lane_statuses = st.multiselect(
+                "Lane assignment scope",
+                options=lane_status_options,
+                default=["assigned"] if "assigned" in lane_status_options else lane_status_options,
+                help=(
+                    "Price-history trends default to canonically assigned lane history. "
+                    "Include ambiguous or unassigned rows only when exploring unresolved data."
+                ),
+                key="price_history_lane_assignment_scope",
+            )
+            scoped_df = scoped_df.loc[
+                scoped_df["lane_assignment_status"].isin(selected_lane_statuses)
+            ].copy()
+            st.caption(f"Price-history rows after lane-status filter: {len(scoped_df)}")
+    has_filtered_data = not scoped_df.empty
     date_column = mapping.date or "job_date"
 
     if not has_filtered_data:
         st.info("Apply filters or import jobs to analyse price history trends.")
         return
 
-    if date_column not in filtered_df.columns:
+    if date_column not in scoped_df.columns:
         st.warning("No date column available to build the price history view.")
         return
 
@@ -57,7 +88,7 @@ def render_price_history_tab(
     )
     frequency_value = frequency_options[selected_frequency_label]
 
-    dates = pd.to_datetime(filtered_df[date_column], errors="coerce")
+    dates = pd.to_datetime(scoped_df[date_column], errors="coerce")
     valid_dates = dates.dropna()
     default_start = (
         start_date or (valid_dates.min().date() if not valid_dates.empty else date.today())
@@ -87,14 +118,14 @@ def render_price_history_tab(
         return
 
     history_series = build_price_history_series(
-        filtered_df,
+        scoped_df,
         frequency=frequency_value,
         date_column=date_column,
         start_date=history_start,
         end_date=history_end,
     )
     previous_year_frames = summarise_last_year_distributions(
-        filtered_df,
+        scoped_df,
         date_column=date_column,
         start_date=history_start,
         end_date=history_end,

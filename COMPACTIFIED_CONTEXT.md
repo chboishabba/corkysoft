@@ -219,6 +219,25 @@ Implementation changes:
 Resolved archived thread metadata and used it to sharpen repo-facing intent
 before making docs/TODO/code updates.
 
+## 2026-03-25 (Observer Export Follow-up Documentation)
+
+Current status summary:
+- Corkysoft now emits a local observer outbox for diary/reconciliation review
+  families and supports explicit export for `planning_snapshot` and
+  `reconciliation_exception`.
+- JMD remains out of scope.
+- Remaining observer-export follow-up work is operational, not modeling:
+  delivery receipt / watermark semantics and dashboard visibility of emitted
+  envelopes.
+
+Docs updated:
+- ROADMAP.md
+- docs/progress_status_board.md
+- CHANGELOG.md
+
+Implementation changes:
+- None. Documentation/status alignment only.
+
 Resolved thread:
 - title: Weather Handling Docs
 - online UUID: 69b7de6e-56dc-839e-b322-80af1804d40e
@@ -236,6 +255,46 @@ Main topics pulled from the thread:
 Docs updated:
 - README.md
 - ROADMAP.md
+
+## 2026-03-25 (Historical Ingest + Lane Governance)
+
+Collapsed the remaining trust gap around corridor/lane formalization into three implemented slices:
+- historical ingest coverage hardening
+- canonical lane assignment
+- lane promotion governance plus planner-safe consumption
+
+Implemented state:
+- historical ingest now records run-level coverage, row-level issues, and readiness status
+- Fleet admin now shows ingest-health summaries plus lane-assignment health and gap visibility
+- canonical lane entities now exist: `location_clusters`, `directional_lanes`, `corridor_groups`
+- historical and live jobs now persist lane assignment metadata:
+  - `origin_cluster_key`
+  - `destination_cluster_key`
+  - `lane_key`
+  - `corridor_group_key`
+  - `lane_assignment_status`
+  - `lane_assignment_source`
+  - `lane_assignment_note`
+- lane governance now includes proposal, approval/rejection, and apply flows before promoting new directional lanes
+- grouped lane proposals now exist for repeated candidate cluster pairs
+- Planner plus analytics tabs now default to `assigned` lane history and require explicit operator opt-in to include `ambiguous` or `unassigned` rows
+- Kent admin now exposes a compact review summary for hard-block, policy-fail, loss-alert, and overrideable tender counts
+
+Docs updated:
+- README.md
+- ROADMAP.md
+- docs/progress_status_board.md
+- CHANGELOG.md
+
+Implementation changes:
+- analytics/price_distribution.py
+- analytics/lane_assignment.py
+- analytics/planner.py
+- analytics/db/legacy.py
+- dashboard/components/maintenance.py
+- dashboard/components/planner.py
+- tests/test_lane_assignment.py
+- tests/test_planner.py
 - docs/adaptive_learning_loop.md
 - docs/modules.md
 - docs/architecture.md

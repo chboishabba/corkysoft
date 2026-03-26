@@ -47,7 +47,40 @@ def render_planner_tab(filtered_df: pd.DataFrame, conn: sqlite3.Connection) -> N
         "Hybrid planning surface for pre-award route shaping and post-award operational leg planning. Planner confirms into internal job_segments only after review."
     )
 
-    corridor_candidates = list_planner_corridor_candidates(filtered_df)
+    planner_df = filtered_df.copy()
+    available_lane_statuses: list[str] = []
+    if "lane_assignment_status" in planner_df.columns:
+        normalized_status = (
+            planner_df["lane_assignment_status"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .replace("", "unassigned")
+        )
+        planner_df = planner_df.assign(lane_assignment_status=normalized_status)
+        available_lane_statuses = [
+            status
+            for status in ("assigned", "ambiguous", "unassigned")
+            if normalized_status.eq(status).any()
+        ]
+    if available_lane_statuses:
+        selected_lane_statuses = st.multiselect(
+            "Lane assignment scope",
+            options=available_lane_statuses,
+            default=["assigned"] if "assigned" in available_lane_statuses else available_lane_statuses,
+            help=(
+                "Planner suggestions default to canonically assigned lanes. "
+                "Include ambiguous or unassigned rows only when deliberately exploring unresolved history."
+            ),
+            key="planner_lane_assignment_scope",
+        )
+        planner_df = planner_df.loc[
+            planner_df["lane_assignment_status"].isin(selected_lane_statuses)
+        ].copy()
+        st.caption(f"Planner dataset rows after lane-status filter: {len(planner_df)}")
+
+    corridor_candidates = list_planner_corridor_candidates(planner_df)
     if not corridor_candidates:
         st.info(
             "No corridor history is available in the current dataset. Load historical or live route data to use the planner."
@@ -109,7 +142,7 @@ def render_planner_tab(filtered_df: pd.DataFrame, conn: sqlite3.Connection) -> N
         selected_job_id = int(job_labels[selected_job_label])
         selected_job = next(job for job in jobs if int(job["id"]) == selected_job_id)
         inferred_corridor = infer_planner_corridor_for_job(
-            filtered_df,
+            planner_df,
             origin=selected_job.get("origin") or selected_job.get("origin_resolved"),
             destination=selected_job.get("destination") or selected_job.get("destination_resolved"),
         )
@@ -152,7 +185,7 @@ def render_planner_tab(filtered_df: pd.DataFrame, conn: sqlite3.Connection) -> N
 
     proposal = build_planner_proposal(
         conn,
-        filtered_df,
+        planner_df,
         selection_mode=planning_mode,
         corridor=selected_corridor,
         preferred_template=selected_template,
@@ -187,12 +220,12 @@ def render_planner_tab(filtered_df: pd.DataFrame, conn: sqlite3.Connection) -> N
         st.dataframe(pd.DataFrame(selection_rows), width="stretch", hide_index=True)
     with selection_cols[1]:
         st.markdown("#### Routing preview")
-        _render_planner_map(selected_job=selected_job, corridor_rows=proposal["candidateRows"], filtered_df=filtered_df)
+        _render_planner_map(selected_job=selected_job, corridor_rows=proposal["candidateRows"], filtered_df=planner_df)
 
     site_points = build_planner_site_points(
         selected_job=selected_job,
         corridor_rows=proposal["candidateRows"],
-        filtered_df=filtered_df,
+        filtered_df=planner_df,
     )
     st.markdown("#### Site context")
     _render_planner_site_context(site_points=site_points)

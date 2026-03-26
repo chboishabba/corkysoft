@@ -9,6 +9,7 @@ from typing import IO, Iterable, Optional, Sequence
 
 import pandas as pd
 
+from ..lane_assignment import backfill_lane_assignments, ensure_lane_assignment_schema
 from .connection import DEFAULT_DB_PATH, connection_scope, get_connection
 from .parameters import (
     bootstrap_parameters,
@@ -2103,6 +2104,7 @@ def upsert_job_by_number(
 ) -> sqlite3.Row:
     """Insert or update a job keyed by the business ``job_number``."""
 
+    ensure_lane_assignment_schema(conn)
     ensure_dashboard_tables(conn)
     cleaned_job_number = str(job_number).strip()
     if not cleaned_job_number:
@@ -2174,6 +2176,7 @@ def upsert_job_by_number(
             populate_route_geometry(conn, [int(row["id"])], dataset="live")
         except Exception:
             pass
+        backfill_lane_assignments(conn, dataset="live", row_ids=[int(row["id"])])
         row = conn.execute(
             "SELECT * FROM jobs WHERE job_number = ?", (cleaned_job_number,)
         ).fetchone()

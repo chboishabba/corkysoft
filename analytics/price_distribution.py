@@ -1,6 +1,7 @@
 """Helpers for the price-distribution Streamlit view."""
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
@@ -25,6 +26,11 @@ from .db import (
     get_parameter_value,
     migrate_geojson_to_routes,
     set_parameter_value,
+)
+from .lane_assignment import (
+    LANE_STATUS_ASSIGNED,
+    backfill_lane_assignments,
+    ensure_lane_assignment_schema,
 )
 from .routing_provider import RoutingProvider, get_routing_provider
 from .routes_map import populate_route_geometry
@@ -80,6 +86,13 @@ LANE_WIDTH_CURVE_EXPONENT = 0.75
 ROUTE_WIDTH_METRE_SCALE = 0.25
 
 METRO_HISTOGRAM_BINS = 15
+HISTORICAL_INGEST_USABLE = "usable"
+HISTORICAL_INGEST_USABLE_WITH_GAPS = "usable_with_gaps"
+HISTORICAL_INGEST_NOT_READY = "not_ready"
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 PRICE_HISTORY_FREQUENCIES: dict[str, str] = {
@@ -705,6 +718,8 @@ def enrich_missing_route_coordinates(
 def import_historical_jobs_from_dataframe(
     conn,
     df: pd.DataFrame,
+    *,
+    source_name: str | None = None,
 ) -> tuple[int, int]:
     """Insert ``df`` rows into ``historical_jobs`` and return ``(inserted, skipped)``.
 
@@ -720,8 +735,20 @@ def import_historical_jobs_from_dataframe(
 
     ensure_global_parameters_table(conn)
     ensure_dashboard_tables(conn)
+    ensure_historical_ingest_tables(conn)
+    ensure_lane_assignment_schema(conn)
 
     if df.empty:
+        create_historical_ingest_run(
+            conn,
+            source_name=source_name or "dataframe_upload",
+            total_rows=0,
+            inserted_rows=0,
+            skipped_rows=0,
+            duplicate_rows=0,
+            invalid_rows=0,
+            issues=[],
+        )
         return 0, 0
 
     mapping = infer_columns(df)
@@ -773,18 +800,43 @@ def import_historical_jobs_from_dataframe(
 
     now = datetime.now(UTC).isoformat()
     to_insert: list[tuple[Any, ...]] = []
+    issues: list[dict[str, Any]] = []
     skipped = 0
+    duplicate_rows = 0
+    invalid_rows = 0
+    valid_rows = 0
 
     for idx in range(len(df)):
+        source_row_ref = _historical_source_row_ref(df, idx)
         job_date = dates.iloc[idx]
         if pd.isna(job_date):
+            invalid_rows += 1
             skipped += 1
+            issues.append(
+                _historical_ingest_issue(
+                    idx,
+                    source_row_ref,
+                    "missing_job_date",
+                    "error",
+                    "Row skipped because the job date could not be parsed.",
+                )
+            )
             continue
 
         origin_value = _clean_string(df.iloc[idx][mapping.origin])
         destination_value = _clean_string(df.iloc[idx][mapping.destination])
         if not origin_value or not destination_value:
+            invalid_rows += 1
             skipped += 1
+            issues.append(
+                _historical_ingest_issue(
+                    idx,
+                    source_row_ref,
+                    "missing_route_endpoint",
+                    "error",
+                    "Row skipped because origin or destination was missing.",
+                )
+            )
             continue
 
         client_value = _clean_string(df.iloc[idx][mapping.client]) if mapping.client else None
@@ -812,7 +864,17 @@ def import_historical_jobs_from_dataframe(
                 price_value = revenue_value / volume_value
 
         if price_value is None:
+            invalid_rows += 1
             skipped += 1
+            issues.append(
+                _historical_ingest_issue(
+                    idx,
+                    source_row_ref,
+                    "missing_price_signal",
+                    "error",
+                    "Row skipped because price per m3 could not be derived.",
+                )
+            )
             continue
 
         corridor_value: Optional[str]
@@ -828,6 +890,7 @@ def import_historical_jobs_from_dataframe(
             _clean_string(df.iloc[idx][dest_pc_col]) if dest_pc_col else None
         )
 
+        valid_rows += 1
         key = _build_job_identity_key(
             job_date.date().isoformat(),
             origin_value,
@@ -840,7 +903,17 @@ def import_historical_jobs_from_dataframe(
             final_cost_value,
         )
         if key in existing_keys:
+            duplicate_rows += 1
             skipped += 1
+            issues.append(
+                _historical_ingest_issue(
+                    idx,
+                    source_row_ref,
+                    "duplicate_row",
+                    "warning",
+                    "Row skipped because an identical historical job already exists.",
+                )
+            )
             continue
 
         existing_keys.add(key)
@@ -901,8 +974,298 @@ def import_historical_jobs_from_dataframe(
         except Exception:
             # Route enrichment is best-effort; imports should not fail because a provider is unavailable.
             pass
+        backfill_lane_assignments(conn, dataset="historical", row_ids=inserted_ids)
+
+    create_historical_ingest_run(
+        conn,
+        source_name=source_name or "dataframe_upload",
+        total_rows=len(df),
+        inserted_rows=len(to_insert),
+        skipped_rows=skipped,
+        duplicate_rows=duplicate_rows,
+        invalid_rows=invalid_rows,
+        valid_rows=valid_rows,
+        issues=issues,
+    )
 
     return len(to_insert), skipped
+
+
+def ensure_historical_ingest_tables(conn: sqlite3.Connection) -> None:
+    """Ensure durable ingest-run and row-issue tables exist."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS historical_ingest_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_name TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT NOT NULL,
+            total_rows INTEGER NOT NULL DEFAULT 0,
+            valid_rows INTEGER NOT NULL DEFAULT 0,
+            inserted_rows INTEGER NOT NULL DEFAULT 0,
+            skipped_rows INTEGER NOT NULL DEFAULT 0,
+            duplicate_rows INTEGER NOT NULL DEFAULT 0,
+            invalid_rows INTEGER NOT NULL DEFAULT 0,
+            issue_count INTEGER NOT NULL DEFAULT 0,
+            readiness_status TEXT NOT NULL,
+            coverage_summary TEXT NOT NULL DEFAULT '{}'
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS historical_ingest_issues (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL,
+            row_index INTEGER NOT NULL,
+            source_row_ref TEXT,
+            issue_code TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(run_id) REFERENCES historical_ingest_runs(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_historical_ingest_runs_completed
+        ON historical_ingest_runs(completed_at DESC, id DESC)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_historical_ingest_issues_run
+        ON historical_ingest_issues(run_id, severity, issue_code)
+        """
+    )
+    conn.commit()
+
+
+def create_historical_ingest_run(
+    conn: sqlite3.Connection,
+    *,
+    source_name: str,
+    total_rows: int,
+    inserted_rows: int,
+    skipped_rows: int,
+    duplicate_rows: int,
+    invalid_rows: int,
+    issues: Sequence[dict[str, Any]],
+    valid_rows: int | None = None,
+) -> dict[str, Any]:
+    """Persist one historical-ingest run and any row-level issues."""
+
+    ensure_historical_ingest_tables(conn)
+    started_at = _utc_now_iso()
+    completed_at = _utc_now_iso()
+    valid = int(valid_rows if valid_rows is not None else max(0, total_rows - invalid_rows))
+    coverage = summarize_historical_ingest_counts(
+        total_rows=total_rows,
+        valid_rows=valid,
+        inserted_rows=inserted_rows,
+        skipped_rows=skipped_rows,
+        duplicate_rows=duplicate_rows,
+        invalid_rows=invalid_rows,
+        issues=issues,
+    )
+    cursor = conn.execute(
+        """
+        INSERT INTO historical_ingest_runs (
+            source_name,
+            started_at,
+            completed_at,
+            total_rows,
+            valid_rows,
+            inserted_rows,
+            skipped_rows,
+            duplicate_rows,
+            invalid_rows,
+            issue_count,
+            readiness_status,
+            coverage_summary
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            source_name,
+            started_at,
+            completed_at,
+            int(total_rows),
+            valid,
+            int(inserted_rows),
+            int(skipped_rows),
+            int(duplicate_rows),
+            int(invalid_rows),
+            len(issues),
+            coverage["readinessStatus"],
+            json.dumps(coverage, sort_keys=True),
+        ),
+    )
+    run_id = int(cursor.lastrowid)
+    if issues:
+        conn.executemany(
+            """
+            INSERT INTO historical_ingest_issues (
+                run_id,
+                row_index,
+                source_row_ref,
+                issue_code,
+                severity,
+                message,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    run_id,
+                    int(issue["rowIndex"]),
+                    issue.get("sourceRowRef"),
+                    issue["issueCode"],
+                    issue["severity"],
+                    issue["message"],
+                    completed_at,
+                )
+                for issue in issues
+            ],
+        )
+    conn.commit()
+    return get_historical_ingest_run(conn, run_id)
+
+
+def summarize_historical_ingest_counts(
+    *,
+    total_rows: int,
+    valid_rows: int,
+    inserted_rows: int,
+    skipped_rows: int,
+    duplicate_rows: int,
+    invalid_rows: int,
+    issues: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    """Return coverage and readiness summary for one ingest batch."""
+
+    total = int(total_rows)
+    valid = int(valid_rows)
+    inserted = int(inserted_rows)
+    skipped = int(skipped_rows)
+    duplicates = int(duplicate_rows)
+    invalid = int(invalid_rows)
+    coverage_ratio = (valid / total) if total else 0.0
+    inserted_ratio = (inserted / total) if total else 0.0
+    issue_counts: dict[str, int] = {}
+    for issue in issues:
+        code = str(issue["issueCode"])
+        issue_counts[code] = issue_counts.get(code, 0) + 1
+    top_issue_codes = [
+        {"issueCode": code, "count": count}
+        for code, count in sorted(issue_counts.items(), key=lambda item: (-item[1], item[0]))
+    ][:5]
+    if valid == 0:
+        readiness = HISTORICAL_INGEST_NOT_READY
+    elif coverage_ratio >= 0.95:
+        readiness = HISTORICAL_INGEST_USABLE
+    elif coverage_ratio >= 0.5:
+        readiness = HISTORICAL_INGEST_USABLE_WITH_GAPS
+    else:
+        readiness = HISTORICAL_INGEST_NOT_READY
+    return {
+        "totalRows": total,
+        "validRows": valid,
+        "insertedRows": inserted,
+        "skippedRows": skipped,
+        "duplicateRows": duplicates,
+        "invalidRows": invalid,
+        "issueCount": len(issues),
+        "coverageRatio": round(coverage_ratio, 4),
+        "insertedRatio": round(inserted_ratio, 4),
+        "readinessStatus": readiness,
+        "topIssueCodes": top_issue_codes,
+    }
+
+
+def get_historical_ingest_run(conn: sqlite3.Connection, run_id: int) -> dict[str, Any]:
+    """Return one historical-ingest run with issues."""
+
+    ensure_historical_ingest_tables(conn)
+    cursor = conn.execute(
+        """
+        SELECT
+            id,
+            source_name,
+            started_at,
+            completed_at,
+            total_rows,
+            valid_rows,
+            inserted_rows,
+            skipped_rows,
+            duplicate_rows,
+            invalid_rows,
+            issue_count,
+            readiness_status,
+            coverage_summary
+        FROM historical_ingest_runs
+        WHERE id = ?
+        """,
+        (int(run_id),),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        raise ValueError(f"Unknown historical ingest run: {run_id}")
+    columns = [column[0] for column in cursor.description or []]
+    payload = dict(zip(columns, row, strict=False))
+    payload["coverage_summary"] = json.loads(payload["coverage_summary"])
+    issue_cursor = conn.execute(
+        """
+        SELECT row_index, source_row_ref, issue_code, severity, message, created_at
+        FROM historical_ingest_issues
+        WHERE run_id = ?
+        ORDER BY row_index, id
+        """,
+        (int(run_id),),
+    )
+    issue_columns = [column[0] for column in issue_cursor.description or []]
+    payload["issues"] = [dict(zip(issue_columns, issue_row, strict=False)) for issue_row in issue_cursor.fetchall()]
+    return payload
+
+
+def latest_historical_ingest_summary(conn: sqlite3.Connection) -> dict[str, Any] | None:
+    """Return the most recent historical-ingest run summary if present."""
+
+    ensure_historical_ingest_tables(conn)
+    row = conn.execute(
+        "SELECT id FROM historical_ingest_runs ORDER BY completed_at DESC, id DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+    return get_historical_ingest_run(conn, int(row[0]))
+
+
+def _historical_ingest_issue(
+    row_index: int,
+    source_row_ref: str | None,
+    issue_code: str,
+    severity: str,
+    message: str,
+) -> dict[str, Any]:
+    return {
+        "rowIndex": int(row_index),
+        "sourceRowRef": source_row_ref,
+        "issueCode": issue_code,
+        "severity": severity,
+        "message": message,
+    }
+
+
+def _historical_source_row_ref(df: pd.DataFrame, idx: int) -> str | None:
+    for column in ("id", "job_id", "job_number", "reference", "external_id"):
+        if column in df.columns:
+            value = _clean_string(df.iloc[idx][column])
+            if value:
+                return value
+    return str(idx)
 
 
 def ensure_base_cost_parameters(conn) -> BaseCostConfig:
@@ -1028,6 +1391,12 @@ def _prepare_loaded_jobs(
         return df, mapping
 
     working = df.copy()
+    if "lane_assignment_status" not in working.columns:
+        working["lane_assignment_status"] = ""
+    if "lane_key" not in working.columns:
+        working["lane_key"] = ""
+    if "corridor_group_key" not in working.columns:
+        working["corridor_group_key"] = ""
 
     if start_date is not None and not isinstance(start_date, pd.Timestamp):
         start_date = pd.Timestamp(start_date)
@@ -1177,6 +1546,8 @@ def load_historical_jobs(
     ensure_global_parameters_table(conn)
     migrate_geojson_to_routes(conn)
     base_costs = ensure_base_cost_parameters(conn)
+    ensure_lane_assignment_schema(conn)
+    backfill_lane_assignments(conn, dataset="historical")
 
     query = _historical_jobs_query()
     try:
@@ -1226,6 +1597,8 @@ def load_quotes(
 
     ensure_global_parameters_table(conn)
     base_costs = ensure_base_cost_parameters(conn)
+    ensure_lane_assignment_schema(conn)
+    backfill_lane_assignments(conn, dataset="live")
 
     try:
         df = pd.read_sql_query(
@@ -1753,6 +2126,34 @@ def aggregate_corridor_performance(
 
     working = df.copy()
     working["corridor_pair"] = _resolve_corridor_pairs(working)
+    if {
+        "lane_assignment_status",
+        "origin_cluster_key",
+        "destination_cluster_key",
+    }.issubset(working.columns):
+        assigned_mask = (
+            working["lane_assignment_status"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .eq(LANE_STATUS_ASSIGNED)
+        )
+        origin_cluster = working["origin_cluster_key"].fillna("").astype(str).str.strip()
+        destination_cluster = (
+            working["destination_cluster_key"].fillna("").astype(str).str.strip()
+        )
+        canonical_pairs = pd.Series(
+            [
+                " <-> ".join(sorted((origin_value, destination_value)))
+                if origin_value and destination_value
+                else ""
+                for origin_value, destination_value in zip(origin_cluster, destination_cluster)
+            ],
+            index=working.index,
+        )
+        valid_assigned = assigned_mask & canonical_pairs.ne("")
+        working.loc[valid_assigned, "corridor_pair"] = canonical_pairs.loc[valid_assigned]
 
     if "price_per_m3" in working:
         working["_price_per_m3"] = pd.to_numeric(working["price_per_m3"], errors="coerce")
@@ -2762,6 +3163,10 @@ def prepare_profitability_route_data(
     map_df["_route_label"] = map_df.apply(_route_display_name, axis=1)
 
     def _lane_identifier(row: pd.Series) -> str:
+        if str(row.get("lane_assignment_status", "")).strip().lower() == LANE_STATUS_ASSIGNED:
+            lane_key = str(row.get("lane_key", "")).strip()
+            if lane_key:
+                return lane_key
         label = row.get("_route_label") or "Unknown corridor"
         origin = (row.get("_origin_lat"), row.get("_origin_lon"))
         destination = (row.get("_dest_lat"), row.get("_dest_lon"))

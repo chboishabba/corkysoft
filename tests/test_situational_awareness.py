@@ -89,6 +89,8 @@ def test_update_adaptive_policy_from_disruptions_applies_bounded_updates() -> No
 
     result = update_adaptive_policy_from_disruptions(
         conn,
+        actor="ops_manager",
+        approval_mode="proposal",
         lookback=timedelta(hours=4),
         max_delta=0.5,
         weather_scale=0.2,
@@ -96,6 +98,8 @@ def test_update_adaptive_policy_from_disruptions_applies_bounded_updates() -> No
         traffic_scale=0.12,
     )
 
+    assert result["proposal_id"] > 0
+    assert result["status"] == "pending_review"
     assert result["weather_risk_multiplier"] == pytest.approx(1.08)
     assert result["closure_delay_factor"] == pytest.approx(1.045)
     assert result["lane_eta_multiplier"] == pytest.approx(1.024)
@@ -104,4 +108,4 @@ def test_update_adaptive_policy_from_disruptions_applies_bounded_updates() -> No
         "SELECT key, value_numeric FROM global_parameters WHERE key = ?",
         ("adaptive.weather_risk_multiplier",),
     ).fetchone()
-    assert row is not None and row[1] == pytest.approx(1.08)
+    assert row is not None and row[1] == pytest.approx(1.0)

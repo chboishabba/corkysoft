@@ -26,7 +26,7 @@ Locked boundary:
 | Subcontractor / third-party bill reconciliation | Reconcile inbound third-party bills against operational truth | `docs/job_cost_and_invoice_reconciliation.md`, `docs/operations_diary_workflow.md` | Implemented as review/status records | No direct SB surface | Define downstream `subcontractor_bill_review` and exception envelopes | Corkysoft now, cross-project later |
 | Late holiday-period bill handling | Review Christmas / New Year subcontractor bills after the fact | `docs/operations_diary_workflow.md`, `docs/job_cost_and_invoice_reconciliation.md` | Covered by implemented bill review, exception categories, and unresolved-exposure summary semantics | No direct SB surface yet | Add fuller time-oriented downstream trace semantics after local aging fields are in place | Corkysoft now, cross-project later |
 | Paperwork / compliance-heavy workflow | Make international / paperwork-heavy jobs explicit rather than implicit | `docs/operator_user_stories.md`, `docs/commercial_workflow_lifecycle.md`, `docs/positioning.md` | Documented only; not implemented as a full workflow | Conceptual strategy only | Add a dedicated Corkysoft workflow spec before any code or SB export | Corkysoft |
-| Downstream SB / ITIR evidence export for diary/reconciliation | Preserve reviewed operational truth in a cross-source interpretible log | This document plus `docs/sb_itir_downstream_contract.md` | Not implemented yet, except analogous call-intelligence outbox pattern | Conceptual, partially informed by call-intelligence design | Define transport-agnostic envelope contract and later add outbox worker | Cross-project |
+| Downstream SB / ITIR evidence export for diary/reconciliation | Preserve reviewed operational truth in a cross-source interpretible log | This document plus `docs/sb_itir_downstream_contract.md` | Implemented as a Corkysoft-native observer outbox for task/review families, plus explicit export for planning snapshots and reconciliation exceptions | Conceptual shape now grounded in the local observer export and call-intelligence pattern | Decide delivery/worker posture when deployment matters | Corkysoft now, cross-project later |
 
 ## What Is Already Solid In Corkysoft
 
@@ -45,9 +45,11 @@ Locked boundary:
 - International/compliance-heavy paperwork workflow remains product intent,
   backlog, and user-story material. It is not yet a concrete implementation
   slice.
-- SB does not yet receive diary/reconciliation exports from Corkysoft.
+- Deployment-oriented delivery and receipt semantics are still pending even
+  though Corkysoft now emits the observer envelopes locally.
 - ITIR does not yet define a removals-specific diary/reconciliation interface
-  beyond the general orchestration boundary.
+  beyond the general orchestration boundary, and JMD remains out of scope for
+  Corkysoft.
 
 ## Current Cross-Project Truth
 

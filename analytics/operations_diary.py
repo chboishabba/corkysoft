@@ -1,7 +1,10 @@
 """Manager-facing operations diary helpers."""
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
+import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -29,6 +32,12 @@ SUBCONTRACTOR_BILL_STATUSES = (
     "bill_received",
     "bill_reconciled",
     "bill_exception",
+)
+OBSERVER_AUTHORITY_CLASSES = (
+    "operational_truth",
+    "reviewed_summary",
+    "observed_actual",
+    "downstream_projection",
 )
 
 
@@ -61,6 +70,177 @@ def _date_range(mode: str, anchor_date: str) -> tuple[str, str]:
         end = start + timedelta(days=6)
         return start.isoformat(), end.isoformat()
     return current.isoformat(), current.isoformat()
+
+
+def _json_dumps(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _observer_row_to_event(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+    record = dict(row)
+    event_time = record["event_time"]
+    return {
+        "id": int(record["id"]),
+        "surface": "observer",
+        "eventId": record["event_id"],
+        "sourceComponent": record["source_system"],
+        "sourceSystem": record["source_system"],
+        "sourceEntityId": record["source_entity_id"],
+        "eventType": record["event_type"],
+        "eventFamily": record["event_family"],
+        "idempotencyKey": record["idempotency_key"],
+        "correlationId": record["correlation_key"],
+        "correlationKey": record["correlation_key"],
+        "causationId": None,
+        "actorRef": record["actor_ref"],
+        "authorityClass": record["authority_class"],
+        "summary": record["summary"],
+        "status": record["status"],
+        "objectRefs": json.loads(record["object_refs_json"]),
+        "provenanceRefs": json.loads(record["provenance_refs_json"]),
+        "evidenceRefs": json.loads(record["evidence_refs_json"]),
+        "payload": json.loads(record["payload_json"]),
+        "payloadHash": record["payload_hash"],
+        "occurredAt": event_time,
+        "eventTime": event_time,
+        "ingestedAt": record["recorded_at"],
+        "recordedAt": record["recorded_at"],
+        "cursor": f"{event_time}|observer|{record['event_id']}",
+    }
+
+
+def _emit_observer_event(
+    conn: sqlite3.Connection,
+    *,
+    source_entity_id: str,
+    event_family: str,
+    event_type: str,
+    actor_ref: str | None,
+    authority_class: str,
+    summary: str,
+    status: str | None,
+    object_refs: dict[str, Any],
+    provenance_refs: list[dict[str, Any]],
+    evidence_refs: list[dict[str, Any]],
+    payload: dict[str, Any],
+    correlation_key: str | None = None,
+    event_time: str | None = None,
+) -> dict[str, Any]:
+    ensure_dashboard_tables(conn)
+    safe_authority = authority_class if authority_class in OBSERVER_AUTHORITY_CLASSES else "reviewed_summary"
+    effective_event_time = event_time or _utc_now_iso()
+    recorded_at = _utc_now_iso()
+    object_refs_json = _json_dumps(object_refs)
+    provenance_refs_json = _json_dumps(provenance_refs)
+    evidence_refs_json = _json_dumps(evidence_refs)
+    payload_json = _json_dumps(payload)
+    payload_hash = hashlib.sha256(
+        _json_dumps(
+            {
+                "eventFamily": event_family,
+                "eventType": event_type,
+                "summary": summary,
+                "status": status,
+                "objectRefs": object_refs,
+                "payload": payload,
+            }
+        ).encode("utf-8")
+    ).hexdigest()
+    idempotency_key = f"corkysoft:observer:{event_family}:{source_entity_id}:{payload_hash}"
+    event_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO observer_outbox_events (
+            event_id,
+            source_system,
+            source_entity_id,
+            event_family,
+            event_type,
+            idempotency_key,
+            correlation_key,
+            actor_ref,
+            authority_class,
+            summary,
+            status,
+            object_refs_json,
+            provenance_refs_json,
+            evidence_refs_json,
+            payload_json,
+            payload_hash,
+            event_time,
+            recorded_at
+        ) VALUES (?, 'corkysoft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event_id,
+            source_entity_id,
+            event_family,
+            event_type,
+            idempotency_key,
+            correlation_key,
+            actor_ref,
+            safe_authority,
+            summary,
+            status,
+            object_refs_json,
+            provenance_refs_json,
+            evidence_refs_json,
+            payload_json,
+            payload_hash,
+            effective_event_time,
+            recorded_at,
+        ),
+    )
+    row = conn.execute(
+        "SELECT * FROM observer_outbox_events WHERE idempotency_key = ?",
+        (idempotency_key,),
+    ).fetchone()
+    return _observer_row_to_event(row)
+
+
+def list_observer_outbox_events(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 100,
+    event_family: str | None = None,
+    job_id: int | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
+) -> list[dict[str, Any]]:
+    ensure_dashboard_tables(conn)
+    filters: list[str] = []
+    params: list[Any] = []
+    if event_family:
+        filters.append("event_family = ?")
+        params.append(event_family)
+    if start_time:
+        filters.append("event_time >= ?")
+        params.append(start_time)
+    if end_time:
+        filters.append("event_time <= ?")
+        params.append(end_time)
+    where = f"WHERE {' AND '.join(filters)}" if filters else ""
+    fetch_limit = max(int(limit) * 4, int(limit))
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM observer_outbox_events
+        {where}
+        ORDER BY recorded_at DESC, id DESC
+        LIMIT ?
+        """,
+        [*params, fetch_limit],
+    ).fetchall()
+    payload = [_observer_row_to_event(row) for row in rows]
+    if job_id is not None:
+        target = int(job_id)
+        payload = [
+            row
+            for row in payload
+            if int(row["objectRefs"].get("job_id") or row["payload"].get("jobId") or -1) == target
+            or target in [int(value) for value in row["objectRefs"].get("job_ids", [])]
+        ]
+    return payload[:limit]
 
 
 def list_operations_diary_tasks(
@@ -118,6 +298,7 @@ def upsert_operations_diary_task(
     planned_start: str | None = None,
     planned_end: str | None = None,
     notes: str | None = None,
+    actor_ref: str | None = None,
 ) -> dict[str, Any]:
     ensure_dashboard_tables(conn)
     if task_scope not in DIARY_TASK_SCOPES:
@@ -125,6 +306,7 @@ def upsert_operations_diary_task(
     if status not in DIARY_TASK_STATUSES:
         raise ValueError(f"Unsupported task status: {status}")
     now = _utc_now_iso()
+    is_create = task_id is None
     if task_id is None:
         row_id = conn.execute(
             """
@@ -189,13 +371,82 @@ def upsert_operations_diary_task(
             ),
         )
         row_id = int(task_id)
+    row = next(row for row in list_operations_diary_tasks(conn) if int(row["id"]) == int(row_id))
+    _emit_observer_event(
+        conn,
+        source_entity_id=f"diary_task:{row_id}",
+        event_family="diary_task_event",
+        event_type="diary_task_event",
+        actor_ref=actor_ref,
+        authority_class="operational_truth",
+        summary=f"Diary task {'created' if is_create else 'updated'}: {row['title']}",
+        status=row.get("status"),
+        object_refs={
+            "task_id": int(row_id),
+            "job_id": int(row["job_id"]) if row.get("job_id") is not None else None,
+            "segment_id": int(row["segment_id"]) if row.get("segment_id") is not None else None,
+            "worker_id": int(row["assigned_worker_id"]) if row.get("assigned_worker_id") is not None else None,
+            "truck_id": row.get("assigned_truck_id"),
+        },
+        provenance_refs=[{"kind": "table_row", "table": "operations_diary_tasks", "rowId": int(row_id)}],
+        evidence_refs=[],
+        payload={
+            "action": "created" if is_create else "updated",
+            "taskId": int(row_id),
+            "jobId": int(row["job_id"]) if row.get("job_id") is not None else None,
+            "segmentId": int(row["segment_id"]) if row.get("segment_id") is not None else None,
+            "taskDate": row.get("task_date"),
+            "taskScope": row.get("task_scope"),
+            "taskType": row.get("task_type"),
+            "title": row.get("title"),
+            "status": row.get("status"),
+            "plannedStart": row.get("planned_start"),
+            "plannedEnd": row.get("planned_end"),
+            "notes": row.get("notes"),
+        },
+        correlation_key=f"job:{int(row['job_id'])}" if row.get("job_id") is not None else f"task:{int(row_id)}",
+        event_time=row.get("updated_at") or now,
+    )
     conn.commit()
-    return next(row for row in list_operations_diary_tasks(conn) if int(row["id"]) == int(row_id))
+    return row
 
 
-def delete_operations_diary_task(conn: sqlite3.Connection, *, task_id: int) -> None:
+def delete_operations_diary_task(conn: sqlite3.Connection, *, task_id: int, actor_ref: str | None = None) -> None:
     ensure_dashboard_tables(conn)
+    existing = conn.execute("SELECT * FROM operations_diary_tasks WHERE id = ?", (int(task_id),)).fetchone()
     conn.execute("DELETE FROM operations_diary_tasks WHERE id = ?", (int(task_id),))
+    if existing is not None:
+        row = dict(existing)
+        _emit_observer_event(
+            conn,
+            source_entity_id=f"diary_task:{int(task_id)}",
+            event_family="diary_task_event",
+            event_type="diary_task_event",
+            actor_ref=actor_ref,
+            authority_class="operational_truth",
+            summary=f"Diary task deleted: {row.get('title')}",
+            status="deleted",
+            object_refs={
+                "task_id": int(task_id),
+                "job_id": int(row["job_id"]) if row.get("job_id") is not None else None,
+                "segment_id": int(row["segment_id"]) if row.get("segment_id") is not None else None,
+            },
+            provenance_refs=[{"kind": "table_row", "table": "operations_diary_tasks", "rowId": int(task_id)}],
+            evidence_refs=[],
+            payload={
+                "action": "deleted",
+                "taskId": int(task_id),
+                "jobId": int(row["job_id"]) if row.get("job_id") is not None else None,
+                "segmentId": int(row["segment_id"]) if row.get("segment_id") is not None else None,
+                "taskDate": row.get("task_date"),
+                "taskScope": row.get("task_scope"),
+                "taskType": row.get("task_type"),
+                "title": row.get("title"),
+                "status": row.get("status"),
+                "notes": row.get("notes"),
+            },
+            correlation_key=f"job:{int(row['job_id'])}" if row.get("job_id") is not None else f"task:{int(task_id)}",
+        )
     conn.commit()
 
 
@@ -264,8 +515,33 @@ def upsert_customer_invoice_review(
             now,
         ),
     )
+    row = next(row for row in list_customer_invoice_reviews(conn, job_id=int(job_id)))
+    _emit_observer_event(
+        conn,
+        source_entity_id=f"invoice_review:{int(row['id'])}",
+        event_family="customer_invoice_review",
+        event_type="customer_invoice_review",
+        actor_ref=reviewed_by,
+        authority_class="reviewed_summary",
+        summary=f"Customer invoice review {invoice_status} for job {int(job_id)}",
+        status=invoice_status,
+        object_refs={"invoice_review_id": int(row["id"]), "job_id": int(job_id)},
+        provenance_refs=[{"kind": "table_row", "table": "customer_invoice_reviews", "rowId": int(row["id"])}],
+        evidence_refs=[{"kind": "table_row", "table": "jobs", "rowId": int(job_id)}],
+        payload={
+            "jobId": int(job_id),
+            "invoiceReviewId": int(row["id"]),
+            "invoiceStatus": invoice_status,
+            "invoiceReference": invoice_reference,
+            "invoiceDate": invoice_date,
+            "invoiceAmount": invoice_amount,
+            "note": note,
+        },
+        correlation_key=f"job:{int(job_id)}",
+        event_time=row.get("updated_at") or now,
+    )
     conn.commit()
-    return next(row for row in list_customer_invoice_reviews(conn, job_id=int(job_id)))
+    return row
 
 
 def list_subcontractor_bill_reviews(
@@ -372,8 +648,224 @@ def upsert_subcontractor_bill_review(
             ),
         )
         row_id = int(bill_id)
+    row = next(row for row in list_subcontractor_bill_reviews(conn) if int(row["id"]) == int(row_id))
+    _emit_observer_event(
+        conn,
+        source_entity_id=f"bill_review:{row_id}",
+        event_family="subcontractor_bill_review",
+        event_type="subcontractor_bill_review",
+        actor_ref=reviewed_by,
+        authority_class="reviewed_summary",
+        summary=f"Subcontractor bill review {bill_status} for job {int(job_id)}",
+        status=bill_status,
+        object_refs={
+            "bill_review_id": int(row_id),
+            "job_id": int(job_id),
+            "segment_id": int(segment_id) if segment_id is not None else None,
+            "supplier_id": int(supplier_id) if supplier_id is not None else None,
+        },
+        provenance_refs=[{"kind": "table_row", "table": "subcontractor_bill_reviews", "rowId": int(row_id)}],
+        evidence_refs=[{"kind": "table_row", "table": "jobs", "rowId": int(job_id)}],
+        payload={
+            "jobId": int(job_id),
+            "billReviewId": int(row_id),
+            "segmentId": int(segment_id) if segment_id is not None else None,
+            "supplierId": int(supplier_id) if supplier_id is not None else None,
+            "billStatus": bill_status,
+            "billReference": bill_reference,
+            "billDate": bill_date,
+            "amount": amount,
+            "note": note,
+        },
+        correlation_key=f"job:{int(job_id)}",
+        event_time=row.get("updated_at") or now,
+    )
     conn.commit()
-    return next(row for row in list_subcontractor_bill_reviews(conn) if int(row["id"]) == int(row_id))
+    return row
+
+
+def export_operations_diary_observer_events(
+    conn: sqlite3.Connection,
+    *,
+    anchor_date: str,
+    view_mode: str = "day",
+    focus_job_id: int | None = None,
+    actor_ref: str | None = None,
+    include_planning_snapshot: bool = True,
+    include_reconciliation_exceptions: bool = True,
+) -> dict[str, Any]:
+    ensure_dashboard_tables(conn)
+    diary = build_operations_diary(conn, anchor_date=anchor_date, view_mode=view_mode, focus_job_id=focus_job_id)
+    emitted: list[dict[str, Any]] = []
+    job_rows = diary["jobs"]
+    scoped_job_ids = [int(row["jobId"]) for row in job_rows]
+    invoice_reviews = {
+        int(row["job_id"]): row
+        for row in list_customer_invoice_reviews(conn)
+        if int(row["job_id"]) in scoped_job_ids
+    }
+    bill_reviews = [
+        row
+        for row in list_subcontractor_bill_reviews(conn)
+        if int(row["job_id"]) in scoped_job_ids
+    ]
+    exposure = diary["reconciliationExposure"]
+    active_supplier_rows = {
+        (
+            int(row["jobId"]),
+            int(row["supplierId"]) if row.get("supplierId") is not None else None,
+            str(row.get("reference") or ""),
+            str(row.get("status") or ""),
+        ): row
+        for row in exposure["activeSupplierRows"]
+    }
+
+    if include_planning_snapshot:
+        emitted.append(
+            _emit_observer_event(
+                conn,
+                source_entity_id=f"planning_snapshot:{view_mode}:{anchor_date}:{focus_job_id or 'all'}",
+                event_family="planning_snapshot",
+                event_type="planning_snapshot",
+                actor_ref=actor_ref,
+                authority_class="reviewed_summary",
+                summary=f"{view_mode.title()} planning snapshot for {anchor_date}",
+                status="current",
+                object_refs={
+                    "job_id": int(focus_job_id) if focus_job_id is not None else None,
+                    "job_ids": scoped_job_ids,
+                },
+                provenance_refs=[],
+                evidence_refs=[{"kind": "job", "rowId": int(job_id)} for job_id in scoped_job_ids],
+                payload={
+                    "anchorDate": diary["anchorDate"],
+                    "viewMode": diary["viewMode"],
+                    "startDate": diary["startDate"],
+                    "endDate": diary["endDate"],
+                    "focusJobId": int(focus_job_id) if focus_job_id is not None else None,
+                    "summary": diary["summary"],
+                    "jobs": [
+                        {
+                            "jobId": int(row["jobId"]),
+                            "jobClient": row.get("jobClient"),
+                            "invoiceStatus": row.get("invoiceStatus"),
+                            "billStatus": row.get("billStatus"),
+                            "taskCount": int(row.get("taskCount") or 0),
+                        }
+                        for row in job_rows
+                    ],
+                    "reconciliationExposure": {
+                        "supplierUnresolvedTotal": exposure["supplierUnresolvedTotal"],
+                        "customerOpenTotal": exposure["customerOpenTotal"],
+                        "oldestSupplierAgeDays": exposure["oldestSupplierAgeDays"],
+                        "longestSupplierLatencyDays": exposure["longestSupplierLatencyDays"],
+                    },
+                },
+                correlation_key=f"operations_diary:{view_mode}:{anchor_date}",
+                event_time=f"{diary['endDate']}T23:59:59+00:00",
+            )
+        )
+
+    if include_reconciliation_exceptions:
+        for job in job_rows:
+            job_id = int(job["jobId"])
+            invoice_status = str(job.get("invoiceStatus") or "")
+            if invoice_status in {"not_ready", "reconciliation_warning"}:
+                review = invoice_reviews.get(job_id)
+                emitted.append(
+                    _emit_observer_event(
+                        conn,
+                        source_entity_id=f"reconciliation_exception:invoice:{job_id}:{invoice_status}",
+                        event_family="reconciliation_exception",
+                        event_type="reconciliation_exception",
+                        actor_ref=actor_ref or (review.get("reviewed_by") if review else None),
+                        authority_class="reviewed_summary",
+                        summary=f"Invoice exception for job {job_id}: {invoice_status}",
+                        status="open",
+                        object_refs={
+                            "job_id": job_id,
+                            "invoice_review_id": int(review["id"]) if review is not None else None,
+                        },
+                        provenance_refs=(
+                            [{"kind": "table_row", "table": "customer_invoice_reviews", "rowId": int(review["id"])}]
+                            if review is not None
+                            else []
+                        ),
+                        evidence_refs=[{"kind": "table_row", "table": "jobs", "rowId": job_id}],
+                        payload={
+                            "exceptionKind": "customer_invoice",
+                            "jobId": job_id,
+                            "jobClient": job.get("jobClient"),
+                            "invoiceStatus": invoice_status,
+                            "taskCount": int(job.get("taskCount") or 0),
+                            "note": review.get("note") if review else None,
+                            "anchorDate": diary["anchorDate"],
+                            "viewMode": diary["viewMode"],
+                        },
+                        correlation_key=f"job:{job_id}",
+                    )
+                )
+        for review in bill_reviews:
+            bill_status = str(review.get("bill_status") or "")
+            if bill_status not in {"bill_received", "bill_exception"}:
+                continue
+            key = (
+                int(review["job_id"]),
+                int(review["supplier_id"]) if review.get("supplier_id") is not None else None,
+                str(review.get("bill_reference") or ""),
+                bill_status,
+            )
+            exposure_row = active_supplier_rows.get(key)
+            emitted.append(
+                _emit_observer_event(
+                    conn,
+                    source_entity_id=f"reconciliation_exception:bill:{int(review['id'])}:{bill_status}",
+                    event_family="reconciliation_exception",
+                    event_type="reconciliation_exception",
+                    actor_ref=actor_ref or review.get("reviewed_by"),
+                    authority_class="reviewed_summary",
+                    summary=f"Supplier bill exception for job {int(review['job_id'])}: {bill_status}",
+                    status="open",
+                    object_refs={
+                        "job_id": int(review["job_id"]),
+                        "bill_review_id": int(review["id"]),
+                        "segment_id": int(review["segment_id"]) if review.get("segment_id") is not None else None,
+                        "supplier_id": int(review["supplier_id"]) if review.get("supplier_id") is not None else None,
+                    },
+                    provenance_refs=[{"kind": "table_row", "table": "subcontractor_bill_reviews", "rowId": int(review["id"])}],
+                    evidence_refs=[{"kind": "table_row", "table": "jobs", "rowId": int(review["job_id"])}],
+                    payload={
+                        "exceptionKind": "supplier_bill",
+                        "jobId": int(review["job_id"]),
+                        "supplierId": int(review["supplier_id"]) if review.get("supplier_id") is not None else None,
+                        "supplierName": review.get("supplier_name"),
+                        "billReviewId": int(review["id"]),
+                        "billStatus": bill_status,
+                        "billReference": review.get("bill_reference"),
+                        "billDate": review.get("bill_date"),
+                        "amount": review.get("amount"),
+                        "unresolvedAgeDays": exposure_row.get("unresolvedAgeDays") if exposure_row else None,
+                        "latencyDays": exposure_row.get("latencyDays") if exposure_row else None,
+                        "note": review.get("note"),
+                        "anchorDate": diary["anchorDate"],
+                        "viewMode": diary["viewMode"],
+                    },
+                    correlation_key=f"job:{int(review['job_id'])}",
+                    event_time=review.get("updated_at"),
+                )
+            )
+    conn.commit()
+    counts: dict[str, int] = {}
+    for row in emitted:
+        family = str(row["eventFamily"])
+        counts[family] = counts.get(family, 0) + 1
+    return {
+        "anchorDate": diary["anchorDate"],
+        "viewMode": diary["viewMode"],
+        "emittedCount": len(emitted),
+        "byFamily": counts,
+        "events": emitted,
+    }
 
 
 def _derive_invoice_status(record: dict[str, Any] | None, board_row: dict[str, Any]) -> str:
@@ -768,6 +1260,8 @@ __all__ = [
     "build_staff_usage_for_job",
     "build_vehicle_usage_for_job",
     "delete_operations_diary_task",
+    "export_operations_diary_observer_events",
+    "list_observer_outbox_events",
     "list_customer_invoice_reviews",
     "list_operations_diary_tasks",
     "list_subcontractor_bill_reviews",

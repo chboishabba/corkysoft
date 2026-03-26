@@ -61,6 +61,10 @@ from analytics.operations_assignment import (
     update_operations_policy,
 )
 from analytics.operations_workbook import sync_operations_workbook
+from analytics.operations_diary import (
+    export_operations_diary_observer_events,
+    list_observer_outbox_events,
+)
 from corkysoft.call_ops import (
     AMBIENT_SESSION_STATUSES,
     CALL_DIRECTIONS,
@@ -1219,18 +1223,48 @@ class WorkerTimeCaptureResponse(BaseModel):
 
 class StateEgressEventResponse(BaseModel):
     id: int
+    surface: Optional[str] = None
     eventId: str
     sourceComponent: str
+    sourceSystem: Optional[str] = None
     sourceEntityId: str
     eventType: str
+    eventFamily: Optional[str] = None
     idempotencyKey: str
     correlationId: Optional[str] = None
+    correlationKey: Optional[str] = None
     causationId: Optional[str] = None
+    actorRef: Optional[str] = None
     authorityClass: str
+    summary: Optional[str] = None
+    status: Optional[str] = None
+    objectRefs: Dict[str, Any] = Field(default_factory=dict)
+    provenanceRefs: List[Dict[str, Any]] = Field(default_factory=list)
+    evidenceRefs: List[Dict[str, Any]] = Field(default_factory=list)
     payload: Dict[str, Any] = Field(default_factory=dict)
     payloadHash: str
+    eventTime: Optional[str] = None
     occurredAt: str
+    recordedAt: Optional[str] = None
     ingestedAt: str
+    cursor: Optional[str] = None
+
+
+class OperationsDiaryObserverExportRequest(BaseModel):
+    anchorDate: str
+    viewMode: str = "day"
+    focusJobId: Optional[int] = None
+    actorRef: Optional[str] = None
+    includePlanningSnapshot: bool = True
+    includeReconciliationExceptions: bool = True
+
+
+class OperationsDiaryObserverExportResponse(BaseModel):
+    anchorDate: str
+    viewMode: str
+    emittedCount: int
+    byFamily: Dict[str, int] = Field(default_factory=dict)
+    events: List[StateEgressEventResponse] = Field(default_factory=list)
 
 
 class AmbientSessionCreateRequest(BaseModel):
@@ -3078,10 +3112,99 @@ def post_worker_time_event_decision(
 )
 def get_state_egress_events(
     limit: int = Query(default=100, ge=1, le=500, description="Maximum rows to return"),
+    surface: str = Query(default="all", description="all, call_ops, or observer"),
+    event_family: Optional[str] = Query(default=None, alias="eventFamily", description="Optional observer event family"),
+    job_id: Optional[int] = Query(default=None, alias="jobId", description="Optional job identifier filter"),
+    start_time: Optional[str] = Query(default=None, alias="startTime", description="Earliest event time to return"),
+    end_time: Optional[str] = Query(default=None, alias="endTime", description="Latest event time to return"),
+    cursor: Optional[str] = Query(default=None, description="Opaque cursor returned by a previous listing call"),
 ) -> List[StateEgressEventResponse]:
     with connection_scope(_current_db_path()) as conn:
-        rows = list_state_egress_events(conn, limit=limit)
+        payload: list[dict[str, Any]] = []
+        normalized_surface = str(surface or "all").strip().lower()
+        include_call_ops = normalized_surface in {"all", "call_ops"}
+        include_observer = normalized_surface in {"all", "observer"}
+        if include_call_ops:
+            for row in list_state_egress_events(conn, limit=max(limit * 3, limit)):
+                row = {
+                    **row,
+                    "surface": "call_ops",
+                    "sourceSystem": row["sourceComponent"],
+                    "eventFamily": row["eventType"],
+                    "correlationKey": row.get("correlationId"),
+                    "actorRef": None,
+                    "summary": None,
+                    "status": None,
+                    "objectRefs": {},
+                    "provenanceRefs": [],
+                    "evidenceRefs": [],
+                    "eventTime": row["occurredAt"],
+                    "recordedAt": row["ingestedAt"],
+                    "cursor": f"{row['occurredAt']}|call_ops|{row['eventId']}",
+                }
+                payload.append(row)
+        if include_observer:
+            payload.extend(
+                list_observer_outbox_events(
+                    conn,
+                    limit=max(limit * 3, limit),
+                    event_family=event_family,
+                    job_id=job_id,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+            )
+        if job_id is not None and include_call_ops:
+            target = int(job_id)
+            payload = [
+                row
+                for row in payload
+                if row.get("surface") != "call_ops" or int(row["payload"].get("jobId") or -1) == target
+            ]
+        if start_time is not None:
+            payload = [row for row in payload if str(row.get("eventTime") or row["occurredAt"]) >= start_time]
+        if end_time is not None:
+            payload = [row for row in payload if str(row.get("eventTime") or row["occurredAt"]) <= end_time]
+        payload.sort(
+            key=lambda row: (
+                str(row.get("eventTime") or row["occurredAt"]),
+                str(row.get("surface") or ""),
+                str(row["eventId"]),
+            ),
+            reverse=True,
+        )
+        if cursor:
+            payload = [row for row in payload if str(row.get("cursor")) < cursor]
+        rows = payload[:limit]
     return [StateEgressEventResponse(**row) for row in rows]
+
+
+@app.post(
+    "/state-egress/operations-diary-export",
+    response_model=OperationsDiaryObserverExportResponse,
+    summary="Emit append-only observer envelopes for operations-diary planning snapshots and reconciliation exceptions",
+)
+def post_operations_diary_export(
+    payload: OperationsDiaryObserverExportRequest,
+    _auth: None = Depends(require_internal_api_token),
+) -> OperationsDiaryObserverExportResponse:
+    with connection_scope(_current_db_path()) as conn:
+        row = export_operations_diary_observer_events(
+            conn,
+            anchor_date=payload.anchorDate,
+            view_mode=payload.viewMode,
+            focus_job_id=payload.focusJobId,
+            actor_ref=payload.actorRef,
+            include_planning_snapshot=payload.includePlanningSnapshot,
+            include_reconciliation_exceptions=payload.includeReconciliationExceptions,
+        )
+    return OperationsDiaryObserverExportResponse(
+        anchorDate=row["anchorDate"],
+        viewMode=row["viewMode"],
+        emittedCount=row["emittedCount"],
+        byFamily=row["byFamily"],
+        events=[StateEgressEventResponse(**item) for item in row["events"]],
+    )
 
 
 @app.get(

@@ -10,7 +10,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Decide whether `corkysoft/src/dashboard` remains a packaging stub or should be wired to the main Streamlit entry point.
 - Add a short contributor note on how to keep README and docs in sync with new features.
 - Keep `docs/modules.md` updated when module responsibilities or entry points change.
-- Add analytics documentation once the historical import and lane model ship.
+- Add analytics documentation for historical ingest readiness, lane governance, and planner consumption defaults.
 - Add a system architecture diagram (truck ↔ server ↔ cloud).
 - Keep `docs/positioning.md` aligned with supported integrations and product focus.
 - Keep product framing consistent: Corkysoft is a system of decision layered
@@ -115,8 +115,13 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Add a manager-facing day/week diary that links jobs, tasks, vehicle usage, staff usage, customer invoice readiness, and subcontractor-bill reconciliation.
 - Add persistent diary tasks for day/week/job/segment follow-through that do not need to masquerade as `job_segments`.
 - Add invoice and subcontractor-bill review records tied to jobs, with explicit exception states when operational truth is incomplete.
-- Add append-only downstream envelopes for diary/planner/reconciliation review
-  state only after the SB/ITIR contract is ratified.
+- Implemented a Corkysoft-native observer outbox for diary/planner/reconciliation
+  review state, including persisted review/task families and explicit export
+  for planning snapshots and reconciliation exceptions.
+- Add delivery receipt / watermark semantics for the observer outbox once
+  deployment posture matters.
+- Surface observer-outbox visibility in the dashboard so operators/admins can
+  inspect emitted envelopes without leaving Corkysoft.
 - Reuse Corkysoft planner/diary workflow patterns in SB/ITIR only as downstream
   summary/review lenses, not as a second operational cockpit.
 - Add unresolved supplier-exposure aging inside Corkysoft so managers can see
@@ -172,9 +177,9 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 | **Jobs + geocode tables**    |    ✅   | Implemented.                      |
 | **Schema migration support** |    ✅   | Handles new columns.              |
 | **Client registry & dedupe** |    ✅   | Quote builder stores clients, flags duplicates, and allows quotes without forcing a client record. |
-| **Historical job import**    |   🧩   | MoveWare helpers and CSV flows exist; expand coverage. |
-| **$ per m³ calculation**     |   🧩   | Derived metrics exist; validate ingest consistency. |
-| **Corridor / lane table**    |   🧩   | Lane base rates exist; formalize directional corridors + corridor groups. |
+| **Historical job import**    |    ✅   | CSV/history ingest now records run coverage, row issues, readiness status, and Fleet-admin visibility; continue expanding source coverage. |
+| **$ per m³ calculation**     |   🧩   | Derived metrics exist and now sit on a stronger ingest-governance base; continue validating source consistency. |
+| **Corridor / lane table**    |    ✅   | Canonical clusters, directional lanes, corridor groups, assignment status, promotion governance, and planner-safe consumption are implemented. |
 | **Modifier tables**          |    ✅   | Access, packing, seasonal rules in schema. |
 | **Integration staging schema** |   🧩 | Contract exists; operational workflow and failure handling still need alignment. |
 | **CSV/API connectors**       |   🧩   | Internal API endpoints and importers exist; external-system hardening remains. |
@@ -229,7 +234,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 | Deliverable                              | Status | Description                                |
 | ---------------------------------------- | :----: | ------------------------------------------ |
 | **CLI report (`list`)**                  |    ✅   | Clean console output.                      |
-| **Streamlit dashboard (MVP)**            |   🧩   | Route map + distribution + quote + Kent triage exist; admin/operator separation and spec cleanup remain. |
+| **Streamlit dashboard (MVP)**            |   🧩   | Route map + distribution + quote + Kent triage exist; lane-governance admin surfaces, grouped proposal review, Kent review summaries, and lane-status trust-boundary controls are now present, but broader admin/operator separation and spec cleanup remain. |
 | **Insurance / audit bundles (PDF)**      |   🔜   | One-click job evidence packs.              |
 | **Automated CSV / Google Sheets export** |   🧩   | Helpers produce CSV-ready profitability summaries. |
 | **API endpoints**                        |   🧩   | Internal JSON/REST endpoints exist; auth, governance, and external contracts remain incomplete. |
@@ -253,7 +258,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 | **README.md**                      |   🧩   | Current after remediation; keep product-centered and aligned with code reality. |
 | **GM summary**                     |    ✅   | Delivered (non-technical overview). |
 | **Architecture diagram**           |   🔜   | Truck ↔ server ↔ cloud schematic.   |
-| **Analytics README / docs folder** |   🔜   | Needed once dashboard built.        |
+| **Analytics README / docs folder** |   🧩   | Core ingest/lane governance work has shipped; consolidate the analytics/governance docs into a cleaner operator-facing summary. |
 
 ---
 

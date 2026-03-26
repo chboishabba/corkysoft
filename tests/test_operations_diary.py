@@ -9,6 +9,8 @@ from analytics.operations_diary import (
     build_operations_diary,
     build_reconciliation_exposure_summary,
     delete_operations_diary_task,
+    export_operations_diary_observer_events,
+    list_observer_outbox_events,
     list_operations_diary_tasks,
     upsert_customer_invoice_review,
     upsert_operations_diary_task,
@@ -262,6 +264,89 @@ def test_reconciliation_resolution_timestamps_close_when_review_resolves() -> No
         invoice_amount=1200.0,
     )
     assert invoice["resolved_at"] is None
+
+
+def test_diary_and_review_write_paths_emit_observer_events() -> None:
+    conn, ids = _seed_conn()
+    created = upsert_operations_diary_task(
+        conn,
+        job_id=ids["job1"],
+        task_date="2026-03-20",
+        title="Review invoice release",
+        actor_ref="ops-manager",
+    )
+    upsert_operations_diary_task(
+        conn,
+        task_id=int(created["id"]),
+        job_id=ids["job1"],
+        task_date="2026-03-20",
+        title="Review invoice release",
+        status="in_progress",
+        actor_ref="ops-manager",
+    )
+    delete_operations_diary_task(conn, task_id=int(created["id"]), actor_ref="ops-manager")
+    upsert_customer_invoice_review(
+        conn,
+        job_id=ids["job1"],
+        invoice_status="reconciliation_warning",
+        invoice_reference="INV-2001",
+        reviewed_by="ops-manager",
+    )
+    upsert_subcontractor_bill_review(
+        conn,
+        job_id=ids["job1"],
+        supplier_id=ids["supplier_id"],
+        bill_status="bill_received",
+        bill_reference="BILL-2001",
+        reviewed_by="ops-manager",
+    )
+
+    rows = list_observer_outbox_events(conn, limit=20)
+    families = [row["eventFamily"] for row in rows]
+    assert families.count("diary_task_event") == 3
+    assert "customer_invoice_review" in families
+    assert "subcontractor_bill_review" in families
+
+
+def test_explicit_diary_export_emits_snapshot_and_exception_rows_idempotently() -> None:
+    conn, ids = _seed_conn()
+    upsert_customer_invoice_review(
+        conn,
+        job_id=ids["job1"],
+        invoice_status="reconciliation_warning",
+        reviewed_by="ops-manager",
+    )
+    upsert_subcontractor_bill_review(
+        conn,
+        job_id=ids["job1"],
+        supplier_id=ids["supplier_id"],
+        bill_status="bill_exception",
+        bill_reference="BILL-404",
+        bill_date="2026-03-25",
+        amount=1200.0,
+        reviewed_by="ops-manager",
+    )
+
+    export = export_operations_diary_observer_events(
+        conn,
+        anchor_date="2026-03-20",
+        view_mode="day",
+        actor_ref="ops-manager",
+    )
+    repeat = export_operations_diary_observer_events(
+        conn,
+        anchor_date="2026-03-20",
+        view_mode="day",
+        actor_ref="ops-manager",
+    )
+
+    assert export["byFamily"]["planning_snapshot"] == 1
+    assert export["byFamily"]["reconciliation_exception"] >= 2
+    assert repeat["emittedCount"] == export["emittedCount"]
+    rows = list_observer_outbox_events(conn, limit=20)
+    families = [row["eventFamily"] for row in rows]
+    assert "planning_snapshot" in families
+    assert "reconciliation_exception" in families
 
     invoiced = upsert_customer_invoice_review(
         conn,

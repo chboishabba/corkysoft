@@ -33,6 +33,7 @@ from analytics.price_distribution import (
     filter_metro_jobs,
     filter_routes_by_country,
     import_historical_jobs_from_dataframe,
+    latest_historical_ingest_summary,
     load_historical_jobs,
     load_live_jobs,
     prepare_metric_route_map_data,
@@ -1286,6 +1287,13 @@ def test_import_historical_jobs_from_dataframe_inserts_rows(tmp_path):
         again_inserted, again_skipped = import_historical_jobs_from_dataframe(conn, df.iloc[:1])
         assert again_inserted == 0
         assert again_skipped == 1
+
+        summary = latest_historical_ingest_summary(conn)
+        assert summary is not None
+        assert summary["total_rows"] == 1
+        assert summary["duplicate_rows"] == 1
+        assert summary["readiness_status"] == "usable"
+        assert summary["coverage_summary"]["topIssueCodes"][0]["issueCode"] == "duplicate_row"
     finally:
         conn.close()
 
@@ -1460,6 +1468,116 @@ def test_import_historical_jobs_from_dataframe_requires_columns(tmp_path):
 
         with pytest.raises(ValueError):
             import_historical_jobs_from_dataframe(conn, missing_price_signal)
+    finally:
+        conn.close()
+
+
+def test_import_historical_jobs_from_dataframe_records_row_level_issues_and_not_ready_status(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE historical_jobs (
+                id INTEGER PRIMARY KEY,
+                job_date TEXT,
+                client TEXT,
+                corridor_display TEXT,
+                price_per_m3 REAL,
+                revenue_total REAL,
+                revenue REAL,
+                volume_m3 REAL,
+                volume REAL,
+                distance_km REAL,
+                final_cost REAL,
+                origin TEXT,
+                destination TEXT,
+                origin_postcode TEXT,
+                destination_postcode TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            """
+        )
+        df = pd.DataFrame(
+            {
+                "id": ["ok-1", "bad-date", "bad-destination", "bad-price"],
+                "date": ["2024-01-01", "not-a-date", "2024-01-03", "2024-01-04"],
+                "origin": ["Brisbane", "Sydney", "Melbourne", "Perth"],
+                "destination": ["Sydney", "Melbourne", None, "Adelaide"],
+                "volume_m3": [10, 12, 8, 0],
+                "revenue_total": [2500, 3000, 1200, 500],
+            }
+        )
+
+        inserted, skipped = import_historical_jobs_from_dataframe(conn, df, source_name="coverage_test")
+        summary = latest_historical_ingest_summary(conn)
+
+        assert inserted == 1
+        assert skipped == 3
+        assert summary is not None
+        assert summary["source_name"] == "coverage_test"
+        assert summary["invalid_rows"] == 3
+        assert summary["issue_count"] == 3
+        assert summary["readiness_status"] == "not_ready"
+        assert summary["coverage_summary"]["coverageRatio"] == pytest.approx(0.25)
+        issue_codes = {issue["issue_code"] for issue in summary["issues"]}
+        assert issue_codes == {
+            "missing_job_date",
+            "missing_route_endpoint",
+            "missing_price_signal",
+        }
+    finally:
+        conn.close()
+
+
+def test_import_historical_jobs_from_dataframe_classifies_usable_with_gaps(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE historical_jobs (
+                id INTEGER PRIMARY KEY,
+                job_date TEXT,
+                client TEXT,
+                corridor_display TEXT,
+                price_per_m3 REAL,
+                revenue_total REAL,
+                revenue REAL,
+                volume_m3 REAL,
+                volume REAL,
+                distance_km REAL,
+                final_cost REAL,
+                origin TEXT,
+                destination TEXT,
+                origin_postcode TEXT,
+                destination_postcode TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            """
+        )
+        df = pd.DataFrame(
+            {
+                "id": ["ok-1", "ok-2", "bad-1", "bad-2"],
+                "date": ["2024-01-01", "2024-01-02", "bad-date", "2024-01-03"],
+                "origin": ["Brisbane", "Sydney", "Perth", "Adelaide"],
+                "destination": ["Sydney", "Melbourne", "Darwin", None],
+                "volume_m3": [10, 20, 8, 5],
+                "revenue_total": [2500, 5200, 1200, 700],
+            }
+        )
+
+        inserted, skipped = import_historical_jobs_from_dataframe(conn, df)
+        summary = latest_historical_ingest_summary(conn)
+
+        assert inserted == 2
+        assert skipped == 2
+        assert summary is not None
+        assert summary["valid_rows"] == 2
+        assert summary["readiness_status"] == "usable_with_gaps"
+        assert summary["coverage_summary"]["coverageRatio"] == pytest.approx(0.5)
     finally:
         conn.close()
 

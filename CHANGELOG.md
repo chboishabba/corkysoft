@@ -42,3 +42,13 @@
 - linked `README.md` and `ROADMAP.md` to the new progress board and added explicit documentation alignment guidance
 - updated `COMPACTIFIED_CONTEXT.md` with the tracking decision context
 - added `disruption_events` persistence plus `analytics/situational_awareness.py` to ingest closure/weather/traffic severity signals and nudge adaptive-policy multipliers inside bounded updates, with tests covering aggregation and parameter rewrites
+
+## 2026-03-25
+
+- hardened historical ingest with durable run summaries, row-level issue capture, readiness classification, and Fleet-admin ingest-health visibility
+- formalized corridor/lane handling with canonical location clusters, directional lanes, corridor groups, and persisted assignment status on historical/live rows
+- added lane-assignment health visibility plus promotion governance in Fleet admin, including proposal, approval/rejection, and apply flows
+- updated planner consumption so corridor suggestions default to canonically assigned lane history and only include ambiguous/unassigned rows when operators opt in
+- implemented a Corkysoft-native observer outbox for diary/reconciliation review state, plus explicit export for planning snapshots and reconciliation exceptions
+- synced README, roadmap, progress board, and compactified context to reflect the new ingest and lane-governance baseline
+- documented the remaining observer-export follow-ups: delivery receipt / watermark semantics and dashboard visibility of emitted envelopes

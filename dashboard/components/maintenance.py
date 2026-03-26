@@ -6,8 +6,28 @@ from typing import Iterable, Optional
 import pandas as pd
 import streamlit as st
 
+from analytics.adaptive_policy import (
+    approve_adaptive_policy_proposal,
+    apply_adaptive_policy_proposal,
+    list_adaptive_policy_proposals,
+    load_adaptive_policy_snapshot,
+    reject_adaptive_policy_proposal,
+)
 from analytics.dashboard_layouts import get_dashboard_role_layouts, upsert_dashboard_role_layout
 from analytics.db import ensure_dashboard_tables, upsert_truck, upsert_vehicle_details
+from analytics.lane_assignment import (
+    LANE_PROPOSAL_STATUS_APPROVED,
+    LANE_PROPOSAL_STATUS_PENDING_REVIEW,
+    apply_lane_promotion_proposal,
+    approve_lane_promotion_proposal,
+    create_lane_promotion_proposal,
+    create_lane_promotion_proposal_for_clusters,
+    ensure_lane_assignment_schema,
+    list_lane_promotion_proposals,
+    reject_lane_promotion_proposal,
+)
+from analytics.price_distribution import latest_historical_ingest_summary
+from analytics.situational_awareness import update_adaptive_policy_from_disruptions
 from analytics.vehicle_repairs import (
     import_vehicle_repairs_from_sheet,
     load_vehicle_repairs,
@@ -84,6 +104,85 @@ def load_vehicle_overview(conn) -> pd.DataFrame:
         ORDER BY t.truck_id
     """
     return pd.read_sql_query(query, conn)
+
+
+def _lane_assignment_health_summary(conn) -> pd.DataFrame:
+    ensure_lane_assignment_schema(conn)
+    return pd.read_sql_query(
+        """
+        SELECT
+            dataset,
+            lane_assignment_status,
+            row_count
+        FROM (
+            SELECT
+                'historical' AS dataset,
+                COALESCE(NULLIF(TRIM(lane_assignment_status), ''), 'unassigned') AS lane_assignment_status,
+                COUNT(*) AS row_count
+            FROM historical_jobs
+            GROUP BY 1, 2
+
+            UNION ALL
+
+            SELECT
+                'live' AS dataset,
+                COALESCE(NULLIF(TRIM(lane_assignment_status), ''), 'unassigned') AS lane_assignment_status,
+                COUNT(*) AS row_count
+            FROM jobs
+            GROUP BY 1, 2
+        )
+        ORDER BY dataset, lane_assignment_status
+        """,
+        conn,
+    )
+
+
+def _recent_lane_assignment_gaps(conn, *, limit: int = 20) -> pd.DataFrame:
+    ensure_lane_assignment_schema(conn)
+    return pd.read_sql_query(
+        """
+        SELECT
+            dataset,
+            row_id,
+            reference,
+            corridor_display,
+            lane_assignment_status,
+            lane_assignment_source,
+            lane_assignment_note,
+            updated_at
+        FROM (
+            SELECT
+                'historical' AS dataset,
+                id AS row_id,
+                COALESCE(client, CAST(id AS TEXT)) AS reference,
+                corridor_display,
+                COALESCE(NULLIF(TRIM(lane_assignment_status), ''), 'unassigned') AS lane_assignment_status,
+                lane_assignment_source,
+                lane_assignment_note,
+                updated_at
+            FROM historical_jobs
+            WHERE COALESCE(NULLIF(TRIM(lane_assignment_status), ''), 'unassigned') != 'assigned'
+
+            UNION ALL
+
+            SELECT
+                'live' AS dataset,
+                id AS row_id,
+                COALESCE(client, CAST(id AS TEXT)) AS reference,
+                COALESCE(origin, '?') || ' → ' || COALESCE(destination, '?') AS corridor_display,
+                COALESCE(NULLIF(TRIM(lane_assignment_status), ''), 'unassigned') AS lane_assignment_status,
+                lane_assignment_source,
+                lane_assignment_note,
+                updated_at
+            FROM jobs
+            WHERE COALESCE(NULLIF(TRIM(lane_assignment_status), ''), 'unassigned') != 'assigned'
+        )
+        ORDER BY updated_at DESC, row_id DESC
+        LIMIT ?
+        """,
+        conn,
+        params=(int(limit),),
+    )
 
 
 def render_vehicle_maintenance_tab(conn) -> None:
@@ -262,6 +361,7 @@ def render_fleet_tab(conn) -> None:
     st.caption("Manage trucks, vehicle metadata, and VEHICLE_DETAILS imports.")
 
     ensure_dashboard_tables(conn)
+    ensure_lane_assignment_schema(conn)
     vehicle_df = load_vehicle_overview(conn)
     assignment_summary = list_truck_assignment_summary(conn)
     if not vehicle_df.empty:
@@ -722,6 +822,466 @@ def render_fleet_tab(conn) -> None:
                     width='stretch',
                     hide_index=True,
                 )
+
+    with st.expander("Historical ingest health", expanded=False):
+        ingest_summary = latest_historical_ingest_summary(conn)
+        if ingest_summary is None:
+            st.info("No historical ingest runs recorded yet.")
+        else:
+            coverage = ingest_summary.get("coverage_summary") or {}
+            ingest_cols = st.columns(5)
+            ingest_cols[0].metric("Readiness", str(ingest_summary.get("readiness_status") or "unknown"))
+            ingest_cols[1].metric("Total rows", int(ingest_summary.get("total_rows") or 0))
+            ingest_cols[2].metric("Inserted", int(ingest_summary.get("inserted_rows") or 0))
+            ingest_cols[3].metric("Skipped", int(ingest_summary.get("skipped_rows") or 0))
+            ingest_cols[4].metric("Issues", int(ingest_summary.get("issue_count") or 0))
+            st.caption(
+                "Latest ingest source: "
+                + str(ingest_summary.get("source_name") or "unknown")
+                + " | completed: "
+                + str(ingest_summary.get("completed_at") or "unknown")
+            )
+            st.caption(
+                "Coverage ratio: "
+                + f"{float(coverage.get('coverageRatio') or 0.0):.2f}"
+                + " | inserted ratio: "
+                + f"{float(coverage.get('insertedRatio') or 0.0):.2f}"
+            )
+            top_issues = coverage.get("topIssueCodes") or []
+            if top_issues:
+                st.dataframe(
+                    pd.DataFrame(top_issues).rename(
+                        columns={"issueCode": "Issue", "count": "Count"}
+                    ),
+                    width="stretch",
+                    hide_index=True,
+                )
+            issues = ingest_summary.get("issues") or []
+            if issues:
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {
+                                "Row": issue["row_index"],
+                                "Ref": issue["source_row_ref"],
+                                "Severity": issue["severity"],
+                                "Code": issue["issue_code"],
+                                "Message": issue["message"],
+                            }
+                            for issue in issues[:20]
+                        ]
+                    ),
+                    width="stretch",
+                    hide_index=True,
+                )
+
+    with st.expander("Lane assignment health", expanded=False):
+        health_df = _lane_assignment_health_summary(conn)
+        if health_df.empty:
+            st.info("No lane-assignment data available yet.")
+        else:
+            summary_lookup = {
+                (str(row["dataset"]), str(row["lane_assignment_status"])): int(row["row_count"])
+                for _, row in health_df.iterrows()
+            }
+            metric_cols = st.columns(6)
+            metric_cols[0].metric(
+                "Historical assigned",
+                summary_lookup.get(("historical", "assigned"), 0),
+            )
+            metric_cols[1].metric(
+                "Historical ambiguous",
+                summary_lookup.get(("historical", "ambiguous"), 0),
+            )
+            metric_cols[2].metric(
+                "Historical unassigned",
+                summary_lookup.get(("historical", "unassigned"), 0),
+            )
+            metric_cols[3].metric(
+                "Live assigned",
+                summary_lookup.get(("live", "assigned"), 0),
+            )
+            metric_cols[4].metric(
+                "Live ambiguous",
+                summary_lookup.get(("live", "ambiguous"), 0),
+            )
+            metric_cols[5].metric(
+                "Live unassigned",
+                summary_lookup.get(("live", "unassigned"), 0),
+            )
+            st.dataframe(
+                health_df.rename(
+                    columns={
+                        "dataset": "Dataset",
+                        "lane_assignment_status": "Status",
+                        "row_count": "Rows",
+                    }
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+
+            gap_df = _recent_lane_assignment_gaps(conn, limit=25)
+            if gap_df.empty:
+                st.caption("No ambiguous or unassigned lane records.")
+            else:
+                grouped_gap_df = (
+                    gap_df.assign(
+                        proposed_lane_key=gap_df["origin_cluster_key"].fillna("").astype(str).str.strip()
+                        + "->"
+                        + gap_df["destination_cluster_key"].fillna("").astype(str).str.strip()
+                    )
+                    .groupby(
+                        [
+                            "dataset",
+                            "lane_assignment_status",
+                            "origin_cluster_key",
+                            "destination_cluster_key",
+                            "proposed_lane_key",
+                        ],
+                        dropna=False,
+                    )
+                    .agg(
+                        candidate_count=pd.NamedAgg(column="row_id", aggfunc="count"),
+                        sample_corridor=pd.NamedAgg(column="corridor_display", aggfunc="first"),
+                        sample_source=pd.NamedAgg(column="lane_assignment_source", aggfunc="first"),
+                        sample_note=pd.NamedAgg(column="lane_assignment_note", aggfunc="first"),
+                        sample_row_id=pd.NamedAgg(column="row_id", aggfunc="first"),
+                    )
+                    .reset_index()
+                    .sort_values(["candidate_count", "dataset", "proposed_lane_key"], ascending=[False, True, True])
+                )
+                st.dataframe(
+                    grouped_gap_df.rename(
+                        columns={
+                            "dataset": "Dataset",
+                            "lane_assignment_status": "Status",
+                            "origin_cluster_key": "Origin cluster",
+                            "destination_cluster_key": "Destination cluster",
+                            "proposed_lane_key": "Proposed lane",
+                            "candidate_count": "Rows",
+                            "sample_corridor": "Example corridor",
+                            "sample_source": "Example source",
+                            "sample_note": "Example note",
+                            "sample_row_id": "Representative row",
+                        }
+                    ),
+                    width="stretch",
+                    hide_index=True,
+                )
+                st.dataframe(
+                    gap_df.rename(
+                        columns={
+                            "dataset": "Dataset",
+                            "row_id": "Row ID",
+                            "reference": "Reference",
+                            "corridor_display": "Corridor",
+                            "lane_assignment_status": "Status",
+                            "lane_assignment_source": "Source",
+                            "lane_assignment_note": "Note",
+                            "updated_at": "Updated",
+                        }
+                    ),
+                    width="stretch",
+                    hide_index=True,
+                )
+                candidate_options = {
+                    (
+                        f"{row['dataset']} · {int(row['candidate_count'])} rows · "
+                        f"{row['lane_assignment_status']} · "
+                        f"{str(row['proposed_lane_key'])}"
+                    ): row
+                    for _, row in grouped_gap_df.iterrows()
+                }
+                proposal_cols = st.columns(3)
+                selected_candidate_label = proposal_cols[0].selectbox(
+                    "Promotion candidate",
+                    options=list(candidate_options.keys()),
+                    key="lane_promotion_candidate",
+                )
+                lane_actor = proposal_cols[1].text_input(
+                    "Lane actor",
+                    value="",
+                    key="lane_promotion_actor",
+                )
+                lane_note = proposal_cols[2].text_input(
+                    "Lane note",
+                    value="",
+                    key="lane_promotion_note",
+                )
+                if st.button("Create lane promotion proposal", key="lane_promotion_create"):
+                    candidate = candidate_options[selected_candidate_label]
+                    try:
+                        create_lane_promotion_proposal(
+                            conn,
+                            dataset=str(candidate["dataset"]),
+                            row_id=int(candidate["sample_row_id"]),
+                            actor=lane_actor.strip(),
+                            note=lane_note.strip() or None,
+                        )
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.success("Lane promotion proposal created.")
+                        _trigger_rerun()
+                if st.button("Create grouped lane proposal", key="lane_promotion_create_grouped"):
+                    candidate = candidate_options[selected_candidate_label]
+                    try:
+                        create_lane_promotion_proposal_for_clusters(
+                            conn,
+                            dataset=str(candidate["dataset"]),
+                            origin_cluster_key=str(candidate["origin_cluster_key"]),
+                            destination_cluster_key=str(candidate["destination_cluster_key"]),
+                            actor=lane_actor.strip(),
+                            note=lane_note.strip() or None,
+                        )
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.success("Grouped lane promotion proposal created.")
+                        _trigger_rerun()
+
+            proposal_rows = list_lane_promotion_proposals(conn, limit=20)
+            if proposal_rows:
+                proposal_options = {
+                    (
+                        f"#{proposal['id']} · {proposal['status']} · "
+                        f"{proposal['lane_display_name']}"
+                    ): proposal
+                    for proposal in proposal_rows
+                }
+                selected_proposal_label = st.selectbox(
+                    "Lane proposal",
+                    options=list(proposal_options.keys()),
+                    key="lane_promotion_selected_proposal",
+                )
+                proposal = proposal_options[selected_proposal_label]
+                proposal_meta = st.columns(4)
+                proposal_meta[0].metric("Status", str(proposal["status"]))
+                proposal_meta[1].metric("Requested by", str(proposal["requested_by"]))
+                proposal_meta[2].metric("Approved by", str(proposal.get("approved_by") or "-"))
+                proposal_meta[3].metric("Applied by", str(proposal.get("applied_by") or "-"))
+                st.caption(
+                    "Lane: "
+                    + str(proposal["lane_key"])
+                    + " | corridor: "
+                    + str(proposal["corridor_group_key"])
+                )
+                if proposal.get("request_note"):
+                    st.caption("Request note: " + str(proposal["request_note"]))
+                source_summary = proposal.get("source_summary") or {}
+                if source_summary:
+                    st.dataframe(
+                        pd.DataFrame([source_summary]).rename(
+                            columns={
+                                "rowId": "Row ID",
+                                "corridorDisplay": "Corridor",
+                                "laneAssignmentStatus": "Assignment status",
+                                "laneAssignmentSource": "Assignment source",
+                                "laneAssignmentNote": "Assignment note",
+                            }
+                        ),
+                        width="stretch",
+                        hide_index=True,
+                    )
+                review_cols = st.columns(3)
+                review_actor = review_cols[0].text_input(
+                    "Review actor",
+                    value="",
+                    key="lane_promotion_review_actor",
+                )
+                review_note = review_cols[1].text_input(
+                    "Review note",
+                    value="",
+                    key="lane_promotion_review_note",
+                )
+                apply_note = review_cols[2].text_input(
+                    "Apply note",
+                    value="",
+                    key="lane_promotion_apply_note",
+                )
+                action_cols = st.columns(3)
+                if proposal["status"] == LANE_PROPOSAL_STATUS_PENDING_REVIEW:
+                    if action_cols[0].button("Approve lane proposal", key="lane_promotion_approve"):
+                        try:
+                            approve_lane_promotion_proposal(
+                                conn,
+                                proposal_id=int(proposal["id"]),
+                                actor=review_actor.strip(),
+                                note=review_note.strip() or None,
+                            )
+                        except ValueError as exc:
+                            st.error(str(exc))
+                        else:
+                            st.success("Lane promotion proposal approved.")
+                            _trigger_rerun()
+                    if action_cols[1].button("Reject lane proposal", key="lane_promotion_reject"):
+                        try:
+                            reject_lane_promotion_proposal(
+                                conn,
+                                proposal_id=int(proposal["id"]),
+                                actor=review_actor.strip(),
+                                note=review_note.strip(),
+                            )
+                        except ValueError as exc:
+                            st.error(str(exc))
+                        else:
+                            st.success("Lane promotion proposal rejected.")
+                            _trigger_rerun()
+                if proposal["status"] == LANE_PROPOSAL_STATUS_APPROVED:
+                    if action_cols[2].button("Apply lane proposal", key="lane_promotion_apply"):
+                        try:
+                            apply_lane_promotion_proposal(
+                                conn,
+                                proposal_id=int(proposal["id"]),
+                                actor=review_actor.strip(),
+                                note=apply_note.strip() or None,
+                            )
+                        except ValueError as exc:
+                            st.error(str(exc))
+                        else:
+                            st.success("Lane promotion proposal applied.")
+                            _trigger_rerun()
+
+    with st.expander("Adaptive policy governance", expanded=False):
+        snapshot = load_adaptive_policy_snapshot(conn)
+        snapshot_cols = st.columns(4)
+        snapshot_cols[0].metric("Lane ETA", f"{snapshot.lane_eta_multiplier:.3f}")
+        snapshot_cols[1].metric("Weather risk", f"{snapshot.weather_risk_multiplier:.3f}")
+        snapshot_cols[2].metric("Closure delay", f"{snapshot.closure_delay_factor:.3f}")
+        snapshot_cols[3].metric("Seasonal uplift", f"{snapshot.seasonal_margin_uplift:.3f}")
+
+        proposal_inputs = st.columns(4)
+        proposal_actor = proposal_inputs[0].text_input(
+            "Proposal actor",
+            value="",
+            key="adaptive_policy_proposal_actor",
+        )
+        lookback_hours = proposal_inputs[1].number_input(
+            "Lookback hours",
+            min_value=1,
+            max_value=168,
+            value=6,
+            key="adaptive_policy_lookback_hours",
+        )
+        max_delta = proposal_inputs[2].number_input(
+            "Max delta",
+            min_value=0.01,
+            max_value=1.0,
+            value=0.1,
+            step=0.01,
+            key="adaptive_policy_max_delta",
+        )
+        proposal_note = proposal_inputs[3].text_input(
+            "Proposal note",
+            value="",
+            key="adaptive_policy_proposal_note",
+        )
+        if st.button("Create disruption proposal", key="adaptive_policy_create_proposal"):
+            try:
+                update_adaptive_policy_from_disruptions(
+                    conn,
+                    actor=proposal_actor.strip(),
+                    approval_mode="proposal",
+                    lookback=pd.Timedelta(hours=int(lookback_hours)).to_pytimedelta(),
+                    max_delta=float(max_delta),
+                    note=proposal_note.strip() or None,
+                )
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                st.success("Adaptive-policy proposal created.")
+                _trigger_rerun()
+
+        proposal_rows = list_adaptive_policy_proposals(conn, limit=20)
+        if not proposal_rows:
+            st.info("No adaptive-policy proposals recorded yet.")
+        else:
+            proposal_options = {
+                f"#{row['id']} · {row['proposal_type']} · {row['status']}": row
+                for row in proposal_rows
+            }
+            selected_label = st.selectbox(
+                "Proposal",
+                options=list(proposal_options.keys()),
+                key="adaptive_policy_selected_proposal",
+            )
+            selected = proposal_options[selected_label]
+            governance_cols = st.columns(4)
+            governance_cols[0].metric("Status", str(selected["status"]))
+            governance_cols[1].metric("Requested by", str(selected.get("requested_by") or "-"))
+            governance_cols[2].metric("Approved by", str(selected.get("approved_by") or "-"))
+            governance_cols[3].metric("Applied by", str(selected.get("applied_by") or "-"))
+            summary = selected.get("source_summary") or {}
+            if summary:
+                st.caption("Source summary: " + str(summary))
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Key": item["parameter_key"],
+                            "Current": item["current_value"],
+                            "Proposed": item["proposed_value"],
+                            "Target": item["target_value"],
+                            "Max delta": item["max_delta"],
+                            "Description": item["description"],
+                        }
+                        for item in selected["items"]
+                    ]
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+            decision_actor = st.text_input(
+                "Decision actor",
+                value="",
+                key="adaptive_policy_decision_actor",
+            )
+            decision_note = st.text_input(
+                "Decision note",
+                value="",
+                key="adaptive_policy_decision_note",
+            )
+            decision_cols = st.columns(3)
+            if decision_cols[0].button("Approve proposal", key="adaptive_policy_approve"):
+                try:
+                    approve_adaptive_policy_proposal(
+                        conn,
+                        proposal_id=int(selected["id"]),
+                        actor=decision_actor.strip(),
+                        note=decision_note.strip() or None,
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.success("Adaptive-policy proposal approved.")
+                    _trigger_rerun()
+            if decision_cols[1].button("Reject proposal", key="adaptive_policy_reject"):
+                try:
+                    reject_adaptive_policy_proposal(
+                        conn,
+                        proposal_id=int(selected["id"]),
+                        actor=decision_actor.strip(),
+                        note=decision_note.strip(),
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.success("Adaptive-policy proposal rejected.")
+                    _trigger_rerun()
+            if decision_cols[2].button("Apply approved proposal", key="adaptive_policy_apply"):
+                try:
+                    apply_adaptive_policy_proposal(
+                        conn,
+                        proposal_id=int(selected["id"]),
+                        actor=decision_actor.strip(),
+                        note=decision_note.strip() or None,
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.success("Adaptive-policy proposal applied.")
+                    _trigger_rerun()
 
     readiness_items = list_operational_readiness_items(conn)
     blocked_items = [item for item in readiness_items if item["status"] == "blocked"]

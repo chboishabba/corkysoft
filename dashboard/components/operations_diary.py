@@ -37,6 +37,16 @@ def _get_query_param(key: str, default: str) -> str:
     return st.experimental_get_query_params().get(key, [default])[0]
 
 
+def _rerun() -> None:
+    rerun = getattr(st, "rerun", None)
+    if callable(rerun):
+        rerun()
+        return
+    experimental_rerun = getattr(st, "experimental_rerun", None)
+    if callable(experimental_rerun):
+        experimental_rerun()
+
+
 def render_operations_diary_tab(conn: sqlite3.Connection) -> None:
     st.subheader("Operations diary")
     st.caption(
@@ -130,10 +140,130 @@ def render_operations_diary_tab(conn: sqlite3.Connection) -> None:
         st.caption(f"Week window: {diary['startDate']} to {diary['endDate']}")
 
     job_rows = diary["jobs"]
+    focus_scope = st.radio(
+        "Diary focus",
+        options=["all_jobs", "financial_exceptions", "operational_attention"],
+        horizontal=True,
+        format_func=lambda value: {
+            "all_jobs": "All jobs",
+            "financial_exceptions": "Financial exceptions",
+            "operational_attention": "Operational attention",
+        }[value],
+        key="operations_diary_focus_scope",
+    )
+    if focus_scope == "financial_exceptions":
+        job_rows = [
+            row
+            for row in job_rows
+            if row["invoiceStatus"] in {"reconciliation_warning", "not_ready", "partially_invoiced"}
+            or row["billStatus"] in {"pending_review", "received_unreconciled", "reconciliation_warning"}
+        ]
+    elif focus_scope == "operational_attention":
+        job_rows = [
+            row
+            for row in job_rows
+            if int(row["taskCount"]) > 0
+            or int(row["segmentCount"]) == 0
+            or row["status"] in {"review", "blocked", "warning"}
+            or row["invoiceStatus"] == "reconciliation_warning"
+            or row["billStatus"] == "reconciliation_warning"
+        ]
+    reconciliation_bucket = st.selectbox(
+        "Reconciliation bucket",
+        options=[
+            "all",
+            "invoice_exceptions",
+            "supplier_bill_exceptions",
+            "financial_exposure",
+        ],
+        format_func=lambda value: {
+            "all": "All diary jobs",
+            "invoice_exceptions": "Invoice exceptions",
+            "supplier_bill_exceptions": "Supplier bill exceptions",
+            "financial_exposure": "Any financial exposure",
+        }[value],
+        key="operations_diary_reconciliation_bucket",
+    )
+    if reconciliation_bucket == "invoice_exceptions":
+        job_rows = [
+            row
+            for row in job_rows
+            if row["invoiceStatus"] in {"not_ready", "ready_to_invoice", "partially_invoiced", "reconciliation_warning"}
+        ]
+    elif reconciliation_bucket == "supplier_bill_exceptions":
+        job_rows = [
+            row
+            for row in job_rows
+            if row["billStatus"] in {"awaiting_bill", "bill_received", "bill_exception"}
+        ]
+    elif reconciliation_bucket == "financial_exposure":
+        job_rows = [
+            row
+            for row in job_rows
+            if row["invoiceStatus"] in {"not_ready", "ready_to_invoice", "partially_invoiced", "reconciliation_warning"}
+            or row["billStatus"] in {"awaiting_bill", "bill_received", "bill_exception"}
+        ]
     if not job_rows:
         st.info("No diary jobs or tasks are present for the selected period yet.")
         _render_global_task_form(conn, anchor_date=anchor_date.isoformat())
         return
+
+    action_rows: list[dict[str, Any]] = []
+    for row in job_rows:
+        if row["invoiceStatus"] in {"not_ready", "ready_to_invoice", "partially_invoiced", "reconciliation_warning"}:
+            action_rows.append(
+                {
+                    "Priority": "financial",
+                    "Action": "Invoice review",
+                    "Job": row["jobId"],
+                    "Client": row["jobClient"] or "Unknown client",
+                    "Status": row["invoiceStatus"],
+                    "Detail": "Customer invoice requires follow-through.",
+                }
+            )
+        if row["billStatus"] in {"awaiting_bill", "bill_received", "bill_exception"}:
+            action_rows.append(
+                {
+                    "Priority": "financial",
+                    "Action": "Supplier bill review",
+                    "Job": row["jobId"],
+                    "Client": row["jobClient"] or "Unknown client",
+                    "Status": row["billStatus"],
+                    "Detail": "Subcontractor bill needs review or reconciliation.",
+                }
+            )
+        if int(row["taskCount"]) > 0:
+            action_rows.append(
+                {
+                    "Priority": "operations",
+                    "Action": "Diary tasks open",
+                    "Job": row["jobId"],
+                    "Client": row["jobClient"] or "Unknown client",
+                    "Status": f"{int(row['taskCount'])} task(s)",
+                    "Detail": "Outstanding diary tasks in current window.",
+                }
+            )
+    for exposure_row in exposure["activeSupplierRows"][:10]:
+        action_rows.append(
+            {
+                "Priority": "financial",
+                "Action": "Supplier exposure",
+                "Job": exposure_row["jobId"],
+                "Client": exposure_row["jobClient"] or "Unknown client",
+                "Status": exposure_row["status"],
+                "Detail": (
+                    f"Unresolved ${float(exposure_row['amount'] or 0.0):,.0f} "
+                    f"aged {int(exposure_row['unresolvedAgeDays'] or 0)} day(s)."
+                ),
+            }
+        )
+    if action_rows:
+        st.markdown("#### Action queue")
+        st.dataframe(
+            pd.DataFrame(action_rows),
+            width="stretch",
+            hide_index=True,
+        )
 
     st.markdown("#### Jobs in scope")
     st.dataframe(
@@ -262,6 +392,48 @@ def render_operations_diary_tab(conn: sqlite3.Connection) -> None:
     with fin_cols[1]:
         st.markdown("#### Subcontractor bill review")
         _render_subcontractor_bill_form(conn, job_id=selected_job_id, current_rows=details["billReviews"])
+
+    next_action_cols = st.columns(3)
+    if details["invoiceReview"] and details["invoiceReview"]["invoice_status"] in {
+        "not_ready",
+        "ready_to_invoice",
+        "partially_invoiced",
+        "reconciliation_warning",
+    }:
+        if next_action_cols[0].button(
+            "Create invoice follow-up task",
+            key=f"operations_diary_invoice_follow_up_{selected_job_id}",
+        ):
+            upsert_operations_diary_task(
+                conn,
+                job_id=selected_job_id,
+                task_date=anchor_date.isoformat(),
+                task_scope="job",
+                task_type="invoice_review",
+                title=f"Follow up customer invoice for job #{selected_job_id}",
+                notes=f"Invoice status: {details['invoiceReview']['invoice_status']}",
+            )
+            st.success("Invoice follow-up task created.")
+            _rerun()
+    if any(
+        row["bill_status"] in {"awaiting_bill", "bill_received", "bill_exception"}
+        for row in details["billReviews"]
+    ):
+        if next_action_cols[1].button(
+            "Create bill follow-up task",
+            key=f"operations_diary_bill_follow_up_{selected_job_id}",
+        ):
+            upsert_operations_diary_task(
+                conn,
+                job_id=selected_job_id,
+                task_date=anchor_date.isoformat(),
+                task_scope="job",
+                task_type="bill_review",
+                title=f"Follow up subcontractor bill for job #{selected_job_id}",
+                notes="Created from operations diary bill exception review.",
+            )
+            st.success("Bill follow-up task created.")
+            _rerun()
 
     exposure_rows = details["reconciliationExposure"]["activeSupplierRows"]
     if exposure_rows:

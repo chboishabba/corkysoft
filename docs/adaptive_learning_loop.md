@@ -57,7 +57,8 @@ Each learning cycle should follow this pattern:
 2. Compare expected vs realised price, ETA, and margin behavior.
 3. Propose bounded parameter deltas.
 4. Clamp updates to safe per-cycle limits.
-5. Store the accepted parameter state with audit-friendly descriptions.
+5. Store the proposed parameter state for review.
+6. Apply only approved proposals to the active parameter state with audit-friendly descriptions.
 
 This keeps the system contractive in practice: repeated updates should get
 smaller as quoted behavior approaches realised behavior.
@@ -75,7 +76,6 @@ The current implementation does not yet guarantee:
 - automatic ingestion from state/national road-closure feeds
 - automatic weather-feed integration
 - autonomous quote updates
-- dashboard controls for approving or rejecting proposals
 - historical learning jobs or scheduler infrastructure
 
 ## Next Delivery Steps
@@ -90,7 +90,9 @@ The current implementation does not yet guarantee:
 
 - `analytics/situational_awareness.DisruptionEvent` records weather, traffic, and closure severity events plus optional source/location metadata.
 - `analytics/situational_awareness.insert_disruption_event` populates the new `disruption_events` table defined in `analytics/db/schema.py`; the helper also normalizes timestamps and clamps severity to non-negative values.
-- `analytics.situational_awareness.update_adaptive_policy_from_disruptions` summarizes recent severity totals, computes bounded targets for the weather, closure, and lane-ETA multipliers, and runs `apply_bounded_parameter_target` so policy state nudges remain auditable.
-- Tests (`tests/test_situational_awareness.py`) verify severity aggregation, table persistence, and parameter updates.
+- `analytics.situational_awareness.update_adaptive_policy_from_disruptions` now creates reviewable adaptive-policy proposals by default rather than mutating live parameters immediately.
+- `analytics.adaptive_policy` now stores proposal items plus request/approval/rejection/apply state so disruption-driven nudges do not affect operational guidance before review.
+- Fleet admin exposes a minimal adaptive-policy governance panel for request review and apply.
+- Tests (`tests/test_situational_awareness.py`, `tests/test_adaptive_policy.py`) verify severity aggregation, proposal creation, approval gating, rejection, and apply behavior.
 
-Future work now focuses on exposing the proposed updates for operator review before affecting quotes or ETA guidance.
+Future work now focuses on wiring approved adaptive parameters into downstream quote, ETA, and lane-consumption paths with the same explicit governance boundary.

@@ -1,9 +1,19 @@
 # Corkysoft -> SB / ITIR Downstream Contract
 
-This document defines the intended downstream contract for diary, planning, and
+This document defines the downstream contract for diary, planning, and
 reconciliation outputs from Corkysoft into StatiBaker (SB) / ITIR.
 
-It is a design contract, not an implemented integration.
+It now has a partial implementation:
+
+- append-only observer envelopes are emitted for:
+  - `diary_task_event`
+  - `customer_invoice_review`
+  - `subcontractor_bill_review`
+- explicit export is available for:
+  - `planning_snapshot`
+  - `reconciliation_exception`
+- the existing call-intelligence outbox remains a separate analogous surface
+- JMD alignment is intentionally out of scope for Corkysoft at present
 
 ## Boundary
 
@@ -142,6 +152,8 @@ append-only outbox pattern used for call-intelligence downstream preparation:
 
 ## Current Implementation Status
 
-- Call-intelligence downstream preparation exists as an analogous pattern.
-- Diary/planner/reconciliation downstream export is not implemented yet.
-- This document exists to keep future export work bounded and authority-safe.
+- Call-intelligence downstream preparation still exists as an analogous pattern.
+- Diary/planner/reconciliation observer export now exists as a Corkysoft-native,
+  append-only outbox plus explicit diary export trigger for derived families.
+- The contract remains authority-safe and reference-heavy rather than a raw
+  state dump.

@@ -21,6 +21,11 @@ from analytics.db import (
     upsert_worker,
 )
 from analytics.operations_assignment import assign_segment_resources, ensure_segment
+from analytics.operations_diary import (
+    upsert_customer_invoice_review,
+    upsert_operations_diary_task,
+    upsert_subcontractor_bill_review,
+)
 from corkysoft.call_ops import record_worker_time_capture_event
 
 
@@ -1537,6 +1542,7 @@ def test_call_session_and_ambient_routes(isolated_db):
         headers=AUTH_HEADERS,
     )
     assert response.status_code == 200
+
     assert response.json()["callLegId"] == initial_leg["id"]
 
     response = client.post(
@@ -1758,3 +1764,87 @@ def test_call_link_correction_and_leg_transcript_routes(isolated_db):
     )
     assert transcript.status_code == 200
     assert transcript.json()["callLegId"] == leg_id
+
+
+def test_state_egress_combines_observer_and_call_ops_streams(isolated_db):
+    with sqlite3.connect(isolated_db) as conn:
+        ensure_dashboard_tables(conn)
+        job_id = _create_job(conn)
+        upsert_operations_diary_task(
+            conn,
+            job_id=job_id,
+            task_date="2018-08-30",
+            title="Review invoice release",
+            actor_ref="ops-manager",
+        )
+        record_worker_time_capture_event(
+            conn,
+            event_type="clock_on",
+            channel="voice_call",
+            worker_name_raw="Alex Planner",
+            caller_phone="0400 222 333",
+            effective_timestamp="2018-08-30T06:30:00+10:00",
+            job_id=job_id,
+            confidence=0.9,
+        )
+        conn.commit()
+
+    client = TestClient(api.app)
+    response = client.get(f"/state-egress/events?surface=observer&jobId={job_id}&limit=20")
+    assert response.status_code == 200
+    payload = response.json()
+    assert any(row["eventFamily"] == "diary_task_event" for row in payload)
+    assert all(row["surface"] == "observer" for row in payload)
+
+    response = client.get("/state-egress/events?surface=all&limit=20")
+    assert response.status_code == 200
+    surfaces = {row["surface"] for row in response.json()}
+    assert "observer" in surfaces
+    assert "call_ops" in surfaces
+
+
+def test_operations_diary_export_endpoint_emits_snapshot_and_exceptions(isolated_db):
+    with sqlite3.connect(isolated_db) as conn:
+        ensure_dashboard_tables(conn)
+        job_id = _create_job(conn)
+        supplier_id = conn.execute(
+            """
+            INSERT INTO suppliers (company_name, created_at, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            ("Holiday Carrier", "2018-09-01T12:30:00+10:00", "2018-09-01T12:30:00+10:00"),
+        ).lastrowid
+        upsert_customer_invoice_review(
+            conn,
+            job_id=job_id,
+            invoice_status="reconciliation_warning",
+            reviewed_by="ops-manager",
+        )
+        upsert_subcontractor_bill_review(
+            conn,
+            job_id=job_id,
+            supplier_id=int(supplier_id),
+            bill_status="bill_exception",
+            bill_reference="BILL-99",
+            bill_date="2018-08-31",
+            amount=500.0,
+            reviewed_by="ops-manager",
+        )
+        conn.commit()
+
+    client = TestClient(api.app)
+    response = client.post(
+        "/state-egress/operations-diary-export",
+        json={
+            "anchorDate": "2018-08-30",
+            "viewMode": "day",
+            "actorRef": "ops-manager",
+            "includePlanningSnapshot": True,
+            "includeReconciliationExceptions": True,
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["byFamily"]["planning_snapshot"] == 1
+    assert payload["byFamily"]["reconciliation_exception"] >= 1
