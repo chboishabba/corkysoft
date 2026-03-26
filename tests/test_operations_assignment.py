@@ -35,6 +35,7 @@ from analytics.operations_assignment import (
     list_operations_cutover_rollout,
     list_operations_cutover_workflows,
     list_operational_readiness_items,
+    list_operational_share_opportunities,
     list_operational_conflicts,
     list_planned_labor_assignments,
     list_segments_for_truck,
@@ -617,6 +618,169 @@ def test_job_operations_board_includes_spare_capacity_and_container_rollups() ->
     assert row["containerShortageQuantity"] == 2.0
     assert row["segments"][0]["containerRequirementCount"] == 1
     assert row["segments"][0]["containerShortageQuantity"] == 2.0
+
+
+def test_operational_share_opportunities_flag_container_reallocation() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    ensure_dashboard_tables(conn)
+    conn.execute("ALTER TABLE jobs ADD COLUMN job_number TEXT")
+
+    upsert_truck(conn, truck_id="TRK-SIGNAL", name="Signal Truck", capacity_m3=50.0)
+    job_signal_id = _job(conn, "Signal Load", "Depot", "Site Q")
+    conn.execute("UPDATE jobs SET job_number = ? WHERE id = ?", ("SIG-1", job_signal_id))
+    signal_segment = ensure_segment(
+        conn,
+        job_id=job_signal_id,
+        segment_sequence=1,
+        from_location="Depot",
+        to_location="Site Q",
+        planned_start="2026-03-21T08:00:00+00:00",
+        planned_end="2026-03-21T12:00:00+00:00",
+    )
+    allocate_inventory_to_segment(
+        conn,
+        segment_id=int(signal_segment["id"]),
+        inventory_item_id=int(
+            upsert_inventory_item(conn, name="Signal Container", quantity=5, architecture="container")["id"]
+        ),
+        quantity=10,
+        status="assigned",
+    )
+    conn.execute(
+        "UPDATE shipments SET truck_id = ?, from_location = ?, to_location = ? WHERE segment_id = ?",
+        ("TRK-SIGNAL", "Depot", "Site Q", int(signal_segment["id"])),
+    )
+
+    item = upsert_inventory_item(
+        conn,
+        name="Container Pod",
+        quantity=5,
+        architecture="container",
+    )
+    job_id = _job(conn, "Reallocation Client", "Depot", "Site Q")
+    conn.execute("UPDATE jobs SET job_number = ? WHERE id = ?", ("REALLOC-1", job_id))
+    segment = ensure_segment(
+        conn,
+        job_id=job_id,
+        segment_sequence=1,
+        planned_start="2026-03-22T08:00:00+00:00",
+        planned_end="2026-03-22T12:00:00+00:00",
+    )
+    upsert_inventory_requirement(
+        conn,
+        job_id=job_id,
+        segment_id=int(segment["id"]),
+        inventory_item_id=int(item["id"]),
+        requirement_name="Container Pod",
+        required_quantity=3,
+        substitution_allowed=False,
+        architecture="container",
+    )
+    allocate_inventory_to_segment(
+        conn,
+        segment_id=int(segment["id"]),
+        inventory_item_id=int(item["id"]),
+        quantity=1,
+    )
+    upsert_job_operational_signal(
+        conn,
+        job_number="REALLOC-1",
+        origin="Depot",
+        destination="Site Q",
+        estimated_volume_m3=10.0,
+        source="planning",
+    )
+
+    opportunities = list_operational_share_opportunities(conn, job_id=job_id)
+
+    assert len(opportunities) == 1
+    row = opportunities[0]
+    assert row["opportunityType"] == "container_reallocation"
+    assert row["utilizationState"] == "pressure_with_relief_option"
+    assert row["spareCapacityLabel"] == "favorable"
+    assert row["containerShortageQuantity"] == 2.0
+
+
+def test_operational_share_opportunities_flag_backhaul_share_candidate() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    ensure_dashboard_tables(conn)
+    conn.execute("ALTER TABLE jobs ADD COLUMN job_number TEXT")
+
+    upsert_truck(conn, truck_id="TRK-BACKHAUL", name="Backhaul Truck", capacity_m3=50.0)
+    route_job_id = _job(conn, "Signal Load", "Alpha", "Beta")
+    signal_segment = ensure_segment(
+        conn,
+        job_id=route_job_id,
+        segment_sequence=1,
+        from_location="Alpha",
+        to_location="Beta",
+        planned_start="2026-03-21T08:00:00+00:00",
+        planned_end="2026-03-21T12:00:00+00:00",
+    )
+    allocate_inventory_to_segment(
+        conn,
+        segment_id=int(signal_segment["id"]),
+        inventory_item_id=int(
+            upsert_inventory_item(conn, name="Signal Item", quantity=5, architecture="general")["id"]
+        ),
+        quantity=5,
+        status="assigned",
+    )
+    conn.execute(
+        "UPDATE shipments SET truck_id = ?, from_location = ?, to_location = ? WHERE segment_id = ?",
+        ("TRK-BACKHAUL", "Alpha", "Beta", int(signal_segment["id"])),
+    )
+
+    item = upsert_inventory_item(
+        conn,
+        name="Blankets",
+        quantity=10,
+        architecture="general",
+    )
+    job_id = _job(conn, "Backhaul Client", "Alpha", "Beta")
+    conn.execute("UPDATE jobs SET job_number = ? WHERE id = ?", ("BACKHAUL-1", job_id))
+    segment = ensure_segment(
+        conn,
+        job_id=job_id,
+        segment_sequence=1,
+        planned_start="2026-03-22T08:00:00+00:00",
+        planned_end="2026-03-22T12:00:00+00:00",
+    )
+    upsert_inventory_requirement(
+        conn,
+        job_id=job_id,
+        segment_id=int(segment["id"]),
+        inventory_item_id=int(item["id"]),
+        requirement_name="Blankets",
+        required_quantity=2,
+        substitution_allowed=False,
+        architecture="general",
+    )
+    allocate_inventory_to_segment(
+        conn,
+        segment_id=int(segment["id"]),
+        inventory_item_id=int(item["id"]),
+        quantity=2,
+    )
+    upsert_job_operational_signal(
+        conn,
+        job_number="BACKHAUL-1",
+        origin="Alpha",
+        destination="Beta",
+        estimated_volume_m3=8.0,
+        source="planning",
+    )
+
+    opportunities = list_operational_share_opportunities(conn, job_id=job_id)
+
+    assert len(opportunities) == 1
+    row = opportunities[0]
+    assert row["opportunityType"] == "backhaul_share_candidate"
+    assert row["utilizationState"] == "under_utilised"
+    assert row["spareCapacityLabel"] == "favorable"
+    assert "backhaul positioning" in row["recommendedAction"]
 
 
 def test_approved_inventory_substitution_clears_readiness_block_and_board_rollup() -> None:

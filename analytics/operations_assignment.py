@@ -2369,6 +2369,93 @@ def list_job_operations_board(
     )
 
 
+def list_operational_share_opportunities(
+    conn: sqlite3.Connection,
+    *,
+    job_id: int | None = None,
+) -> list[dict[str, Any]]:
+    opportunities: list[dict[str, Any]] = []
+    for row in list_job_operations_board(conn, job_id=job_id):
+        spare_label = str(row.get("spareCapacityLabel") or "untracked")
+        container_shortage = float(row.get("containerShortageQuantity") or 0.0)
+        required_quantity = float(row.get("requiredQuantity") or 0.0)
+        fulfilled_quantity = float(row.get("allocatedQuantity") or 0.0) + float(
+            row.get("approvedSubstitutionQuantity") or 0.0
+        )
+        shortage_quantity = float(row.get("shortageQuantity") or 0.0)
+        container_required = int(row.get("containerRequirementCount") or 0)
+
+        opportunity_type: str | None = None
+        utilization_state = "balanced"
+        recommendation: str | None = None
+
+        if container_shortage > 0 and spare_label in {"favorable", "workable"}:
+            opportunity_type = "container_reallocation"
+            utilization_state = "pressure_with_relief_option"
+            recommendation = "Review container reallocation or shared return-lane support."
+        elif container_shortage > 0:
+            opportunity_type = "container_pressure"
+            utilization_state = "pressure_constrained"
+            recommendation = "Escalate container shortage; no favorable spare-capacity relief is currently tracked."
+        elif shortage_quantity > 0:
+            opportunity_type = "capacity_pressure"
+            utilization_state = "pressure_constrained"
+            recommendation = "Work is under-supplied; rebalance stock or labor before adding shared loads."
+        elif spare_label == "favorable" and required_quantity > 0 and fulfilled_quantity >= required_quantity:
+            opportunity_type = "backhaul_share_candidate"
+            utilization_state = "under_utilised"
+            recommendation = "Review add-on load, backhaul positioning, or shared container return on this lane."
+        elif (
+            spare_label == "workable"
+            and container_required > 0
+            and fulfilled_quantity >= required_quantity
+        ):
+            opportunity_type = "container_return_candidate"
+            utilization_state = "under_utilised"
+            recommendation = "Review whether container return or partial shared loading can ride this lane."
+
+        if opportunity_type is None:
+            continue
+
+        opportunities.append(
+            {
+                "jobId": row["jobId"],
+                "jobNumber": row.get("jobNumber"),
+                "jobClient": row.get("jobClient"),
+                "jobOrigin": row.get("jobOrigin"),
+                "jobDestination": row.get("jobDestination"),
+                "jobStatus": row.get("jobStatus"),
+                "opportunityType": opportunity_type,
+                "utilizationState": utilization_state,
+                "recommendedAction": recommendation,
+                "spareCapacityLabel": row.get("spareCapacityLabel"),
+                "spareCapacityScore": row.get("spareCapacityScore"),
+                "matchingSpareTrucks": row.get("matchingSpareTrucks", 0),
+                "destinationSpareTrucks": row.get("destinationSpareTrucks", 0),
+                "containerRequirementCount": row.get("containerRequirementCount", 0),
+                "containerShortageQuantity": row.get("containerShortageQuantity", 0.0),
+                "shortageQuantity": row.get("shortageQuantity", 0.0),
+                "plannedStart": row.get("plannedStart"),
+            }
+        )
+
+    type_rank = {
+        "container_reallocation": 0,
+        "container_pressure": 1,
+        "capacity_pressure": 2,
+        "backhaul_share_candidate": 3,
+        "container_return_candidate": 4,
+    }
+    return sorted(
+        opportunities,
+        key=lambda item: (
+            type_rank.get(str(item["opportunityType"]), 9),
+            str(item.get("plannedStart") or ""),
+            str(item.get("jobId") or ""),
+        ),
+    )
+
+
 def ensure_segment(
     conn: sqlite3.Connection,
     *,
@@ -2432,6 +2519,7 @@ __all__ = [
     "list_operations_cutover_rollout",
     "list_operations_cutover_workflows",
     "list_operational_readiness_items",
+    "list_operational_share_opportunities",
     "list_operational_conflicts",
     "list_planned_labor_assignments",
     "list_segments_for_truck",

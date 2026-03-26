@@ -9,6 +9,7 @@ from analytics.operations_assignment import (
     list_job_operations_board,
     list_operations_cutover_events,
     list_operations_cutover_rollout,
+    list_operational_share_opportunities,
     record_operations_cutover_event,
 )
 
@@ -69,6 +70,39 @@ def render_dispatch_tab(conn: sqlite3.Connection) -> None:
     if not board_rows:
         st.info("No planned jobs/segments available yet. Use Operations to create and assign segments.")
         return
+    opportunity_rows = list_operational_share_opportunities(conn)
+    if opportunity_rows:
+        st.markdown("#### Share / reallocation recommendations")
+        st.caption(
+            "These are operator recommendations based on spare-capacity and container-pressure signals, not automatic reassignments."
+        )
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Job": row["jobId"],
+                        "Job #": row.get("jobNumber") or "",
+                        "Client": row.get("jobClient") or "",
+                        "Route": " -> ".join(
+                            part
+                            for part in [row.get("jobOrigin") or "", row.get("jobDestination") or ""]
+                            if part
+                        ),
+                        "Opportunity": row["opportunityType"],
+                        "Utilisation": row["utilizationState"],
+                        "Signal": row.get("spareCapacityLabel") or "untracked",
+                        "Matching spare": row.get("matchingSpareTrucks", 0),
+                        "Destination spare": row.get("destinationSpareTrucks", 0),
+                        "Container shortage": row.get("containerShortageQuantity", 0.0),
+                        "Shortage": row.get("shortageQuantity", 0.0),
+                        "Recommended action": row["recommendedAction"],
+                    }
+                    for row in opportunity_rows
+                ]
+            ),
+            width="stretch",
+            hide_index=True,
+        )
 
     status_filter = st.multiselect(
         "Job status",
