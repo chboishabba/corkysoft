@@ -32,6 +32,7 @@ if "openrouteservice" not in sys.modules:
     sys.modules["openrouteservice.exceptions"] = exceptions_module
 
 from analytics.db import ensure_dashboard_tables
+from analytics.quote_guidance import build_quote_benchmark_overlay
 from analytics.price_distribution import load_quotes
 import corkysoft.quote_service as quote_service
 import corkysoft.routing as routing
@@ -113,6 +114,25 @@ def _prepare_geocode_cache(conn: sqlite3.Connection) -> None:
             locality TEXT,
             county TEXT,
             ts TEXT NOT NULL
+        )
+        """
+    )
+    conn.commit()
+
+
+def _prepare_quote_benchmark_history(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE historical_jobs (
+            id INTEGER PRIMARY KEY,
+            price_per_m3 REAL,
+            revenue_total REAL,
+            volume_m3 REAL,
+            final_cost REAL,
+            origin TEXT,
+            destination TEXT,
+            origin_postcode TEXT,
+            destination_postcode TEXT
         )
         """
     )
@@ -548,6 +568,89 @@ def test_build_summary_mentions_manual_amount() -> None:
 
     assert "Manual quote override" in summary
     assert "$950.00" in summary
+
+
+def test_build_quote_benchmark_overlay_identifies_backhaul_discount_headroom() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    _prepare_quote_benchmark_history(conn)
+    conn.executemany(
+        """
+        INSERT INTO historical_jobs (
+            price_per_m3, revenue_total, volume_m3, final_cost,
+            origin, destination, origin_postcode, destination_postcode
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (110.0, 3300.0, 30.0, 2400.0, "Brisbane", "Sydney", "4000", "2000"),
+            (116.0, 3480.0, 30.0, 2460.0, "Brisbane", "Sydney", "4000", "2000"),
+            (108.0, 3240.0, 30.0, 2370.0, "Sydney", "Brisbane", "2000", "4000"),
+        ],
+    )
+
+    overlay = build_quote_benchmark_overlay(
+        conn,
+        origin_resolved="Brisbane",
+        destination_resolved="Sydney",
+        origin_postcode="4000",
+        destination_postcode="2000",
+        cubic_m=30.0,
+        current_quote_total=3600.0,
+        spare_capacity_signal={
+            "label": "favorable",
+            "matchingSpareTrucks": 1,
+            "destinationSpareTrucks": 2,
+        },
+    )
+
+    assert overlay.benchmark_available is True
+    assert overlay.benchmark_scope == "direct_and_reverse"
+    assert overlay.direct_job_count == 2
+    assert overlay.reverse_job_count == 1
+    assert overlay.backhaul_opportunity is True
+    assert overlay.suggested_discount_pct > 0
+    assert overlay.recommended_quote_total is not None
+    assert overlay.recommended_quote_total < 3600.0
+    assert overlay.recommended_price_per_m3 is not None
+    assert overlay.recommended_price_per_m3 >= overlay.benchmark_price_per_m3_p25
+
+
+def test_build_quote_benchmark_overlay_lifts_under_market_quotes_to_band_floor() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    _prepare_quote_benchmark_history(conn)
+    conn.executemany(
+        """
+        INSERT INTO historical_jobs (
+            price_per_m3, revenue_total, volume_m3, final_cost,
+            origin, destination, origin_postcode, destination_postcode
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (130.0, 3900.0, 30.0, 2700.0, "Brisbane", "Sydney", "4000", "2000"),
+            (140.0, 4200.0, 30.0, 2850.0, "Brisbane", "Sydney", "4000", "2000"),
+            (150.0, 4500.0, 30.0, 3000.0, "Brisbane", "Sydney", "4000", "2000"),
+        ],
+    )
+
+    overlay = build_quote_benchmark_overlay(
+        conn,
+        origin_resolved="Brisbane",
+        destination_resolved="Sydney",
+        origin_postcode="4000",
+        destination_postcode="2000",
+        cubic_m=30.0,
+        current_quote_total=3000.0,
+    )
+
+    assert overlay.benchmark_position_label == "Below market band"
+    assert overlay.benchmark_price_per_m3_p25 is not None
+    assert overlay.recommended_price_per_m3 == pytest.approx(
+        overlay.benchmark_price_per_m3_p25
+    )
+    assert overlay.recommended_quote_total == pytest.approx(
+        overlay.benchmark_price_per_m3_p25 * 30.0
+    )
 
 
 def test_calculate_quote_applies_margin(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1118,3 +1221,17 @@ def test_apply_quote_suggestion_updates_inputs(monkeypatch: pytest.MonkeyPatch) 
         ("Suggested Origin", "Suggested Destination"),
     ]
     assert st.session_state.get("query_params_called") == {"view": "Quote builder"}
+
+
+def test_apply_recommended_quote_enables_manual_override() -> None:
+    from dashboard.components import quote_builder
+
+    st.session_state.clear()
+    result = _quote_result()
+    st.session_state["quote_result"] = result
+
+    quote_builder.apply_recommended_quote(1045.0)
+
+    assert st.session_state["quote_manual_override_enabled"] is True
+    assert st.session_state["quote_manual_override_amount"] == pytest.approx(1045.0)
+    assert st.session_state["quote_result"].manual_quote == pytest.approx(1045.0)

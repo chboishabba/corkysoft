@@ -105,6 +105,7 @@ from analytics.price_distribution import (
     ensure_break_even_parameter,
     enrich_missing_route_coordinates,
     import_historical_jobs_from_dataframe,
+    latest_historical_ingest_summary,
     load_historical_jobs,
     load_quotes,
     load_live_jobs,
@@ -184,6 +185,7 @@ from dashboard.components.route_maps import render_route_maps_tab
 from dashboard.components.calls import render_calls_tab
 from dashboard.components.price_history import render_price_history_tab
 from dashboard.components.optimizer import render_optimizer
+from dashboard.components.quote_builder import render_quote_builder
 from dashboard.map_provider import (
     folium_map_configuration,
     google_maps_api_key,
@@ -281,6 +283,44 @@ def _pin_lon_key(map_key: str) -> str:
 
 def _pin_lat_key(map_key: str) -> str:
     return f"{map_key}_lat_input"
+
+
+def _apply_lane_status_scope(
+    df: pd.DataFrame,
+    *,
+    scope_key: str,
+    label: str,
+) -> pd.DataFrame:
+    scoped = df.copy()
+    if "lane_assignment_status" not in scoped.columns:
+        return scoped
+    normalized_status = (
+        scoped["lane_assignment_status"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .replace("", "unassigned")
+    )
+    scoped = scoped.assign(lane_assignment_status=normalized_status)
+    lane_status_options = [
+        status
+        for status in ("assigned", "ambiguous", "unassigned")
+        if normalized_status.eq(status).any()
+    ]
+    if not lane_status_options:
+        return scoped
+    selected_lane_statuses = st.multiselect(
+        label,
+        options=lane_status_options,
+        default=["assigned"] if "assigned" in lane_status_options else lane_status_options,
+        help=(
+            "These analytics default to canonically assigned lane history. "
+            "Include ambiguous or unassigned rows only when deliberately exploring unresolved data."
+        ),
+        key=scope_key,
+    )
+    return scoped.loc[scoped["lane_assignment_status"].isin(selected_lane_statuses)].copy()
 
 
 def _render_pin_picker(
@@ -968,6 +1008,41 @@ def render_price_distribution_dashboard():
             import_feedback: Optional[tuple[str, str]] = None
             if dataset_key == "historical":
                 with st.expander("Import historical jobs from CSV", expanded=False):
+                    ingest_summary = latest_historical_ingest_summary(conn)
+                    if ingest_summary is not None:
+                        ingest_cols = st.columns(4)
+                        ingest_cols[0].metric(
+                            "Readiness",
+                            str(ingest_summary.get("readiness_status") or "unknown"),
+                        )
+                        ingest_cols[1].metric(
+                            "Inserted",
+                            int(ingest_summary.get("inserted_rows") or 0),
+                        )
+                        ingest_cols[2].metric(
+                            "Skipped",
+                            int(ingest_summary.get("skipped_rows") or 0),
+                        )
+                        ingest_cols[3].metric(
+                            "Issues",
+                            int(ingest_summary.get("issue_count") or 0),
+                        )
+                        st.caption(
+                            "Latest ingest: "
+                            + str(ingest_summary.get("source_name") or "unknown source")
+                            + " at "
+                            + str(ingest_summary.get("completed_at") or "unknown time")
+                        )
+                        coverage = ingest_summary.get("coverage_summary") or {}
+                        top_issues = coverage.get("topIssueCodes") or []
+                        if top_issues:
+                            st.caption(
+                                "Top issues: "
+                                + ", ".join(
+                                    f"{item['issueCode']} ({item['count']})"
+                                    for item in top_issues
+                                )
+                            )
                     import_form = st.form(key="dashboard_sidebar_historical_import_form")
                     uploaded_file = import_form.file_uploader(
                         "Select CSV file", type=["csv"], help="Requires headers such as date, origin, destination and m3."
@@ -1312,12 +1387,20 @@ def render_price_distribution_dashboard():
         if has_filtered_data:
             filtered_df = filtered_df.copy()
             filtered_df["cost_vs_price_pct"] = compute_cost_vs_price_percentage(filtered_df)
+            summary_scope_df = _apply_lane_status_scope(
+                filtered_df,
+                scope_key="dashboard_summary_lane_scope",
+                label="Lane assignment scope",
+            )
+            st.caption(
+                f"Summary/histogram rows after lane-status filter: {len(summary_scope_df)}"
+            )
 
-            summary = summarise_distribution(filtered_df, break_even_value)
-            profitability_summary = summarise_profitability(filtered_df)
+            summary = summarise_distribution(summary_scope_df, break_even_value)
+            profitability_summary = summarise_profitability(summary_scope_df)
 
             metro_df = _filter_by_distance(
-                filtered_df, metro_only=True, max_distance_km=metro_distance_km
+                summary_scope_df, metro_only=True, max_distance_km=metro_distance_km
             )
             if not metro_df.empty:
                 metro_summary = summarise_distribution(metro_df, break_even_value)
@@ -1334,10 +1417,16 @@ def render_price_distribution_dashboard():
 
         truck_positions = load_truck_positions(conn)
         active_routes = load_active_routes(conn)
-        map_routes = prepare_profitability_route_data(filtered_df, break_even_value)
 
         if "Live network overview" in tab_map:
             with tab_map["Live network overview"]:
+                network_df = _apply_lane_status_scope(
+                    filtered_df,
+                    scope_key="dashboard_live_network_lane_scope",
+                    label="Lane assignment scope",
+                )
+                st.caption(f"Live-network analytic rows after lane-status filter: {len(network_df)}")
+                map_routes = prepare_profitability_route_data(network_df, break_even_value)
                 render_network_map(
                     map_routes,
                     truck_positions,
@@ -1397,7 +1486,7 @@ def render_price_distribution_dashboard():
                             unsafe_allow_html=True,
                         )
     
-                    histogram = create_histogram(filtered_df, break_even_value)
+                    histogram = create_histogram(summary_scope_df, break_even_value)
                     st.plotly_chart(histogram, width="stretch")
                     st.caption(
                         "Histogram overlays include the normal distribution fit plus kurtosis and dispersion markers for context."
@@ -1419,6 +1508,14 @@ def render_price_distribution_dashboard():
         if "Profitability insights" in tab_map:
             with tab_map["Profitability insights"]:
                 if has_filtered_data:
+                    profitability_df = _apply_lane_status_scope(
+                        filtered_df,
+                        scope_key="dashboard_profitability_lane_scope",
+                        label="Lane assignment scope",
+                    )
+                    st.caption(
+                        f"Profitability analytic rows after lane-status filter: {len(profitability_df)}"
+                    )
                     st.markdown("### Profitability insights")
                     view_options = {
                         "m³ vs km profitability": create_m3_vs_km_figure,
@@ -1434,7 +1531,7 @@ def render_price_distribution_dashboard():
                         help="Switch between per-kilometre earnings and quoted-versus-cost comparisons.",
                         key="dashboard_profitability_view",
                     )
-                    fig = view_options[selected_view](filtered_df)
+                    fig = view_options[selected_view](profitability_df)
                     st.plotly_chart(fig, width="stretch")
     
                     if selected_view == "Metro profitability spotlight":
@@ -1442,10 +1539,10 @@ def render_price_distribution_dashboard():
                             "Metro view highlights close-in routes with margin and cost sensitivity overlays."
                         )
     
-                    if "margin_per_m3" in filtered_df.columns:
+                    if "margin_per_m3" in profitability_df.columns:
                         st.markdown("#### Margin outliers")
                         ranked = (
-                            filtered_df.dropna(subset=["margin_per_m3"]).sort_values("margin_per_m3")
+                            profitability_df.dropna(subset=["margin_per_m3"]).sort_values("margin_per_m3")
                         )
                         if not ranked.empty:
                             low_cols, high_cols = st.columns(2)
@@ -1512,6 +1609,17 @@ def render_price_distribution_dashboard():
 
         if "Quote builder" in tab_map:
             with tab_map["Quote builder"]:
+                render_quote_builder(
+                    filtered_df=filtered_df,
+                    mapping=filtered_mapping,
+                    conn=conn,
+                    state=state,
+                )
+
+        if False and "Quote builder" in tab_map:
+            with tab_map["Quote builder"]:
+                pass
+                '''Legacy inline quote-builder implementation retained as inactive reference.
                 saved_rowid = st.session_state.pop("quote_saved_rowid", None)
                 if saved_rowid is not None:
                     st.success(f"Quote saved as record #{saved_rowid}.")
@@ -2541,6 +2649,7 @@ def render_price_distribution_dashboard():
                                 st.session_state.pop(_NULL_CLIENT_COMPANY_KEY, None)
                                 st.session_state.pop(_NULL_CLIENT_NOTES_KEY, None)
                                 _rerun_app()
+                '''
 
         if "Calls" in tab_map:
             with tab_map["Calls"]:
@@ -2705,8 +2814,39 @@ def render_kent_tenders_tab(conn: sqlite3.Connection) -> None:
         key="kent_tender_operator_id",
     )
     queue_cols[3].metric("Rule mode", policy["ruleMode"])
+    triage_filters = st.columns(3)
+    hard_block_scope = triage_filters[0].selectbox(
+        "Hard-block scope",
+        options=["all", "hide_hard_blocked", "only_hard_blocked"],
+        index=0,
+        key="kent_tender_hard_block_scope",
+    )
+    policy_scope = triage_filters[1].selectbox(
+        "Policy scope",
+        options=["all", "policy_fail_only", "policy_matched_only"],
+        index=0,
+        key="kent_tender_policy_scope",
+    )
+    loss_scope = triage_filters[2].selectbox(
+        "Loss scope",
+        options=["all", "loss_alert_only", "hide_loss_alerts"],
+        index=0,
+        key="kent_tender_loss_scope",
+    )
 
     rows = list_prioritized_tenders(conn, status=status_filter, limit=limit_value)
+    if hard_block_scope == "hide_hard_blocked":
+        rows = [row for row in rows if not row["hardBlockFlags"]]
+    elif hard_block_scope == "only_hard_blocked":
+        rows = [row for row in rows if row["hardBlockFlags"]]
+    if policy_scope == "policy_fail_only":
+        rows = [row for row in rows if not row["policyMatched"]]
+    elif policy_scope == "policy_matched_only":
+        rows = [row for row in rows if row["policyMatched"]]
+    if loss_scope == "loss_alert_only":
+        rows = [row for row in rows if row["lossAlert"]]
+    elif loss_scope == "hide_loss_alerts":
+        rows = [row for row in rows if not row["lossAlert"]]
     if not rows:
         st.info("No Kent tenders found for the selected filter.")
         return
@@ -2866,6 +3006,19 @@ def render_kent_admin_tab(
     if reasons:
         st.dataframe(pd.DataFrame(reasons), width='stretch', hide_index=True)
 
+    review_rows = list_prioritized_tenders(conn, status="all", limit=100)
+    review_summary = {
+        "hardBlocked": sum(1 for row in review_rows if row["hardBlockFlags"]),
+        "policyFail": sum(1 for row in review_rows if not row["policyMatched"]),
+        "lossAlert": sum(1 for row in review_rows if row["lossAlert"]),
+        "overrideable": sum(1 for row in review_rows if row["overrideableFlags"]),
+    }
+    review_cols = st.columns(4)
+    review_cols[0].metric("Hard blocked", review_summary["hardBlocked"])
+    review_cols[1].metric("Policy fail", review_summary["policyFail"])
+    review_cols[2].metric("Loss alerts", review_summary["lossAlert"])
+    review_cols[3].metric("Overrideable", review_summary["overrideable"])
+
     with st.form("kent_override_reason_form"):
         reason_cols = st.columns(4)
         new_code = reason_cols[0].text_input("Code")
@@ -2886,26 +3039,32 @@ def render_kent_admin_tab(
             else:
                 st.success("Override reason saved.")
                 st.rerun()
-
-            history = list_kent_tender_override_history(
-                conn, tender_external_id=row["tenderExternalId"]
+    recent_tenders = list_prioritized_tenders(conn, status="all", limit=10)
+    recent_override_rows: list[dict[str, Any]] = []
+    for tender_row in recent_tenders:
+        history = list_kent_tender_override_history(
+            conn, tender_external_id=tender_row["tenderExternalId"]
+        )
+        for item in history[:3]:
+            recent_override_rows.append(
+                {
+                    "Tender": tender_row["tenderExternalId"],
+                    "At": item["createdAt"],
+                    "Action": item["action"],
+                    "Operator": item["operatorId"],
+                    "Reason": item["reasonCode"],
+                    "Note": item["note"],
+                    "Policy matched": item["policyMatched"],
+                    "Loss alert": item["lossAlert"],
+                }
             )
-            if history:
-                history_df = pd.DataFrame(
-                    [
-                        {
-                            "At": item["createdAt"],
-                            "Action": item["action"],
-                            "Operator": item["operatorId"],
-                            "Reason": item["reasonCode"],
-                            "Note": item["note"],
-                            "Policy matched": item["policyMatched"],
-                            "Loss alert": item["lossAlert"],
-                        }
-                        for item in history
-                    ]
-                )
-                st.dataframe(history_df, width='stretch', hide_index=True)
+    if recent_override_rows:
+        st.markdown("#### Recent override history")
+        st.dataframe(
+            pd.DataFrame(recent_override_rows).sort_values("At", ascending=False),
+            width='stretch',
+            hide_index=True,
+        )
 
 
 def render_inventory_tab(conn: sqlite3.Connection) -> None:

@@ -23,6 +23,8 @@ from analytics.price_distribution import (
     enrich_missing_route_coordinates,
     filter_routes_by_country,
 )
+from analytics.operational_signals import compute_route_spare_capacity_signal
+from analytics.quote_guidance import build_quote_benchmark_overlay
 from corkysoft.pricing import DEFAULT_MODIFIERS
 from corkysoft.quote_service import (
     COUNTRY_DEFAULT,
@@ -365,6 +367,168 @@ def apply_quote_suggestion(
     st.session_state["quote_pin_override"] = _initial_pin_state(updated_result)
     st.session_state.pop(_HAVERSINE_MODAL_STATE_KEY, None)
     _set_query_params(view="Quote builder")
+
+
+def apply_recommended_quote(recommended_quote_total: float) -> None:
+    """Apply the recommended quote as a manual override candidate."""
+
+    recommended = float(recommended_quote_total)
+    if not math.isfinite(recommended) or recommended <= 0:
+        raise ValueError("Recommended quote must be a positive number.")
+
+    st.session_state["quote_manual_override_enabled"] = True
+    st.session_state["quote_manual_override_amount"] = recommended
+
+    current_result = st.session_state.get("quote_result")
+    if isinstance(current_result, QuoteResult):
+        current_result.manual_quote = recommended
+        st.session_state["quote_result"] = current_result
+
+
+def _effective_quote_total(result: QuoteResult) -> float:
+    if result.manual_quote is not None and math.isfinite(float(result.manual_quote)):
+        return float(result.manual_quote)
+    return float(result.final_quote)
+
+
+def _render_quote_guidance_panel(
+    conn: Any,
+    stored_inputs: QuoteInput,
+    quote_result: QuoteResult,
+) -> None:
+    current_quote_total = _effective_quote_total(quote_result)
+    spare_capacity_signal = compute_route_spare_capacity_signal(
+        conn,
+        origin=quote_result.origin_resolved or stored_inputs.origin,
+        destination=quote_result.destination_resolved or stored_inputs.destination,
+        required_trucks=1,
+        estimated_volume_m3=stored_inputs.cubic_m,
+    )
+    overlay = build_quote_benchmark_overlay(
+        conn,
+        origin_resolved=quote_result.origin_resolved or stored_inputs.origin,
+        destination_resolved=quote_result.destination_resolved or stored_inputs.destination,
+        origin_postcode=quote_result.origin_postcode_hint,
+        destination_postcode=quote_result.destination_postcode_hint,
+        cubic_m=stored_inputs.cubic_m,
+        current_quote_total=current_quote_total,
+        spare_capacity_signal=spare_capacity_signal,
+    )
+
+    st.markdown("#### Commercial guidance")
+
+    metric_cols = st.columns(4)
+    benchmark_band = "No benchmark"
+    if (
+        overlay.benchmark_price_per_m3_p25 is not None
+        and overlay.benchmark_price_per_m3_p75 is not None
+    ):
+        benchmark_band = (
+            f"${overlay.benchmark_price_per_m3_p25:,.0f}-$"
+            f"{overlay.benchmark_price_per_m3_p75:,.0f}/m³"
+        )
+
+    metric_cols[0].metric(
+        "Current $/m³",
+        f"${overlay.current_price_per_m3:,.2f}",
+        overlay.benchmark_position_label,
+    )
+    metric_cols[1].metric(
+        "Benchmark median",
+        (
+            f"${overlay.benchmark_price_per_m3_median:,.2f}"
+            if overlay.benchmark_price_per_m3_median is not None
+            else "N/A"
+        ),
+        benchmark_band,
+    )
+    metric_cols[2].metric(
+        "Recommended quote",
+        (
+            format_currency(overlay.recommended_quote_total)
+            if overlay.recommended_quote_total is not None
+            else "N/A"
+        ),
+        (
+            format_currency(overlay.recommended_adjustment)
+            if overlay.recommended_adjustment is not None
+            else None
+        ),
+    )
+    metric_cols[3].metric(
+        "Backhaul discount",
+        f"{overlay.suggested_discount_pct:.1f}%",
+        (
+            format_currency(-overlay.suggested_discount_amount)
+            if overlay.suggested_discount_amount > 0
+            else overlay.backhaul_label.title()
+        ),
+    )
+
+    benchmark_context = (
+        f"Benchmarked against {overlay.benchmark_job_count} matched job"
+        f"{'s' if overlay.benchmark_job_count != 1 else ''}"
+    )
+    if overlay.direct_job_count or overlay.reverse_job_count:
+        benchmark_context += (
+            f" ({overlay.direct_job_count} direct, {overlay.reverse_job_count} reverse)."
+        )
+    else:
+        benchmark_context += "."
+    st.caption(benchmark_context)
+
+    context_cols = st.columns(2)
+    with context_cols[0]:
+        st.markdown("**Benchmark overlay**")
+        if overlay.benchmark_available:
+            scope_label = overlay.benchmark_scope.replace("_", " ").title()
+            st.write(f"Scope: {scope_label}")
+            if overlay.benchmark_margin_per_m3_median is not None:
+                st.write(
+                    "Median benchmark margin: "
+                    f"${overlay.benchmark_margin_per_m3_median:,.2f}/m³"
+                )
+            if overlay.benchmark_weighted_price_per_m3 is not None:
+                st.write(
+                    "Weighted benchmark price: "
+                    f"${overlay.benchmark_weighted_price_per_m3:,.2f}/m³"
+                )
+        else:
+            st.info("No comparable direct or reverse-lane history is available yet.")
+
+    with context_cols[1]:
+        st.markdown("**Backhaul guidance**")
+        st.write(
+            f"Signal: {overlay.backhaul_label.title()} ({overlay.backhaul_score:.0f}/100)"
+        )
+        if overlay.backhaul_opportunity:
+            st.write(
+                "Controlled discount headroom: "
+                f"{overlay.suggested_discount_pct:.1f}% "
+                f"({format_currency(overlay.suggested_discount_amount)})"
+            )
+        else:
+            st.write("No discount guidance from reverse-lane or spare-capacity signals.")
+
+    for note in overlay.notes:
+        st.caption(note)
+
+    if overlay.recommended_quote_total is None:
+        return
+
+    delta = overlay.recommended_quote_total - current_quote_total
+    if abs(delta) < 0.005:
+        st.info("Current quote already aligns with the recommendation band.")
+        return
+
+    button_label = (
+        "Apply recommended discount"
+        if delta < 0
+        else "Apply recommended uplift"
+    )
+    if st.button(button_label, key="quote_apply_recommended_quote", type="secondary"):
+        apply_recommended_quote(overlay.recommended_quote_total)
+        _rerun_app()
 
 
 def _first_non_empty(route: pd.Series, columns: Sequence[str]) -> Optional[str]:
@@ -1298,6 +1462,23 @@ def render_quote_builder(
             )
         else:
             st.markdown("**Margin:** Not applied.")
+        if quote_result.profit_rule_mode:
+            policy_line = (
+                f"**Quote policy preview:** `{quote_result.profit_rule_mode}` | "
+                f"pass={bool(quote_result.policy_matched)} | "
+                f"thresholds ${float(quote_result.absolute_margin_threshold or 0.0):,.0f} / "
+                f"{float(quote_result.margin_percent_threshold or 0.0):.1f}%"
+            )
+            st.markdown(policy_line)
+        if quote_result.policy_fail_reasons:
+            st.warning(
+                "Profitability policy fail reasons: "
+                + ", ".join(quote_result.policy_fail_reasons)
+            )
+        if quote_result.loss_alert:
+            st.error("Loss alert: expected margin is below the configured floor.")
+
+        _render_quote_guidance_panel(conn, stored_inputs, quote_result)
 
         with st.expander("Base calculation details"):
             base_rows = [

@@ -808,11 +808,89 @@ def _ensure_operations_diary_tables(conn: sqlite3.Connection) -> None:
         }
         for column, declaration in declarations.items():
             if column not in columns:
-                conn.execute(f"ALTER TABLE subcontractor_bill_reviews ADD COLUMN {column} {declaration}")
+                conn.execute(
+                    f"ALTER TABLE subcontractor_bill_reviews ADD COLUMN {column} {declaration}"
+                )
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_subcontractor_bill_reviews_job
                 ON subcontractor_bill_reviews(job_id, bill_status, bill_date)
+            """
+        )
+
+    if not _table_exists(conn, "observer_outbox_events"):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS observer_outbox_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT NOT NULL UNIQUE,
+                source_system TEXT NOT NULL DEFAULT 'corkysoft',
+                source_entity_id TEXT NOT NULL,
+                event_family TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                correlation_key TEXT,
+                actor_ref TEXT,
+                authority_class TEXT NOT NULL,
+                summary TEXT,
+                status TEXT,
+                object_refs_json TEXT NOT NULL,
+                provenance_refs_json TEXT NOT NULL,
+                evidence_refs_json TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                payload_hash TEXT NOT NULL,
+                event_time TEXT NOT NULL,
+                recorded_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_observer_outbox_events_recorded
+                ON observer_outbox_events(recorded_at DESC, id DESC)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_observer_outbox_events_family
+                ON observer_outbox_events(event_family, event_time DESC)
+            """
+        )
+    else:
+        columns = _table_columns(conn, "observer_outbox_events")
+        declarations = {
+            "event_id": "TEXT",
+            "source_system": "TEXT NOT NULL DEFAULT 'corkysoft'",
+            "source_entity_id": "TEXT",
+            "event_family": "TEXT",
+            "event_type": "TEXT",
+            "idempotency_key": "TEXT",
+            "correlation_key": "TEXT",
+            "actor_ref": "TEXT",
+            "authority_class": "TEXT",
+            "summary": "TEXT",
+            "status": "TEXT",
+            "object_refs_json": "TEXT NOT NULL DEFAULT '{}'",
+            "provenance_refs_json": "TEXT NOT NULL DEFAULT '[]'",
+            "evidence_refs_json": "TEXT NOT NULL DEFAULT '[]'",
+            "payload_json": "TEXT NOT NULL DEFAULT '{}'",
+            "payload_hash": "TEXT",
+            "event_time": "TEXT",
+            "recorded_at": "TEXT",
+        }
+        for column, declaration in declarations.items():
+            if column not in columns:
+                conn.execute(f"ALTER TABLE observer_outbox_events ADD COLUMN {column} {declaration}")
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_observer_outbox_events_recorded
+                ON observer_outbox_events(recorded_at DESC, id DESC)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_observer_outbox_events_family
+                ON observer_outbox_events(event_family, event_time DESC)
             """
         )
 
