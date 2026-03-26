@@ -10,6 +10,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from dashboard.components.lane_scope import apply_lane_status_scope
 from analytics.db import list_inventory_requirements
 from analytics.db.site_media import (
     MEDIA_INFERENCE_TYPES,
@@ -47,38 +48,16 @@ def render_planner_tab(filtered_df: pd.DataFrame, conn: sqlite3.Connection) -> N
         "Hybrid planning surface for pre-award route shaping and post-award operational leg planning. Planner confirms into internal job_segments only after review."
     )
 
-    planner_df = filtered_df.copy()
-    available_lane_statuses: list[str] = []
-    if "lane_assignment_status" in planner_df.columns:
-        normalized_status = (
-            planner_df["lane_assignment_status"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .str.lower()
-            .replace("", "unassigned")
-        )
-        planner_df = planner_df.assign(lane_assignment_status=normalized_status)
-        available_lane_statuses = [
-            status
-            for status in ("assigned", "ambiguous", "unassigned")
-            if normalized_status.eq(status).any()
-        ]
-    if available_lane_statuses:
-        selected_lane_statuses = st.multiselect(
-            "Lane assignment scope",
-            options=available_lane_statuses,
-            default=["assigned"] if "assigned" in available_lane_statuses else available_lane_statuses,
-            help=(
-                "Planner suggestions default to canonically assigned lanes. "
-                "Include ambiguous or unassigned rows only when deliberately exploring unresolved history."
-            ),
-            key="planner_lane_assignment_scope",
-        )
-        planner_df = planner_df.loc[
-            planner_df["lane_assignment_status"].isin(selected_lane_statuses)
-        ].copy()
-        st.caption(f"Planner dataset rows after lane-status filter: {len(planner_df)}")
+    planner_df = apply_lane_status_scope(
+        filtered_df,
+        scope_key="planner_lane_assignment_scope",
+        label="Lane assignment scope",
+        help_text=(
+            "Planner suggestions default to canonically assigned lanes. "
+            "Include ambiguous or unassigned rows only when deliberately exploring unresolved history."
+        ),
+        caption_prefix="Planner dataset rows after lane-status filter",
+    )
 
     corridor_candidates = list_planner_corridor_candidates(planner_df)
     if not corridor_candidates:

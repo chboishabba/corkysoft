@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from dashboard.components.lane_scope import apply_lane_status_scope
 from analytics.optimizer import (
     OptimizerParameters,
     OptimizerRun,
@@ -110,37 +111,16 @@ def render_optimizer(filtered_df: pd.DataFrame) -> None:
     """Render the optimizer workflow for the provided filtered dataframe."""
     st.markdown("### Margin optimizer")
     st.caption("Generate corridor-level price uplift suggestions using the filtered job set.")
-    scoped_df = filtered_df.copy()
-    if "lane_assignment_status" in scoped_df.columns:
-        normalized_status = (
-            scoped_df["lane_assignment_status"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .str.lower()
-            .replace("", "unassigned")
-        )
-        scoped_df = scoped_df.assign(lane_assignment_status=normalized_status)
-        lane_status_options = [
-            status
-            for status in ("assigned", "ambiguous", "unassigned")
-            if normalized_status.eq(status).any()
-        ]
-        if lane_status_options:
-            selected_lane_statuses = st.multiselect(
-                "Lane assignment scope",
-                options=lane_status_options,
-                default=["assigned"] if "assigned" in lane_status_options else lane_status_options,
-                help=(
-                    "Optimizer defaults to canonically assigned lane history. "
-                    "Include ambiguous or unassigned rows only when deliberately stress-testing the recommendation set."
-                ),
-                key="optimizer_lane_assignment_scope",
-            )
-            scoped_df = scoped_df.loc[
-                scoped_df["lane_assignment_status"].isin(selected_lane_statuses)
-            ].copy()
-            st.caption(f"Optimizer rows after lane-status filter: {len(scoped_df)}")
+    scoped_df = apply_lane_status_scope(
+        filtered_df,
+        scope_key="optimizer_lane_assignment_scope",
+        label="Lane assignment scope",
+        help_text=(
+            "Optimizer defaults to canonically assigned lane history. "
+            "Include ambiguous or unassigned rows only when deliberately stress-testing the recommendation set."
+        ),
+        caption_prefix="Optimizer rows after lane-status filter",
+    )
 
     optimizer_state = _get_optimizer_state()
 

@@ -8,6 +8,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from dashboard.components.lane_scope import apply_lane_status_scope
 from analytics.price_distribution import (
     ColumnMapping,
     build_price_history_series,
@@ -36,37 +37,16 @@ def render_price_history_tab(
     end_date: Optional[date],
 ) -> None:
     """Render the price history dashboard tab."""
-    scoped_df = filtered_df.copy()
-    if "lane_assignment_status" in scoped_df.columns:
-        normalized_status = (
-            scoped_df["lane_assignment_status"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .str.lower()
-            .replace("", "unassigned")
-        )
-        scoped_df = scoped_df.assign(lane_assignment_status=normalized_status)
-        lane_status_options = [
-            status
-            for status in ("assigned", "ambiguous", "unassigned")
-            if normalized_status.eq(status).any()
-        ]
-        if lane_status_options:
-            selected_lane_statuses = st.multiselect(
-                "Lane assignment scope",
-                options=lane_status_options,
-                default=["assigned"] if "assigned" in lane_status_options else lane_status_options,
-                help=(
-                    "Price-history trends default to canonically assigned lane history. "
-                    "Include ambiguous or unassigned rows only when exploring unresolved data."
-                ),
-                key="price_history_lane_assignment_scope",
-            )
-            scoped_df = scoped_df.loc[
-                scoped_df["lane_assignment_status"].isin(selected_lane_statuses)
-            ].copy()
-            st.caption(f"Price-history rows after lane-status filter: {len(scoped_df)}")
+    scoped_df = apply_lane_status_scope(
+        filtered_df,
+        scope_key="price_history_lane_assignment_scope",
+        label="Lane assignment scope",
+        help_text=(
+            "Price-history trends default to canonically assigned lane history. "
+            "Include ambiguous or unassigned rows only when exploring unresolved data."
+        ),
+        caption_prefix="Price-history rows after lane-status filter",
+    )
     has_filtered_data = not scoped_df.empty
     date_column = mapping.date or "job_date"
 

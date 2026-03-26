@@ -31,6 +31,7 @@ from analytics.routes_map import (
     build_job_route_map,
     fetch_job_route_rows,
 )
+from dashboard.components.lane_scope import apply_lane_status_scope
 from dashboard.components.maps import _hex_to_rgb, build_route_map
 from dashboard.map_provider import folium_map_configuration, plotly_map_layout
 
@@ -129,37 +130,16 @@ def render_route_maps_tab(
     """Render the Route maps tab contents."""
 
     st.markdown("### Corridor visualisation")
-    scoped_input_df = filtered_df.copy()
-    if "lane_assignment_status" in scoped_input_df.columns:
-        normalized_status = (
-            scoped_input_df["lane_assignment_status"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .str.lower()
-            .replace("", "unassigned")
-        )
-        scoped_input_df = scoped_input_df.assign(lane_assignment_status=normalized_status)
-        lane_status_options = [
-            status
-            for status in ("assigned", "ambiguous", "unassigned")
-            if normalized_status.eq(status).any()
-        ]
-        if lane_status_options:
-            selected_lane_statuses = st.multiselect(
-                "Lane assignment scope",
-                options=lane_status_options,
-                default=["assigned"] if "assigned" in lane_status_options else lane_status_options,
-                help=(
-                    "Route maps default to canonically assigned lane history. "
-                    "Include ambiguous or unassigned rows only when exploring unresolved records."
-                ),
-                key="route_maps_lane_assignment_scope",
-            )
-            scoped_input_df = scoped_input_df.loc[
-                scoped_input_df["lane_assignment_status"].isin(selected_lane_statuses)
-            ].copy()
-            st.caption(f"Route-map dataset rows after lane-status filter: {len(scoped_input_df)}")
+    scoped_input_df = apply_lane_status_scope(
+        filtered_df,
+        scope_key="route_maps_lane_assignment_scope",
+        label="Lane assignment scope",
+        help_text=(
+            "Route maps default to canonically assigned lane history. "
+            "Include ambiguous or unassigned rows only when exploring unresolved records."
+        ),
+        caption_prefix="Route-map dataset rows after lane-status filter",
+    )
 
     map_mode = st.radio(
         "Visualisation mode",

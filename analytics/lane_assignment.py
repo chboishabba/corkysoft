@@ -37,6 +37,15 @@ def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
     }
 
 
+def _sql_fallback_expr(terms: Sequence[str]) -> str:
+    filtered_terms = [term for term in terms if term]
+    if not filtered_terms:
+        return "NULL"
+    if len(filtered_terms) == 1:
+        return filtered_terms[0]
+    return f"COALESCE({', '.join(filtered_terms)})"
+
+
 def ensure_lane_assignment_schema(conn: sqlite3.Connection) -> None:
     """Ensure canonical lane-assignment tables and columns exist."""
 
@@ -631,20 +640,71 @@ def _load_assignment_rows(
     row_ids: Sequence[int] | None = None,
 ) -> list[dict[str, Any]]:
     if dataset == "historical":
-        sql = """
+        historical_columns = _table_columns(conn, "historical_jobs")
+        address_columns = _table_columns(conn, "addresses") if _table_exists(conn, "addresses") else set()
+        has_origin_join = (
+            "origin_address_id" in historical_columns
+            and _table_exists(conn, "addresses")
+            and "id" in address_columns
+        )
+        has_destination_join = (
+            "destination_address_id" in historical_columns
+            and _table_exists(conn, "addresses")
+            and "id" in address_columns
+        )
+
+        origin_terms: list[str] = []
+        destination_terms: list[str] = []
+        origin_postcode_terms: list[str] = []
+        destination_postcode_terms: list[str] = []
+
+        if "origin" in historical_columns:
+            origin_terms.append("hj.origin")
+        if "destination" in historical_columns:
+            destination_terms.append("hj.destination")
+        if "origin_postcode" in historical_columns:
+            origin_postcode_terms.append("hj.origin_postcode")
+        if "destination_postcode" in historical_columns:
+            destination_postcode_terms.append("hj.destination_postcode")
+
+        joins: list[str] = []
+        if has_origin_join:
+            joins.append("LEFT JOIN addresses AS o ON hj.origin_address_id = o.id")
+            for column in ("city", "normalized", "raw_input"):
+                if column in address_columns:
+                    origin_terms.append(f"o.{column}")
+            if "postcode" in address_columns:
+                origin_postcode_terms.append("o.postcode")
+        if has_destination_join:
+            joins.append("LEFT JOIN addresses AS d ON hj.destination_address_id = d.id")
+            for column in ("city", "normalized", "raw_input"):
+                if column in address_columns:
+                    destination_terms.append(f"d.{column}")
+            if "postcode" in address_columns:
+                destination_postcode_terms.append("d.postcode")
+
+        origin_expr = _sql_fallback_expr(origin_terms)
+        destination_expr = _sql_fallback_expr(destination_terms)
+        origin_postcode_expr = _sql_fallback_expr(origin_postcode_terms)
+        destination_postcode_expr = _sql_fallback_expr(destination_postcode_terms)
+        origin_lat_expr = "o.lat" if has_origin_join and "lat" in address_columns else "NULL"
+        origin_lon_expr = "o.lon" if has_origin_join and "lon" in address_columns else "NULL"
+        dest_lat_expr = "d.lat" if has_destination_join and "lat" in address_columns else "NULL"
+        dest_lon_expr = "d.lon" if has_destination_join and "lon" in address_columns else "NULL"
+
+        sql = f"""
             SELECT
                 hj.id,
-                COALESCE(hj.origin, o.city, o.normalized, o.raw_input) AS origin,
-                COALESCE(hj.destination, d.city, d.normalized, d.raw_input) AS destination,
-                COALESCE(hj.origin_postcode, o.postcode) AS origin_postcode,
-                COALESCE(hj.destination_postcode, d.postcode) AS destination_postcode,
-                o.lat AS origin_lat,
-                o.lon AS origin_lon,
-                d.lat AS dest_lat,
-                d.lon AS dest_lon
+                {origin_expr} AS origin,
+                {destination_expr} AS destination,
+                {origin_postcode_expr} AS origin_postcode,
+                {destination_postcode_expr} AS destination_postcode,
+                {origin_lat_expr} AS origin_lat,
+                {origin_lon_expr} AS origin_lon,
+                {dest_lat_expr} AS dest_lat,
+                {dest_lon_expr} AS dest_lon
             FROM historical_jobs AS hj
-            LEFT JOIN addresses AS o ON hj.origin_address_id = o.id
-            LEFT JOIN addresses AS d ON hj.destination_address_id = d.id
+            {' '.join(joins)}
         """
     elif dataset == "live":
         sql = """
@@ -671,10 +731,14 @@ def _load_assignment_rows(
         conditions.append(f"{row_id_column} IN ({placeholders})")
         params.extend(int(value) for value in row_ids)
     else:
-        status_column = (
-            "hj.lane_assignment_status" if dataset == "historical" else "lane_assignment_status"
-        )
-        conditions.append(f"({status_column} IS NULL OR TRIM({status_column}) = '')")
+        table_name = "historical_jobs" if dataset == "historical" else "jobs"
+        table_columns = _table_columns(conn, table_name)
+        status_column_name = "lane_assignment_status"
+        if status_column_name in table_columns:
+            status_column = (
+                "hj.lane_assignment_status" if dataset == "historical" else "lane_assignment_status"
+            )
+            conditions.append(f"({status_column} IS NULL OR TRIM({status_column}) = '')")
     if conditions:
         sql += " WHERE " + " AND ".join(conditions)
     cursor = conn.execute(sql, params)
@@ -689,21 +753,75 @@ def _load_governance_row(
     row_id: int,
 ) -> dict[str, Any]:
     if dataset == "historical":
-        sql = """
+        historical_columns = _table_columns(conn, "historical_jobs")
+        address_columns = _table_columns(conn, "addresses") if _table_exists(conn, "addresses") else set()
+        has_origin_join = (
+            "origin_address_id" in historical_columns
+            and _table_exists(conn, "addresses")
+            and "id" in address_columns
+        )
+        has_destination_join = (
+            "destination_address_id" in historical_columns
+            and _table_exists(conn, "addresses")
+            and "id" in address_columns
+        )
+
+        origin_terms: list[str] = []
+        destination_terms: list[str] = []
+        corridor_terms: list[str] = []
+        if "origin" in historical_columns:
+            origin_terms.append("hj.origin")
+        if "destination" in historical_columns:
+            destination_terms.append("hj.destination")
+        if "corridor_display" in historical_columns:
+            corridor_terms.append("hj.corridor_display")
+        joins: list[str] = []
+        if has_origin_join:
+            joins.append("LEFT JOIN addresses AS o ON hj.origin_address_id = o.id")
+            for column in ("city", "normalized", "raw_input"):
+                if column in address_columns:
+                    origin_terms.append(f"o.{column}")
+        if has_destination_join:
+            joins.append("LEFT JOIN addresses AS d ON hj.destination_address_id = d.id")
+            for column in ("city", "normalized", "raw_input"):
+                if column in address_columns:
+                    destination_terms.append(f"d.{column}")
+
+        origin_expr = _sql_fallback_expr(origin_terms)
+        destination_expr = _sql_fallback_expr(destination_terms)
+        if not corridor_terms and origin_terms and destination_terms:
+            corridor_terms.append(f"{origin_expr} || ' -> ' || {destination_expr}")
+        corridor_expr = _sql_fallback_expr(corridor_terms)
+        origin_cluster_expr = (
+            "hj.origin_cluster_key" if "origin_cluster_key" in historical_columns else "NULL"
+        )
+        destination_cluster_expr = (
+            "hj.destination_cluster_key" if "destination_cluster_key" in historical_columns else "NULL"
+        )
+        lane_status_expr = (
+            "hj.lane_assignment_status" if "lane_assignment_status" in historical_columns else "NULL"
+        )
+        lane_source_expr = (
+            "hj.lane_assignment_source" if "lane_assignment_source" in historical_columns else "NULL"
+        )
+        lane_note_expr = (
+            "hj.lane_assignment_note" if "lane_assignment_note" in historical_columns else "NULL"
+        )
+
+        sql = f"""
             SELECT
                 hj.id,
                 COALESCE(hj.client, CAST(hj.id AS TEXT)) AS reference,
-                hj.corridor_display,
-                COALESCE(hj.origin, o.city, o.normalized, o.raw_input) AS origin_label,
-                COALESCE(hj.destination, d.city, d.normalized, d.raw_input) AS destination_label,
-                hj.origin_cluster_key,
-                hj.destination_cluster_key,
-                hj.lane_assignment_status,
-                hj.lane_assignment_source,
-                hj.lane_assignment_note
+                {corridor_expr} AS corridor_display,
+                {origin_expr} AS origin_label,
+                {destination_expr} AS destination_label,
+                {origin_cluster_expr} AS origin_cluster_key,
+                {destination_cluster_expr} AS destination_cluster_key,
+                {lane_status_expr} AS lane_assignment_status,
+                {lane_source_expr} AS lane_assignment_source,
+                {lane_note_expr} AS lane_assignment_note
             FROM historical_jobs AS hj
-            LEFT JOIN addresses AS o ON hj.origin_address_id = o.id
-            LEFT JOIN addresses AS d ON hj.destination_address_id = d.id
+            {' '.join(joins)}
             WHERE hj.id = ?
         """
     elif dataset == "live":
