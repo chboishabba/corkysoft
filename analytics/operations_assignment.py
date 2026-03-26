@@ -2140,13 +2140,61 @@ def list_job_operations_board(
         int(item["segmentId"]): item
         for item in list_segment_inventory_coordination(conn, job_id=job_id)
     }
+    job_number_by_id: dict[int, str] = {}
+    job_signal_by_number: dict[str, sqlite3.Row] = {}
+    if segments:
+        job_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        if "job_number" in job_columns:
+            job_ids = sorted({int(segment["jobId"]) for segment in segments})
+            placeholders = ", ".join("?" for _ in job_ids)
+            if placeholders:
+                job_rows = conn.execute(
+                    f"SELECT id, job_number FROM jobs WHERE id IN ({placeholders})",
+                    job_ids,
+                ).fetchall()
+                job_number_by_id = {
+                    int(row["id"]): str(row["job_number"])
+                    for row in job_rows
+                    if row["job_number"]
+                }
+                job_numbers = sorted(job_number_by_id.values())
+                signal_table_exists = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='job_operational_signals'"
+                ).fetchone()
+                if job_numbers and signal_table_exists is not None:
+                    signal_placeholders = ", ".join("?" for _ in job_numbers)
+                    signal_rows = conn.execute(
+                        f"""
+                        SELECT
+                            job_number,
+                            signal_score,
+                            signal_label,
+                            matching_spare_trucks,
+                            destination_spare_trucks,
+                            active_trucks,
+                            source,
+                            computed_at
+                        FROM job_operational_signals
+                        WHERE job_number IN ({signal_placeholders})
+                        """,
+                        job_numbers,
+                    ).fetchall()
+                    job_signal_by_number = {
+                        str(row["job_number"]): row
+                        for row in signal_rows
+                    }
     jobs: dict[int, dict[str, Any]] = {}
     for segment in segments:
         current_job_id = int(segment["jobId"])
+        job_number = job_number_by_id.get(current_job_id)
+        signal_row = job_signal_by_number.get(job_number or "")
         record = jobs.setdefault(
             current_job_id,
             {
                 "jobId": current_job_id,
+                "jobNumber": job_number,
                 "jobClient": segment.get("jobClient"),
                 "jobOrigin": segment.get("jobOrigin"),
                 "jobDestination": segment.get("jobDestination"),
@@ -2166,8 +2214,19 @@ def list_job_operations_board(
                 "approvedSubstitutionQuantity": 0.0,
                 "shortageQuantity": 0.0,
                 "inventoryShortageCount": 0,
+                "containerRequirementCount": 0,
+                "containerRequiredQuantity": 0.0,
+                "containerAllocatedQuantity": 0.0,
+                "containerShortageQuantity": 0.0,
                 "pendingSubstitutionCount": 0,
                 "executionStages": set(),
+                "spareCapacityScore": float(signal_row["signal_score"]) if signal_row else None,
+                "spareCapacityLabel": str(signal_row["signal_label"]) if signal_row else None,
+                "matchingSpareTrucks": int(signal_row["matching_spare_trucks"]) if signal_row else 0,
+                "destinationSpareTrucks": int(signal_row["destination_spare_trucks"]) if signal_row else 0,
+                "activeSignalTrucks": int(signal_row["active_trucks"]) if signal_row else 0,
+                "operationalSignalSource": str(signal_row["source"]) if signal_row else None,
+                "operationalSignalComputedAt": signal_row["computed_at"] if signal_row else None,
                 "segments": [],
             },
         )
@@ -2201,6 +2260,10 @@ def list_job_operations_board(
             )
             record["shortageQuantity"] += float(coordination.get("shortageQuantity", 0.0) or 0.0)
             record["inventoryShortageCount"] += int(coordination.get("shortageCount", 0) or 0)
+            record["containerRequirementCount"] += int(coordination.get("containerRequirementCount", 0) or 0)
+            record["containerRequiredQuantity"] += float(coordination.get("containerRequiredQuantity", 0.0) or 0.0)
+            record["containerAllocatedQuantity"] += float(coordination.get("containerAllocatedQuantity", 0.0) or 0.0)
+            record["containerShortageQuantity"] += float(coordination.get("containerShortageQuantity", 0.0) or 0.0)
             record["pendingSubstitutionCount"] += int(
                 coordination.get("pendingSubstitutionCount", 0) or 0
             )
@@ -2230,6 +2293,10 @@ def list_job_operations_board(
                 "blockingShortageQuantity": coordination.get("blockingShortageQuantity", 0.0) if coordination else 0.0,
                 "warningShortageQuantity": coordination.get("warningShortageQuantity", 0.0) if coordination else 0.0,
                 "shortageCount": coordination.get("shortageCount", 0) if coordination else 0,
+                "containerRequirementCount": coordination.get("containerRequirementCount", 0) if coordination else 0,
+                "containerRequiredQuantity": coordination.get("containerRequiredQuantity", 0.0) if coordination else 0.0,
+                "containerAllocatedQuantity": coordination.get("containerAllocatedQuantity", 0.0) if coordination else 0.0,
+                "containerShortageQuantity": coordination.get("containerShortageQuantity", 0.0) if coordination else 0.0,
                 "pendingSubstitutionCount": coordination.get("pendingSubstitutionCount", 0) if coordination else 0,
                 "executionStages": coordination.get("executionStages", []) if coordination else [],
                 "architectures": coordination.get("architectures", []) if coordination else [],
@@ -2252,6 +2319,7 @@ def list_job_operations_board(
         payload.append(
             {
                 "jobId": record["jobId"],
+                "jobNumber": record["jobNumber"],
                 "jobClient": record["jobClient"],
                 "jobOrigin": record["jobOrigin"],
                 "jobDestination": record["jobDestination"],
@@ -2271,8 +2339,21 @@ def list_job_operations_board(
                 "approvedSubstitutionQuantity": round(record["approvedSubstitutionQuantity"], 2),
                 "shortageQuantity": round(record["shortageQuantity"], 2),
                 "inventoryShortageCount": record["inventoryShortageCount"],
+                "containerRequirementCount": record["containerRequirementCount"],
+                "containerRequiredQuantity": round(record["containerRequiredQuantity"], 2),
+                "containerAllocatedQuantity": round(record["containerAllocatedQuantity"], 2),
+                "containerShortageQuantity": round(record["containerShortageQuantity"], 2),
                 "pendingSubstitutionCount": record["pendingSubstitutionCount"],
                 "executionStages": sorted(record["executionStages"]),
+                "spareCapacityScore": round(record["spareCapacityScore"], 2)
+                if record["spareCapacityScore"] is not None
+                else None,
+                "spareCapacityLabel": record["spareCapacityLabel"],
+                "matchingSpareTrucks": record["matchingSpareTrucks"],
+                "destinationSpareTrucks": record["destinationSpareTrucks"],
+                "activeSignalTrucks": record["activeSignalTrucks"],
+                "operationalSignalSource": record["operationalSignalSource"],
+                "operationalSignalComputedAt": record["operationalSignalComputedAt"],
                 "segments": sorted(record["segments"], key=lambda item: int(item["segmentSequence"])),
             }
         )

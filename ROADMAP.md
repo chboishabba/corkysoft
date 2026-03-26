@@ -195,7 +195,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 | **Base-rate schedule (Sunshine Coast 120 → Cairns 185)** |    ✅   | Encoded in lane base rate table. |
 | **Packing / bad-access fees**                            |    ✅   | Modifier tables include packing + access fees. |
 | **Seasonal margin uplift (20–80 %)**                     |   🧩   | Seasonal uplifts table exists; validate usage. |
-| **Backhaul / container sharing**                         |   🧩   | Quote backhaul detection and discount guidance are implemented; broader operational container-sharing and under-/over-utilisation handling still pending. |
+| **Backhaul / container sharing**                         |   🧩   | Quote backhaul detection and discount guidance are implemented, and Dispatch now surfaces persisted spare-capacity plus container-pressure context; broader operational container-sharing and under-/over-utilisation handling still pending. |
 | **Truck / driver cost baselines**                        |    ✅   | Base fuel/driver/maintenance + overhead parameters drive break-even engine. |
 | **Private cost component ledger**                        |    ✅   | Record crew, truck, fuel and other cost inputs per job inside SQLite.       |
 

@@ -76,11 +76,29 @@ def render_dispatch_tab(conn: sqlite3.Connection) -> None:
         default=["blocked", "override_required", "overridden", "planned", "draft"],
         key="dispatch_job_status_filter",
     )
-    query = st.text_input("Search client / route / worker / truck", value="", key="dispatch_search")
+    filter_cols = st.columns([2, 2])
+    spare_capacity_filter = filter_cols[0].multiselect(
+        "Spare-capacity signal",
+        options=["favorable", "workable", "constrained", "untracked"],
+        default=["favorable", "workable", "constrained", "untracked"],
+        key="dispatch_spare_capacity_filter",
+    )
+    query = filter_cols[1].text_input(
+        "Search client / route / worker / truck",
+        value="",
+        key="dispatch_search",
+    )
 
     filtered_rows = board_rows
     if status_filter:
         filtered_rows = [row for row in filtered_rows if row["jobStatus"] in status_filter]
+    if spare_capacity_filter:
+        allowed_signals = set(spare_capacity_filter)
+        filtered_rows = [
+            row
+            for row in filtered_rows
+            if (row.get("spareCapacityLabel") or "untracked") in allowed_signals
+        ]
     if query.strip():
         needle = query.strip().lower()
         filtered_rows = [
@@ -103,10 +121,14 @@ def render_dispatch_tab(conn: sqlite3.Connection) -> None:
         [
             {
                 "Job": row["jobId"],
+                "Job #": row.get("jobNumber") or "",
                 "Client": row["jobClient"],
                 "Origin": row["jobOrigin"],
                 "Destination": row["jobDestination"],
                 "Status": row["jobStatus"],
+                "Spare capacity": row.get("spareCapacityLabel") or "untracked",
+                "Matching spare": row.get("matchingSpareTrucks", 0),
+                "Destination spare": row.get("destinationSpareTrucks", 0),
                 "Segments": row["segmentCount"],
                 "Warnings": row["warningCount"],
                 "Blocks": row["blockingCount"],
@@ -120,6 +142,8 @@ def render_dispatch_tab(conn: sqlite3.Connection) -> None:
                 "Approved substitution qty": row.get("approvedSubstitutionQuantity", 0.0),
                 "Shortage qty": row["shortageQuantity"],
                 "Shortages": row["inventoryShortageCount"],
+                "Container reqs": row.get("containerRequirementCount", 0),
+                "Container shortage": row.get("containerShortageQuantity", 0.0),
                 "Execution stages": ", ".join(row.get("executionStages", [])),
                 "Pending substitutions": row.get("pendingSubstitutionCount", 0),
                 "Planned start": row["plannedStart"],
@@ -127,6 +151,27 @@ def render_dispatch_tab(conn: sqlite3.Connection) -> None:
             }
             for row in filtered_rows
         ]
+    )
+    board_metric_cols = st.columns(4)
+    board_metric_cols[0].metric(
+        "Backhaul / spare-capacity opportunities",
+        sum(
+            1
+            for row in filtered_rows
+            if row.get("spareCapacityLabel") in {"favorable", "workable"}
+        ),
+    )
+    board_metric_cols[1].metric(
+        "Container-heavy jobs",
+        sum(1 for row in filtered_rows if int(row.get("containerRequirementCount") or 0) > 0),
+    )
+    board_metric_cols[2].metric(
+        "Container shortages",
+        sum(1 for row in filtered_rows if float(row.get("containerShortageQuantity") or 0.0) > 0),
+    )
+    board_metric_cols[3].metric(
+        "Untracked operational signals",
+        sum(1 for row in filtered_rows if row.get("spareCapacityLabel") is None),
     )
     st.dataframe(board_df, width='stretch', hide_index=True)
     snapshot_recipient = st.text_input(
@@ -200,6 +245,22 @@ def render_dispatch_tab(conn: sqlite3.Connection) -> None:
     metric_cols[1].metric("Warnings", selected["warningCount"])
     metric_cols[2].metric("Blocks", selected["blockingCount"])
     metric_cols[3].metric("Override flags", selected["overrideableCount"])
+    fit_cols = st.columns(4)
+    fit_cols[0].metric("Spare-capacity signal", selected.get("spareCapacityLabel") or "untracked")
+    fit_cols[1].metric("Matching spare trucks", selected.get("matchingSpareTrucks", 0))
+    fit_cols[2].metric("Destination spare trucks", selected.get("destinationSpareTrucks", 0))
+    fit_cols[3].metric("Container shortage qty", selected.get("containerShortageQuantity", 0.0))
+    if selected.get("spareCapacityScore") is not None:
+        st.caption(
+            "Operational fit is based on persisted route spare-capacity signals from ingest/planning. "
+            f"Score {selected['spareCapacityScore']:.1f} from "
+            f"{selected.get('operationalSignalSource') or 'unknown'} at "
+            f"{selected.get('operationalSignalComputedAt') or 'unknown time'}."
+        )
+    elif int(selected.get("containerRequirementCount") or 0) > 0:
+        st.caption(
+            "This job is container-heavy, but no persisted spare-capacity signal is available yet."
+        )
     if st.button("Open in Operations diary", key="dispatch_open_operations_diary"):
         diary_date = str(selected.get("plannedStart") or "")[:10]
         _set_query_params(
@@ -232,6 +293,8 @@ def render_dispatch_tab(conn: sqlite3.Connection) -> None:
                 "Allocated qty": row["allocatedQuantity"],
                 "Approved substitution qty": row.get("approvedSubstitutionQuantity", 0.0),
                 "Shortage qty": row["shortageQuantity"],
+                "Container reqs": row.get("containerRequirementCount", 0),
+                "Container shortage qty": row.get("containerShortageQuantity", 0.0),
                 "Architectures": ", ".join(row["architectures"]),
                 "Execution stages": ", ".join(row.get("executionStages", [])),
                 "Pending substitutions": row.get("pendingSubstitutionCount", 0),

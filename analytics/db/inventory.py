@@ -1555,6 +1555,26 @@ def list_segment_inventory_coordination(
             float(item.get("approvedSubstitutionQuantity") or 0.0)
             for item in segment_requirements
         )
+        entry["containerRequirementCount"] = sum(
+            1
+            for item in segment_requirements
+            if str(item.get("architecture") or "") == "container"
+        )
+        entry["containerRequiredQuantity"] = sum(
+            float(item.get("requiredQuantity") or 0.0)
+            for item in segment_requirements
+            if str(item.get("architecture") or "") == "container"
+        )
+        entry["containerAllocatedQuantity"] = sum(
+            float(item.get("allocatedQuantity") or 0.0)
+            for item in segment_requirements
+            if str(item.get("architecture") or "") == "container"
+        )
+        entry["containerShortageQuantity"] = sum(
+            float(item.get("shortageQuantity") or 0.0)
+            for item in segment_requirements
+            if str(item.get("architecture") or "") == "container"
+        )
         entry["architectures"] = sorted(
             {
                 str(item["architecture"])

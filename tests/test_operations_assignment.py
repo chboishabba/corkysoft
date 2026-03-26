@@ -18,6 +18,7 @@ from analytics.db.inventory import (
     upsert_inventory_item,
     upsert_inventory_requirement,
 )
+from analytics.operational_signals import upsert_job_operational_signal
 from analytics.operations_assignment import (
     approve_operations_cutover_promotion,
     apply_operations_cutover_recommendation,
@@ -553,6 +554,69 @@ def test_job_operations_board_rolls_up_inventory_shortages() -> None:
     assert row["shortageQuantity"] == 4.0
     assert row["inventoryShortageCount"] == 1
     assert row["segments"][0]["shortageQuantity"] == 4.0
+
+
+def test_job_operations_board_includes_spare_capacity_and_container_rollups() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    ensure_dashboard_tables(conn)
+    conn.execute("ALTER TABLE jobs ADD COLUMN job_number TEXT")
+
+    item = upsert_inventory_item(
+        conn,
+        name="Container Pod",
+        quantity=5,
+        architecture="container",
+    )
+    job_number = "JOB-OPS-1"
+    job_id = _job(conn, "Ops Signal Client", "Depot", "Site Z")
+    conn.execute("UPDATE jobs SET job_number = ? WHERE id = ?", (job_number, job_id))
+    segment = ensure_segment(
+        conn,
+        job_id=job_id,
+        segment_sequence=1,
+        planned_start="2026-03-22T08:00:00+00:00",
+        planned_end="2026-03-22T12:00:00+00:00",
+    )
+    upsert_inventory_requirement(
+        conn,
+        job_id=job_id,
+        segment_id=int(segment["id"]),
+        inventory_item_id=int(item["id"]),
+        requirement_name="Container Pod",
+        required_quantity=3,
+        substitution_allowed=False,
+        architecture="container",
+    )
+    allocate_inventory_to_segment(
+        conn,
+        segment_id=int(segment["id"]),
+        inventory_item_id=int(item["id"]),
+        quantity=1,
+    )
+    upsert_job_operational_signal(
+        conn,
+        job_number=job_number,
+        origin="Depot",
+        destination="Site Z",
+        estimated_volume_m3=18.0,
+        source="planning",
+    )
+
+    board = list_job_operations_board(conn, job_id=job_id)
+
+    assert len(board) == 1
+    row = board[0]
+    assert row["jobNumber"] == job_number
+    assert row["spareCapacityLabel"] == "constrained"
+    assert row["spareCapacityScore"] == 40.0
+    assert row["operationalSignalSource"] == "planning"
+    assert row["containerRequirementCount"] == 1
+    assert row["containerRequiredQuantity"] == 3.0
+    assert row["containerAllocatedQuantity"] == 1.0
+    assert row["containerShortageQuantity"] == 2.0
+    assert row["segments"][0]["containerRequirementCount"] == 1
+    assert row["segments"][0]["containerShortageQuantity"] == 2.0
 
 
 def test_approved_inventory_substitution_clears_readiness_block_and_board_rollup() -> None:
