@@ -87,8 +87,6 @@ from analytics.driver_shifts import (
     load_driver_shifts_dataframe,
 )
 from analytics.price_distribution import (
-    DistributionSummary,
-    ProfitabilitySummary,
     PROFITABILITY_COLOURS,
     ColumnMapping,
     compute_profitability_line_width,
@@ -98,10 +96,6 @@ from analytics.price_distribution import (
     build_price_history_series,
     filter_routes_by_country,
     build_heatmap_source,
-    create_histogram,
-    create_metro_profitability_figure,
-    create_m3_margin_figure,
-    create_m3_vs_km_figure,
     ensure_break_even_parameter,
     enrich_missing_route_coordinates,
     import_historical_jobs_from_dataframe,
@@ -109,21 +103,15 @@ from analytics.price_distribution import (
     load_historical_jobs,
     load_quotes,
     load_live_jobs,
-    compute_cost_vs_price_percentage,
     prepare_metric_route_map_data,
     prepare_route_map_data,
     prepare_profitability_map_data,
-    prepare_profitability_route_data,
-    summarise_distribution,
-    summarise_profitability,
     update_break_even,
 )
 from analytics.live_data import (
     TRUCK_STATUS_COLOURS,
     build_live_heatmap_source,
     extract_route_path,
-    load_active_routes,
-    load_truck_positions,
 )
 from analytics.routes_map import (
     build_job_route_map,
@@ -156,8 +144,8 @@ from analytics.operations_assignment import (
 )
 from dashboard.components.operations import render_operations_tab
 from dashboard.components.dispatch import render_dispatch_tab
+from dashboard.components.distribution_overview import render_distribution_analytics_surface
 from dashboard.components.operations_diary import render_operations_diary_tab
-from dashboard.components.lane_scope import apply_lane_status_scope
 from dashboard.components.planner import render_planner_tab
 from corkysoft.pricing import DEFAULT_MODIFIERS
 from corkysoft.quote_service import (
@@ -177,14 +165,10 @@ from corkysoft.repo import (
 )
 from corkysoft.routing import snap_coordinates_to_road
 from corkysoft.schema import ensure_schema as ensure_core_schema
-from dashboard.components.maps import (
-    _initial_view_state,
-    render_network_map,
-)
+from dashboard.components.maps import _initial_view_state
 from dashboard.components.maintenance import render_fleet_tab, render_vehicle_maintenance_tab
 from dashboard.components.route_maps import render_route_maps_tab
 from dashboard.components.calls import render_calls_tab
-from dashboard.components.price_history import render_price_history_tab
 from dashboard.components.optimizer import render_optimizer
 from dashboard.components.quote_builder import render_quote_builder
 from dashboard.map_provider import (
@@ -353,63 +337,6 @@ def _render_pin_picker(
     st.session_state["quote_pin_override"] = st.session_state.get("quote_pin_override", {})
     return current_lon, current_lat
 
-# -----------------------------------------------------------------------------
-# Compatibility shim for metro-distance filtering across branches/modules
-# -----------------------------------------------------------------------------
-# Prefer the newer `filter_jobs_by_distance(df, metro_only=True/False, max_distance_km=...)`.
-# If unavailable, fall back to `filter_metro_jobs(df, max_distance_km=...)`.
-try:
-    from inspect import signature
-
-    from analytics.price_distribution import (  # type: ignore
-        filter_jobs_by_distance as _filter_jobs_by_distance,
-    )
-
-    try:
-        _FILTER_DISTANCE_PARAM = next(
-            param
-            for param in ("max_distance_km", "threshold_km")
-            if param in signature(_filter_jobs_by_distance).parameters
-        )
-    except (StopIteration, ValueError, TypeError):
-        _FILTER_DISTANCE_PARAM = None
-
-    def _filter_by_distance(
-        df: pd.DataFrame,
-        *,
-        metro_only: bool = False,
-        max_distance_km: float = 100.0,
-    ) -> pd.DataFrame:
-        kwargs = {"metro_only": metro_only}
-        if _FILTER_DISTANCE_PARAM is not None:
-            kwargs[_FILTER_DISTANCE_PARAM] = max_distance_km
-        return _filter_jobs_by_distance(df, **kwargs)
-
-except Exception:
-    try:
-        from analytics.price_distribution import (  # type: ignore
-            filter_metro_jobs as _filter_metro_jobs,
-        )
-
-        def _filter_by_distance(
-            df: pd.DataFrame,
-            *,
-            metro_only: bool = False,
-            max_distance_km: float = 100.0,
-        ) -> pd.DataFrame:
-            return _filter_metro_jobs(df, max_distance_km=max_distance_km) if metro_only else df
-
-    except Exception:
-        # Graceful no-op fallback if neither helper exists; show all rows.
-        def _filter_by_distance(
-            df: pd.DataFrame,
-            *,
-            metro_only: bool = False,
-            max_distance_km: float = 100.0,
-        ) -> pd.DataFrame:
-            return df
-
-
 def _blank_column_mapping() -> ColumnMapping:
     return ColumnMapping(
         date=None,
@@ -423,139 +350,6 @@ def _blank_column_mapping() -> ColumnMapping:
         distance=None,
         final_cost=None,
     )
-
-
-def render_summary(
-    summary: DistributionSummary,
-    break_even: float,
-    profitability_summary: ProfitabilitySummary,
-    *,
-    metro_summary: Optional[DistributionSummary] = None,
-    metro_profitability: Optional[ProfitabilitySummary] = None,
-    metro_distance_km: float = 100.0,
-) -> None:
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Jobs in filter", summary.job_count)
-    valid_label = f"Valid $/m³ ({summary.priced_job_count})"
-    col2.metric(
-        valid_label,
-        f"{summary.median:,.2f}" if summary.priced_job_count else "n/a",
-    )
-    col3.metric(
-        "25th percentile",
-        f"{summary.percentile_25:,.2f}" if summary.priced_job_count else "n/a",
-    )
-    col4.metric(
-        "75th percentile",
-        f"{summary.percentile_75:,.2f}" if summary.priced_job_count else "n/a",
-    )
-    below_pct = summary.below_break_even_ratio * 100 if summary.priced_job_count else 0.0
-    col5.metric(
-        "% below break-even",
-        f"{below_pct:.1f}%",
-        help=f"Break-even: ${break_even:,.2f} per m³",
-    )
-
-    def _format_value(
-        value: Optional[float], *, currency: bool = False, percentage: bool = False
-    ) -> str:
-        if value is None:
-            return "n/a"
-        if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
-            return "n/a"
-        if currency:
-            return f"${value:,.2f}"
-        if percentage:
-            return f"{value * 100:.1f}%"
-        return f"{value:,.2f}"
-
-    stats_cols = st.columns(4)
-    stats = [
-        ("Mean $/m³", summary.mean, True, False),
-        ("Std dev $/m³", summary.std_dev, True, False),
-        ("Kurtosis", summary.kurtosis, False, False),
-        ("Skewness", summary.skewness, False, False),
-    ]
-    for column, (label, value, as_currency, as_percentage) in zip(stats_cols, stats):
-        column.metric(
-            label,
-            _format_value(value, currency=as_currency, percentage=as_percentage),
-        )
-
-    profitability_cols = st.columns(4)
-    profitability_metrics = [
-        ("Median $/km", profitability_summary.revenue_per_km_median, True, False),
-        ("Average $/km", profitability_summary.revenue_per_km_mean, True, False),
-        (
-            "Median margin $/m³",
-            profitability_summary.margin_per_m3_median,
-            True,
-            False,
-        ),
-        (
-            "Median margin %",
-            profitability_summary.margin_per_m3_pct_median,
-            False,
-            True,
-        ),
-    ]
-    for column, (label, value, as_currency, as_percentage) in zip(
-        profitability_cols, profitability_metrics
-    ):
-        column.metric(
-            label,
-            _format_value(value, currency=as_currency, percentage=as_percentage),
-        )
-
-    if metro_summary and metro_profitability:
-        st.markdown(
-            f"**Metro subset (≤{metro_distance_km:,.0f} km)**"
-        )
-        share = 0.0
-        if summary.job_count:
-            share = metro_summary.job_count / summary.job_count
-        st.caption(
-            f"{metro_summary.job_count} jobs in metro scope "
-            f"({share:.1%} of filtered jobs)."
-        )
-
-        metro_metrics = [
-            ("Median $/km", "revenue_per_km_median", True, False),
-            ("Average $/km", "revenue_per_km_mean", True, False),
-            ("Median margin $/m³", "margin_per_m3_median", True, False),
-            ("Median margin %", "margin_per_m3_pct_median", False, True),
-        ]
-        metro_cols = st.columns(len(metro_metrics))
-        for column, (label, attr, as_currency, as_percentage) in zip(
-            metro_cols, metro_metrics
-        ):
-            metro_value = getattr(metro_profitability, attr)
-            overall_value = getattr(profitability_summary, attr)
-            delta = None
-            if (
-                metro_value is not None
-                and overall_value is not None
-                and not any(
-                    isinstance(val, float)
-                    and (math.isnan(val) or math.isinf(val))
-                    for val in (metro_value, overall_value)
-                )
-            ):
-                diff = metro_value - overall_value
-                if as_currency:
-                    delta = f"{diff:+,.2f}"
-                elif as_percentage:
-                    delta = f"{diff * 100:+.1f}%"
-                else:
-                    delta = f"{diff:+.2f}"
-            column.metric(
-                label,
-                _format_value(
-                    metro_value, currency=as_currency, percentage=as_percentage
-                ),
-                delta=delta,
-            )
-
 
 def _set_query_params(**params: str) -> None:
     """Set Streamlit query parameters using the stable API when available."""
@@ -1342,207 +1136,16 @@ def render_price_distribution_dashboard():
             label: tab for label, tab in zip(tab_order, streamlit_tabs)
         }
 
-        summary: Optional[DistributionSummary] = None
-        profitability_summary: Optional[ProfitabilitySummary] = None
-        metro_summary: Optional[DistributionSummary] = None
-        metro_profitability: Optional[ProfitabilitySummary] = None
-        metro_distance_km = 100.0
-        if has_filtered_data:
-            filtered_df = filtered_df.copy()
-            filtered_df["cost_vs_price_pct"] = compute_cost_vs_price_percentage(filtered_df)
-            summary_scope_df = apply_lane_status_scope(
-                filtered_df,
-                scope_key="dashboard_summary_lane_scope",
-                label="Lane assignment scope",
-                help_text=(
-                    "These analytics default to canonically assigned lane history. "
-                    "Include ambiguous or unassigned rows only when deliberately exploring unresolved data."
-                ),
-                caption_prefix="Summary/histogram rows after lane-status filter",
-            )
-
-            summary = summarise_distribution(summary_scope_df, break_even_value)
-            profitability_summary = summarise_profitability(summary_scope_df)
-
-            metro_df = _filter_by_distance(
-                summary_scope_df, metro_only=True, max_distance_km=metro_distance_km
-            )
-            if not metro_df.empty:
-                metro_summary = summarise_distribution(metro_df, break_even_value)
-                metro_profitability = summarise_profitability(metro_df)
-
-            render_summary(
-                summary,
-                break_even_value,
-                profitability_summary,
-                metro_summary=metro_summary,
-                metro_profitability=metro_profitability,
-                metro_distance_km=metro_distance_km,
-            )
-
-        truck_positions = load_truck_positions(conn)
-        active_routes = load_active_routes(conn)
-
-        if "Live network overview" in tab_map:
-            with tab_map["Live network overview"]:
-                network_df = apply_lane_status_scope(
-                    filtered_df,
-                    scope_key="dashboard_live_network_lane_scope",
-                    label="Lane assignment scope",
-                    help_text=(
-                        "These analytics default to canonically assigned lane history. "
-                        "Include ambiguous or unassigned rows only when deliberately exploring unresolved data."
-                    ),
-                    caption_prefix="Live-network analytic rows after lane-status filter",
-                )
-                map_routes = prepare_profitability_route_data(network_df, break_even_value)
-                render_network_map(
-                    map_routes,
-                    truck_positions,
-                    active_routes,
-                    toggle_key="dashboard_network_map_toggle_overview",
-                )
-
-        if "Histogram" in tab_map:
-            with tab_map["Histogram"]:
-                if has_filtered_data:
-                    with st.popover("❓ Histogram stats", width='stretch'):
-                        st.markdown(
-                            """
-                            ### **Break-even bands**
-                            Vertical guide-lines centred on your **break-even $/m³**.
-    
-                            Each band shows your break-even target (**$/m³ needed to make profit**), along with percentages indicating how far real jobs fall above or below it.
-    
-                            You can quickly see:
-    
-                            - **Which corridors frequently underperform**
-                            - **Whether a client consistently prices below your minimum**
-                            - **How much “safety margin” you have on metro jobs**
-                            - The **normal-fit overlay**, showing a bell curve fitted to your $/m³ distribution
-                            - Real-world job pricing is messy and often skewed — the normal fit gives an *idealised baseline*.
-                            - These are methods derived from the formal study of statistics and can be used to inform operators and managers about pricing trends.
-    
-                            ---
-    
-                            ### **Reading the curve**
-                            - **Skew** → are there lots of cheap jobs or lots of expensive jobs?
-                            - **Fat tails** → outliers on either side
-                            - **Pricing stability** → is your pricing consistent or chaotic?
-    
-                            **Tall, narrow curve** → stable, predictable pricing
-                            **Wide, flat curve** → highly variable pricing
-    
-                            ---
-    
-                            ### **Summary statistics**
-                            These quantify the shape and behaviour of your pricing:
-    
-                            - **Percentiles** — e.g., 75th percentile means a value is higher than 75% of jobs.
-                            - **Mean (μ)** — your overall *average* revenue density.
-                            - **Median** — midpoint of all jobs.
-                            More stable than the mean when outliers exist.
-                            - **Standard deviation (σ)** — measures volatility.
-                            **High σ** = inconsistent pricing; **Low σ** = tightly clustered pricing.
-                            - **Kurtosis** — how “outlier-heavy” your distribution is.
-                            Over > 3 = fat tails - some data is very unlike others; Under < 3 = tighter, more predictable.
-                            - **Skewness** — asymmetry.
-                            **Positive skew** → many cheap jobs, few expensive ones.
-                            **Negative skew** → many expensive jobs, few cheap ones.
-                            - **% below break-even** — proportion of unprofitable jobs.
-                            **Ideal:** 0–10% **Warning:** 20–30% **Critical:** >30%
-                            """,
-                            unsafe_allow_html=True,
-                        )
-    
-                    histogram = create_histogram(summary_scope_df, break_even_value)
-                    st.plotly_chart(histogram, width="stretch")
-                    st.caption(
-                        "Histogram overlays include the normal distribution fit plus kurtosis and dispersion markers for context."
-                    )
-                elif dataset_error:
-                    st.error("Unable to load jobs — initialise the database and retry.")
-                else:
-                    st.info("Import historical jobs to plot the price distribution histogram.")
-
-        if "Price history" in tab_map:
-            with tab_map["Price history"]:
-                render_price_history_tab(
-                    filtered_df=filtered_df,
-                    mapping=filtered_mapping,
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-
-        if "Profitability insights" in tab_map:
-            with tab_map["Profitability insights"]:
-                if has_filtered_data:
-                    profitability_df = apply_lane_status_scope(
-                        filtered_df,
-                        scope_key="dashboard_profitability_lane_scope",
-                        label="Lane assignment scope",
-                        help_text=(
-                            "These analytics default to canonically assigned lane history. "
-                            "Include ambiguous or unassigned rows only when deliberately exploring unresolved data."
-                        ),
-                        caption_prefix="Profitability analytic rows after lane-status filter",
-                    )
-                    st.markdown("### Profitability insights")
-                    view_options = {
-                        "m³ vs km profitability": create_m3_vs_km_figure,
-                        "Quoted vs calculated $/m³": create_m3_margin_figure,
-                        "Metro profitability spotlight": lambda data: create_metro_profitability_figure(
-                            data, max_distance_km=metro_distance_km
-                        ),
-                    }
-                    selected_view = st.radio(
-                        "Choose a view",
-                        list(view_options.keys()),
-                        horizontal=True,
-                        help="Switch between per-kilometre earnings and quoted-versus-cost comparisons.",
-                        key="dashboard_profitability_view",
-                    )
-                    fig = view_options[selected_view](profitability_df)
-                    st.plotly_chart(fig, width="stretch")
-    
-                    if selected_view == "Metro profitability spotlight":
-                        st.caption(
-                            "Metro view highlights close-in routes with margin and cost sensitivity overlays."
-                        )
-    
-                    if "margin_per_m3" in profitability_df.columns:
-                        st.markdown("#### Margin outliers")
-                        ranked = (
-                            profitability_df.dropna(subset=["margin_per_m3"]).sort_values("margin_per_m3")
-                        )
-                        if not ranked.empty:
-                            low_cols, high_cols = st.columns(2)
-                            display_fields = [
-                                col
-                                for col in [
-                                    "job_date",
-                                    "client_display",
-                                    "corridor_display",
-                                    "price_per_m3",
-                                    "final_cost_per_m3",
-                                    "margin_per_m3",
-                                    "margin_per_m3_pct",
-                                ]
-                                if col in ranked.columns
-                            ]
-                            low_cols.write("Lowest margin jobs")
-                            low_cols.dataframe(ranked.head(5)[display_fields])
-                            high_cols.write("Highest margin jobs")
-                            high_cols.dataframe(ranked.tail(5).iloc[::-1][display_fields])
-                        else:
-                            st.info("No margin data available to highlight outliers yet.")
-                elif dataset_error:
-                    st.error("Unable to calculate profitability without job data.")
-                else:
-                    st.info("Import jobs with price and cost data to unlock profitability insights.")
-
-        truck_positions = load_truck_positions(conn)
-        active_routes = load_active_routes(conn)
+        render_distribution_analytics_surface(
+            tab_map=tab_map,
+            filtered_df=filtered_df,
+            filtered_mapping=filtered_mapping,
+            break_even_value=break_even_value,
+            dataset_error=dataset_error,
+            conn=conn,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
         if "Route maps" in tab_map:
             with tab_map["Route maps"]:
