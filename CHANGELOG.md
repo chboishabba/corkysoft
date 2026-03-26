@@ -60,3 +60,7 @@
 - added `docs/contributor_docs_sync.md` and synced README, roadmap, progress board, module guide, and positioning docs to reflect the current architecture and product state
 - added observer-outbox visibility to the Operations diary so emitted planning/reconciliation envelopes can be filtered and inspected inside the dashboard
 - added job-scoped labor reconciliation to the Operations diary detail so managers can compare planned labor against imported shifts inside the same usage/reconciliation cockpit
+
+## 2026-03-27
+
+- gated Kent admin policy-default and override-reason writes to `system_rollout_admin`, keeping operator review/tender workflow visible while tightening dashboard governance boundaries

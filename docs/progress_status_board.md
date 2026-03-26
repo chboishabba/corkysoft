@@ -1,6 +1,6 @@
 # Progress Status Board
 
-Last updated: **2026-03-26**
+Last updated: **2026-03-27**
 
 This page is the operational tracker for implementation-to-docs alignment.  
 Use it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and [COMPACTIFIED_CONTEXT.md](../COMPACTIFIED_CONTEXT.md).
@@ -15,7 +15,7 @@ Use it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and [COMPACT
 - Historical job corridor/lane model: **🟢 implemented** (canonical clusters/lanes/groups, assignment status, promotion governance, and planner-safe consumption)
 - Inventory execution maturity beyond baseline: **🟡 in progress**
 - Adaptive policy: **🟡 bounded proposal/approval workflow implemented, broader operational rollout still pending**
-- Kent payload governance and operator workflow validation: **🔴 pending**
+- Kent payload governance and operator workflow validation: **🟡 in progress** (Kent admin policy and reason-code writes are now gated to `system_rollout_admin`; broader live-payload and operator validation still pending)
 - Situation-awareness/disruption ingestion and bounded auto-policy use: **🟢 implemented**
 - Historical ingest coverage governance: **🟢 implemented** (run summaries, row issues, readiness status, Fleet visibility)
 - Lane trust-boundary controls across analytics: **🟢 implemented** (Planner, route maps, live network, profitability, price history, optimizer, summary/histogram)
@@ -34,7 +34,7 @@ Use it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and [COMPACT
 - Add explicit evidence-backed site/media/CV ingestion before deeper constraint automation.
 - Add and maintain explicit policy/override governance for hard-block categories.
 - Extend adaptive policy governance from proposal/approval into broader operational rollout and override controls.
-- Validate Kent operator/admin workflows against real payloads and repeated override patterns.
+- Validate Kent operator/admin workflows against real payloads and repeated override patterns now that admin-only governance controls are enforced in the dashboard.
 
 ## Non-blocking documentation tasks
 

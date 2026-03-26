@@ -96,7 +96,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Turn the new site media / assessment / advisory inference scaffolding into real service-backed ingestion and review flows for street-view, walkaround, and visual last-mile optimisation.
 - Add accommodation/provider-side operational support logic after the base support-signal model is wired into Planner and Dispatch.
 - Validate Kent tender policy defaults and override workflow against live operator usage before adding any deeper async solver.
-- Separate operator Kent workflows from admin policy/reason-code management in both docs and dashboard UX.
+- Separate operator Kent workflows from admin policy/reason-code management in both docs and dashboard UX; the dashboard now gates Kent policy/reason-code writes to `system_rollout_admin`, with broader live-usage validation still pending.
 - Govern hard-block semantics so only safety/legal/compliance categories can block work.
 - Make importer `dry_run` behavior side-effect free and documented consistently.
 - Migrate `FLEET`, `STAFF`, and `SUPPLIERS` operational data flow to Google Sheets-first connectors and treat local `.xlsx` workbooks as fallback only.

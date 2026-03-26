@@ -18,6 +18,10 @@ from analytics.kent_ams_import import (
 from corkysoft.quote_service import format_currency
 
 
+def _kent_admin_write_enabled(current_role_key: str | None) -> bool:
+    return current_role_key == "system_rollout_admin"
+
+
 def render_kent_tenders_tab(
     conn: sqlite3.Connection,
     *,
@@ -204,30 +208,41 @@ def render_kent_admin_tab(
     if current_role_key and render_dashboard_user_admin is not None:
         render_dashboard_user_admin(conn, current_role_key)
 
+    write_enabled = _kent_admin_write_enabled(current_role_key)
+
     policy = get_kent_tender_policy_config(conn)
+    if not write_enabled:
+        st.info(
+            "Kent governance controls are admin-only. Operators should review tenders in the Kent tenders tab."
+        )
+
     with st.form("kent_tender_policy_form"):
         config_cols = st.columns(4)
         rule_mode = config_cols[0].selectbox(
             "Rule mode",
             options=["ABS_ONLY", "PCT_ONLY", "EITHER", "BOTH"],
             index=["ABS_ONLY", "PCT_ONLY", "EITHER", "BOTH"].index(policy["ruleMode"]),
+            disabled=not write_enabled,
         )
         abs_threshold = config_cols[1].number_input(
             "Abs margin threshold",
             value=float(policy["absoluteMarginThreshold"]),
             step=100.0,
+            disabled=not write_enabled,
         )
         pct_threshold = config_cols[2].number_input(
             "Margin % threshold",
             value=float(policy["marginPercentThreshold"]),
             step=1.0,
+            disabled=not write_enabled,
         )
         loss_floor = config_cols[3].number_input(
             "Loss alert floor",
             value=float(policy["lossAlertFloor"]),
             step=100.0,
+            disabled=not write_enabled,
         )
-        if st.form_submit_button("Save policy defaults"):
+        if st.form_submit_button("Save policy defaults", disabled=not write_enabled):
             try:
                 update_kent_tender_policy_config(
                     conn,
@@ -261,11 +276,11 @@ def render_kent_admin_tab(
 
     with st.form("kent_override_reason_form"):
         reason_cols = st.columns(4)
-        new_code = reason_cols[0].text_input("Code")
-        new_label = reason_cols[1].text_input("Label")
-        new_description = reason_cols[2].text_input("Description")
-        new_active = reason_cols[3].checkbox("Active", value=True)
-        if st.form_submit_button("Save reason"):
+        new_code = reason_cols[0].text_input("Code", disabled=not write_enabled)
+        new_label = reason_cols[1].text_input("Label", disabled=not write_enabled)
+        new_description = reason_cols[2].text_input("Description", disabled=not write_enabled)
+        new_active = reason_cols[3].checkbox("Active", value=True, disabled=not write_enabled)
+        if st.form_submit_button("Save reason", disabled=not write_enabled):
             try:
                 upsert_kent_override_reason_code(
                     conn,
