@@ -15,6 +15,7 @@ from analytics.operations_diary import (
     build_job_usage_details,
     build_operations_diary,
     delete_operations_diary_task,
+    list_observer_outbox_events,
     upsert_customer_invoice_review,
     upsert_operations_diary_task,
     upsert_subcontractor_bill_review,
@@ -458,6 +459,8 @@ def render_operations_diary_tab(conn: sqlite3.Connection) -> None:
             hide_index=True,
         )
 
+    _render_observer_outbox_section(conn, selected_job_id=selected_job_id)
+
     st.markdown("#### Diary tasks")
     _render_job_task_editor(
         conn,
@@ -487,6 +490,113 @@ def render_operations_diary_tab(conn: sqlite3.Connection) -> None:
                 width="stretch",
                 hide_index=True,
             )
+
+
+def _render_observer_outbox_section(
+    conn: sqlite3.Connection,
+    *,
+    selected_job_id: int,
+) -> None:
+    with st.expander("Observer outbox", expanded=False):
+        st.caption(
+            "Inspect emitted planning snapshots, reconciliation exceptions, and review/task envelopes without leaving the manager workflow."
+        )
+        scope_col, family_col, limit_col = st.columns(3)
+        selected_job_only = scope_col.checkbox(
+            "Only selected job",
+            value=True,
+            key=f"operations_diary_observer_selected_job_{selected_job_id}",
+        )
+        discovery_rows = list_observer_outbox_events(
+            conn,
+            limit=200,
+            job_id=selected_job_id if selected_job_only else None,
+        )
+        family_options = ["all"] + sorted({str(row["eventFamily"]) for row in discovery_rows})
+        selected_family = family_col.selectbox(
+            "Event family",
+            options=family_options,
+            key=f"operations_diary_observer_family_{selected_job_id}",
+        )
+        limit = int(
+            limit_col.selectbox(
+                "Rows",
+                options=[10, 25, 50, 100],
+                index=1,
+                key=f"operations_diary_observer_limit_{selected_job_id}",
+            )
+        )
+        rows = list_observer_outbox_events(
+            conn,
+            limit=limit,
+            event_family=None if selected_family == "all" else selected_family,
+            job_id=selected_job_id if selected_job_only else None,
+        )
+        if not rows:
+            st.caption("No observer events match the current filters.")
+            return
+
+        family_counts: dict[str, int] = {}
+        for row in rows:
+            family = str(row["eventFamily"])
+            family_counts[family] = family_counts.get(family, 0) + 1
+
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("Events", len(rows))
+        metric_cols[1].metric("Families", len(family_counts))
+        metric_cols[2].metric("Latest family", str(rows[0]["eventFamily"]))
+        metric_cols[3].metric("Latest status", str(rows[0].get("status") or "n/a"))
+
+        st.dataframe(
+            pd.DataFrame([_observer_summary_row(row) for row in rows]),
+            width="stretch",
+            hide_index=True,
+        )
+
+        for row in rows[: min(len(rows), 10)]:
+            header = (
+                f"{row['eventFamily']} · {row['summary']} · "
+                f"{row.get('recordedAt') or row.get('eventTime')}"
+            )
+            with st.expander(header, expanded=False):
+                detail_cols = st.columns(4)
+                detail_cols[0].metric("Authority", str(row.get("authorityClass") or "n/a"))
+                detail_cols[1].metric("Actor", str(row.get("actorRef") or "n/a"))
+                detail_cols[2].metric("Job", _observer_job_label(row))
+                detail_cols[3].metric("Status", str(row.get("status") or "n/a"))
+                st.markdown("**Object refs**")
+                st.json(row.get("objectRefs") or {})
+                st.markdown("**Payload**")
+                st.json(row.get("payload") or {})
+                provenance = row.get("provenanceRefs") or []
+                evidence = row.get("evidenceRefs") or []
+                if provenance:
+                    st.markdown("**Provenance refs**")
+                    st.json(provenance)
+                if evidence:
+                    st.markdown("**Evidence refs**")
+                    st.json(evidence)
+
+
+def _observer_job_label(row: dict[str, Any]) -> str:
+    object_refs = row.get("objectRefs") or {}
+    payload = row.get("payload") or {}
+    job_id = object_refs.get("job_id") or payload.get("jobId")
+    return str(job_id) if job_id is not None else "n/a"
+
+
+def _observer_summary_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "Recorded at": row.get("recordedAt"),
+        "Family": row.get("eventFamily"),
+        "Type": row.get("eventType"),
+        "Job": _observer_job_label(row),
+        "Summary": row.get("summary"),
+        "Status": row.get("status"),
+        "Actor": row.get("actorRef"),
+        "Authority": row.get("authorityClass"),
+        "Source entity": row.get("sourceEntityId"),
+    }
 
 
 def _safe_date(value: str) -> date:

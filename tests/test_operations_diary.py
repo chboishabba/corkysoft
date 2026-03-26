@@ -356,3 +356,38 @@ def test_explicit_diary_export_emits_snapshot_and_exception_rows_idempotently() 
         invoice_amount=1200.0,
     )
     assert invoiced["resolved_at"] == "2026-03-26"
+
+
+def test_observer_outbox_filters_by_job_and_family() -> None:
+    conn, ids = _seed_conn()
+    upsert_customer_invoice_review(
+        conn,
+        job_id=ids["job1"],
+        invoice_status="reconciliation_warning",
+        reviewed_by="ops-manager",
+    )
+    upsert_customer_invoice_review(
+        conn,
+        job_id=ids["job2"],
+        invoice_status="ready_to_invoice",
+        reviewed_by="ops-manager",
+    )
+    upsert_subcontractor_bill_review(
+        conn,
+        job_id=ids["job1"],
+        supplier_id=ids["supplier_id"],
+        bill_status="bill_received",
+        bill_reference="BILL-303",
+        reviewed_by="ops-manager",
+    )
+
+    filtered = list_observer_outbox_events(
+        conn,
+        limit=20,
+        event_family="customer_invoice_review",
+        job_id=ids["job1"],
+    )
+
+    assert len(filtered) == 1
+    assert filtered[0]["eventFamily"] == "customer_invoice_review"
+    assert int(filtered[0]["objectRefs"]["job_id"]) == ids["job1"]

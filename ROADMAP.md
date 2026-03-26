@@ -118,10 +118,11 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Implemented a Corkysoft-native observer outbox for diary/planner/reconciliation
   review state, including persisted review/task families and explicit export
   for planning snapshots and reconciliation exceptions.
+- Operations diary now exposes observer-outbox rows directly so managers/admins
+  can inspect emitted envelopes, payloads, and provenance without leaving the
+  dashboard.
 - Add delivery receipt / watermark semantics for the observer outbox once
   deployment posture matters.
-- Surface observer-outbox visibility in the dashboard so operators/admins can
-  inspect emitted envelopes without leaving Corkysoft.
 - Reuse Corkysoft planner/diary workflow patterns in SB/ITIR only as downstream
   summary/review lenses, not as a second operational cockpit.
 - Add unresolved supplier-exposure aging inside Corkysoft so managers can see

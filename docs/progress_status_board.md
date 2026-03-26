@@ -21,6 +21,7 @@ Use it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and [COMPACT
 - Lane trust-boundary controls across analytics: **🟢 implemented** (Planner, route maps, live network, profitability, price history, optimizer, summary/histogram)
 - Grouped lane promotion review: **🟢 implemented** (repeated candidate cluster pairs can collapse into one governance proposal)
 - Observer export for diary/reconciliation: **🟢 implemented** (observer outbox for task/review families plus explicit planning-snapshot and reconciliation-exception export)
+- Observer-outbox dashboard visibility: **🟢 implemented** (Operations diary now exposes filtered observer envelopes with payload/provenance inspection)
 - Quote recommendation and benchmarking overlays: **🟢 implemented** (live quote workflow now shows benchmark guidance and recommendation overlays)
 - Backhaul-aware quote discount guidance: **🟢 implemented** (quote workflow now surfaces backhaul discount headroom and recommendation support)
 - App/API/pricing decomposition pass: **🟢 implemented** (major shell/router/pricing hotspots collapsed into bounded modules with compatibility facades preserved)
@@ -29,7 +30,6 @@ Use it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and [COMPACT
 
 - Continue operations-diary expansion toward fuller job/staff/invoice reconciliation workflow.
 - Add delivery receipt / watermark semantics to the observer outbox when deployment posture matters.
-- Surface observer-outbox visibility in the dashboard for admin/operator inspection.
 - Extend operations inventory with barcode/QR and container-specific execution controls.
 - Add explicit evidence-backed site/media/CV ingestion before deeper constraint automation.
 - Add and maintain explicit policy/override governance for hard-block categories.
