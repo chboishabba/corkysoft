@@ -68,3 +68,4 @@
 - added operator-facing share/reallocation recommendations in Dispatch based on spare-capacity and container-pressure signals, without yet introducing automatic reassignment
 - added explicit Dispatch response actions for share/reallocation and utilisation handling, including persisted action/status logging on recommendation candidates
 - added a first regression/modeling baseline for profitability: historical margin-per-m³ regression over distance and season, surfaced inside profitability insights with fit metrics and scenario previews
+- extended the profitability model with corridor-aware margin prediction, baseline-vs-corridor fit deltas, and explicit operator-safe interpretation guidance in the UI

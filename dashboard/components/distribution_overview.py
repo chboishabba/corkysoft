@@ -9,7 +9,9 @@ import streamlit as st
 
 from analytics.live_data import load_active_routes, load_truck_positions
 from analytics.margin_regression import (
+    build_corridor_margin_preview,
     build_margin_regression_preview,
+    summarise_corridor_margin_model,
     summarise_margin_regression,
 )
 from analytics.price_distribution import (
@@ -289,6 +291,58 @@ def render_distribution_analytics_surface(
                         preview_df = build_margin_regression_preview(regression_summary)
                         if not preview_df.empty:
                             st.dataframe(preview_df, width="stretch", hide_index=True)
+                        corridor_summary = summarise_corridor_margin_model(profitability_df)
+                        if corridor_summary.fitted_job_count >= 6:
+                            st.markdown("#### Corridor-aware margin model")
+                            st.caption(
+                                "This extends the baseline model with corridor effects so operators can compare "
+                                "historical margin patterns by lane, not just by distance and season."
+                            )
+                            corridor_cols = st.columns(4)
+                            corridor_cols[0].metric(
+                                "Corridor-aware R²",
+                                "n/a" if pd.isna(corridor_summary.r_squared) else f"{corridor_summary.r_squared:.2f}",
+                            )
+                            corridor_cols[1].metric(
+                                "Corridor-aware RMSE",
+                                "n/a" if pd.isna(corridor_summary.rmse) else f"${corridor_summary.rmse:.2f}",
+                            )
+                            corridor_cols[2].metric(
+                                "R² improvement",
+                                "n/a"
+                                if pd.isna(corridor_summary.r_squared) or pd.isna(corridor_summary.baseline_r_squared)
+                                else f"{corridor_summary.r_squared - corridor_summary.baseline_r_squared:+.2f}",
+                            )
+                            corridor_cols[3].metric(
+                                "RMSE improvement",
+                                "n/a"
+                                if pd.isna(corridor_summary.rmse) or pd.isna(corridor_summary.baseline_rmse)
+                                else f"${corridor_summary.baseline_rmse - corridor_summary.rmse:+.2f}",
+                            )
+                            st.caption(
+                                f"Baseline corridor bucket: {corridor_summary.baseline_corridor} | "
+                                f"feature source: {corridor_summary.corridor_column}"
+                            )
+                            corridor_effect_rows = pd.DataFrame(
+                                [
+                                    {
+                                        "Corridor": corridor,
+                                        "Adjustment vs baseline": round(effect, 2),
+                                        "Jobs": corridor_summary.corridor_job_counts.get(corridor, 0),
+                                    }
+                                    for corridor, effect in sorted(
+                                        corridor_summary.corridor_effects.items(),
+                                        key=lambda item: (-corridor_summary.corridor_job_counts.get(item[0], 0), item[0]),
+                                    )
+                                ]
+                            )
+                            st.dataframe(corridor_effect_rows, width="stretch", hide_index=True)
+                            corridor_preview_df = build_corridor_margin_preview(corridor_summary)
+                            if not corridor_preview_df.empty:
+                                st.dataframe(corridor_preview_df, width="stretch", hide_index=True)
+                            st.caption(
+                                "Operator-safe interpretation: use this as a historical tendency signal, not as an automatic pricing or dispatch decision."
+                            )
             elif dataset_error:
                 st.error("Unable to calculate profitability without job data.")
             else:

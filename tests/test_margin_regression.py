@@ -6,6 +6,8 @@ import pandas as pd
 import pytest
 
 from analytics.margin_regression import (
+    build_corridor_margin_preview,
+    summarise_corridor_margin_model,
     build_margin_regression_preview,
     summarise_margin_regression,
 )
@@ -80,3 +82,89 @@ def test_summarise_margin_regression_requires_expected_columns() -> None:
 
     with pytest.raises(KeyError):
         summarise_margin_regression(df)
+
+
+def test_summarise_corridor_margin_model_recovers_corridor_effects_and_improves_fit() -> None:
+    df = pd.DataFrame(
+        {
+            "job_date": [
+                "2026-01-15",
+                "2026-02-15",
+                "2026-01-20",
+                "2026-02-20",
+                "2026-04-15",
+                "2026-05-15",
+                "2026-04-20",
+                "2026-05-20",
+            ],
+            "distance_km": [100, 300, 100, 300, 100, 300, 100, 300],
+            "corridor_display": [
+                "Alpha",
+                "Alpha",
+                "Beta",
+                "Beta",
+                "Alpha",
+                "Alpha",
+                "Beta",
+                "Beta",
+            ],
+            "margin_per_m3": [95, 85, 70, 60, 85, 75, 60, 50],
+        }
+    )
+
+    summary = summarise_corridor_margin_model(df)
+
+    assert summary.fitted_job_count == 8
+    assert summary.baseline_corridor == "Alpha"
+    assert summary.corridor_effects["Alpha"] == pytest.approx(0.0, abs=1e-6)
+    assert summary.corridor_effects["Beta"] == pytest.approx(-25.0, abs=1e-6)
+    assert summary.r_squared > summary.baseline_r_squared
+    assert summary.rmse < summary.baseline_rmse
+
+
+def test_summarise_corridor_margin_model_groups_rare_corridors_into_other() -> None:
+    df = pd.DataFrame(
+        {
+            "job_date": [
+                "2026-01-15",
+                "2026-02-15",
+                "2026-03-15",
+                "2026-04-15",
+                "2026-05-15",
+                "2026-06-15",
+            ],
+            "distance_km": [100, 200, 300, 100, 200, 300],
+            "corridor_display": ["Alpha", "Alpha", "Alpha", "Beta", "Gamma", "Gamma"],
+            "margin_per_m3": [90, 80, 70, 88, 75, 65],
+        }
+    )
+
+    summary = summarise_corridor_margin_model(df, min_corridor_jobs=2)
+    preview = build_corridor_margin_preview(summary, distances_km=(100.0,))
+
+    assert "Other corridors" in summary.corridor_job_counts
+    assert "Other corridors" in summary.corridor_effects
+    assert "Other corridors" in set(preview["Corridor"])
+
+
+def test_summarise_corridor_margin_model_uses_corridor_group_key_when_available() -> None:
+    df = pd.DataFrame(
+        {
+            "job_date": [
+                "2026-01-15",
+                "2026-02-15",
+                "2026-03-15",
+                "2026-04-15",
+                "2026-05-15",
+                "2026-06-15",
+            ],
+            "distance_km": [100, 200, 300, 100, 200, 300],
+            "corridor_group_key": ["A<->B", "A<->B", "A<->B", "C<->D", "C<->D", "C<->D"],
+            "corridor_display": ["Noise"] * 6,
+            "margin_per_m3": [90, 80, 70, 95, 85, 75],
+        }
+    )
+
+    summary = summarise_corridor_margin_model(df)
+
+    assert summary.corridor_column == "corridor_group_key"
