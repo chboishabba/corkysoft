@@ -24,13 +24,13 @@ Use it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and [COMPACT
 - Observer-outbox dashboard visibility: **🟢 implemented** (Operations diary now exposes filtered observer envelopes with payload/provenance inspection)
 - Quote recommendation and benchmarking overlays: **🟢 implemented** (live quote workflow now shows benchmark guidance and recommendation overlays)
 - Backhaul-aware quote discount guidance: **🟢 implemented** (quote workflow now surfaces backhaul discount headroom and recommendation support)
-- Broader backhaul / container-sharing operational visibility: **🟡 in progress** (Dispatch now surfaces persisted spare-capacity signals, container pressure, and share/reallocation recommendations for awarded/planned jobs; deeper execution handling still pending)
+- Broader backhaul / container-sharing operational visibility: **🟡 in progress** (Dispatch now surfaces persisted spare-capacity signals, container pressure, share/reallocation recommendations, and explicit operator response actions; deeper execution handling still pending)
 - App/API/pricing decomposition pass: **🟢 implemented** (major shell/router/pricing hotspots collapsed into bounded modules with compatibility facades preserved)
 
 ## Active TODO Alignment (Current Wave)
 
 - Continue operations-diary expansion toward fuller job/staff/invoice reconciliation workflow.
-- Extend dispatch/inventory handling from recommendation into explicit backhaul/container-sharing decisions and under-/over-utilisation response.
+- Extend dispatch/inventory handling from explicit response actions into fuller execution flows for backhaul/container-sharing and under-/over-utilisation response.
 - Add delivery receipt / watermark semantics to the observer outbox when deployment posture matters.
 - Extend operations inventory with barcode/QR and container-specific execution controls.
 - Add explicit evidence-backed site/media/CV ingestion before deeper constraint automation.

@@ -66,3 +66,4 @@
 - gated Kent admin policy-default and override-reason writes to `system_rollout_admin`, keeping operator review/tender workflow visible while tightening dashboard governance boundaries
 - surfaced persisted spare-capacity signals and container-pressure rollups in the Dispatch board so operations can review backhaul/container-fit context after award, not only during quoting
 - added operator-facing share/reallocation recommendations in Dispatch based on spare-capacity and container-pressure signals, without yet introducing automatic reassignment
+- added explicit Dispatch response actions for share/reallocation and utilisation handling, including persisted action/status logging on recommendation candidates

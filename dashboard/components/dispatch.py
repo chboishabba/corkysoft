@@ -6,10 +6,13 @@ import pandas as pd
 import streamlit as st
 
 from analytics.operations_assignment import (
+    DISPATCH_SHARE_ACTION_STATUSES,
     list_job_operations_board,
+    list_dispatch_share_actions,
     list_operations_cutover_events,
     list_operations_cutover_rollout,
     list_operational_share_opportunities,
+    record_dispatch_share_action,
     record_operations_cutover_event,
 )
 
@@ -90,11 +93,14 @@ def render_dispatch_tab(conn: sqlite3.Connection) -> None:
                         ),
                         "Opportunity": row["opportunityType"],
                         "Utilisation": row["utilizationState"],
+                        "Response": row["utilizationResponse"],
                         "Signal": row.get("spareCapacityLabel") or "untracked",
                         "Matching spare": row.get("matchingSpareTrucks", 0),
                         "Destination spare": row.get("destinationSpareTrucks", 0),
                         "Container shortage": row.get("containerShortageQuantity", 0.0),
                         "Shortage": row.get("shortageQuantity", 0.0),
+                        "Latest action": row.get("latestActionType") or "",
+                        "Action status": row.get("latestActionStatus") or "",
                         "Recommended action": row["recommendedAction"],
                     }
                     for row in opportunity_rows
@@ -273,6 +279,10 @@ def render_dispatch_tab(conn: sqlite3.Connection) -> None:
         key="dispatch_selected_job",
     )
     selected = options[selected_label]
+    selected_opportunity = next(
+        (row for row in opportunity_rows if int(row["jobId"]) == int(selected["jobId"])),
+        None,
+    )
 
     metric_cols = st.columns(4)
     metric_cols[0].metric("Segments", selected["segmentCount"])
@@ -295,6 +305,67 @@ def render_dispatch_tab(conn: sqlite3.Connection) -> None:
         st.caption(
             "This job is container-heavy, but no persisted spare-capacity signal is available yet."
         )
+    if selected_opportunity is not None:
+        st.markdown("#### Share / utilisation response")
+        st.caption(selected_opportunity["recommendedAction"])
+        response_cols = st.columns(4)
+        response_cols[0].metric("Opportunity", selected_opportunity["opportunityType"])
+        response_cols[1].metric("Utilisation response", selected_opportunity["utilizationResponse"])
+        response_cols[2].metric("Latest action", selected_opportunity.get("latestActionType") or "none")
+        response_cols[3].metric("Action status", selected_opportunity.get("latestActionStatus") or "none")
+        with st.form(f"dispatch_share_action_{selected['jobId']}"):
+            form_cols = st.columns(4)
+            action_type = form_cols[0].selectbox(
+                "Action",
+                options=selected_opportunity["operatorActions"],
+                index=0,
+                format_func=lambda value: value.replace("_", " ").title(),
+            )
+            action_status = form_cols[1].selectbox(
+                "Status",
+                options=list(DISPATCH_SHARE_ACTION_STATUSES),
+                index=0,
+                format_func=lambda value: value.replace("_", " ").title(),
+            )
+            actor = form_cols[2].text_input("Actor")
+            note = form_cols[3].text_input("Note")
+            if st.form_submit_button("Record dispatch response", disabled=not actor.strip()):
+                try:
+                    record_dispatch_share_action(
+                        conn,
+                        job_id=int(selected["jobId"]),
+                        opportunity_type=str(selected_opportunity["opportunityType"]),
+                        utilization_state=str(selected_opportunity["utilizationState"]),
+                        action_type=str(action_type),
+                        action_status=str(action_status),
+                        actor=actor,
+                        note=note,
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.success("Dispatch response recorded.")
+                    _rerun()
+        recent_actions = list_dispatch_share_actions(conn, job_id=int(selected["jobId"]), limit=10)
+        if recent_actions:
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "When": row["createdAt"],
+                            "Action": row["actionType"],
+                            "Status": row["actionStatus"],
+                            "Actor": row["actor"] or "",
+                            "Opportunity": row["opportunityType"],
+                            "Utilisation": row["utilizationState"],
+                            "Note": row["note"] or "",
+                        }
+                        for row in recent_actions
+                    ]
+                ),
+                width="stretch",
+                hide_index=True,
+            )
     if st.button("Open in Operations diary", key="dispatch_open_operations_diary"):
         diary_date = str(selected.get("plannedStart") or "")[:10]
         _set_query_params(

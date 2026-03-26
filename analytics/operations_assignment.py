@@ -40,6 +40,8 @@ OPERATIONS_DEFAULTS = (
     (CONFLICT_OVERRIDE_ALLOWED_KEY, 1.0, "Whether assignment conflicts can be overridden."),
 )
 
+DISPATCH_SHARE_ACTION_STATUSES = ("planned", "in_progress", "completed", "cancelled")
+
 OPERATIONS_CUTOVER_DEFAULTS: tuple[dict[str, Any], ...] = (
     {
         "workflow_key": "dispatch_execution",
@@ -2369,11 +2371,173 @@ def list_job_operations_board(
     )
 
 
+def _share_opportunity_actions(
+    opportunity_type: str,
+    utilization_state: str,
+) -> list[str]:
+    if opportunity_type == "container_reallocation":
+        return ["reallocate_container", "share_return_lane", "defer", "escalate_manager"]
+    if opportunity_type == "container_pressure":
+        return ["rebalance_capacity", "escalate_manager", "defer"]
+    if opportunity_type == "capacity_pressure":
+        return ["rebalance_capacity", "hold_capacity", "escalate_manager", "defer"]
+    if opportunity_type == "backhaul_share_candidate":
+        return ["offer_share_capacity", "reserve_backhaul_slot", "hold_capacity", "defer"]
+    if opportunity_type == "container_return_candidate":
+        return ["share_return_lane", "reserve_backhaul_slot", "defer"]
+    if utilization_state == "pressure_constrained":
+        return ["rebalance_capacity", "escalate_manager", "defer"]
+    if utilization_state == "under_utilised":
+        return ["offer_share_capacity", "hold_capacity", "defer"]
+    return ["defer"]
+
+
+def _ensure_dispatch_share_action_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dispatch_share_actions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL,
+            opportunity_type TEXT NOT NULL,
+            utilization_state TEXT NOT NULL,
+            action_type TEXT NOT NULL,
+            action_status TEXT NOT NULL DEFAULT 'planned',
+            actor TEXT,
+            note TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
+def record_dispatch_share_action(
+    conn: sqlite3.Connection,
+    *,
+    job_id: int,
+    opportunity_type: str,
+    utilization_state: str,
+    action_type: str,
+    action_status: str = "planned",
+    actor: str | None = None,
+    note: str | None = None,
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    ensure_dashboard_tables(conn)
+    _ensure_dispatch_share_action_table(conn)
+    job_row = conn.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if job_row is None:
+        raise ValueError(f"Job {job_id} not found")
+    allowed_actions = _share_opportunity_actions(opportunity_type, utilization_state)
+    if action_type not in allowed_actions:
+        raise ValueError("Action is not allowed for this share/utilisation opportunity")
+    if action_status not in DISPATCH_SHARE_ACTION_STATUSES:
+        raise ValueError(f"Unknown action status: {action_status}")
+    timestamp = created_at or datetime.now(UTC).isoformat()
+    cursor = conn.execute(
+        """
+        INSERT INTO dispatch_share_actions (
+            job_id,
+            opportunity_type,
+            utilization_state,
+            action_type,
+            action_status,
+            actor,
+            note,
+            created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(job_id),
+            opportunity_type,
+            utilization_state,
+            action_type,
+            action_status,
+            actor.strip() if isinstance(actor, str) and actor.strip() else None,
+            note.strip() if isinstance(note, str) and note.strip() else None,
+            timestamp,
+        ),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM dispatch_share_actions WHERE id = ?",
+        (int(cursor.lastrowid),),
+    ).fetchone()
+    assert row is not None
+    return {
+        "id": int(row["id"]),
+        "jobId": int(row["job_id"]),
+        "opportunityType": row["opportunity_type"],
+        "utilizationState": row["utilization_state"],
+        "actionType": row["action_type"],
+        "actionStatus": row["action_status"],
+        "actor": row["actor"],
+        "note": row["note"],
+        "createdAt": row["created_at"],
+    }
+
+
+def list_dispatch_share_actions(
+    conn: sqlite3.Connection,
+    *,
+    job_id: int | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    ensure_dashboard_tables(conn)
+    _ensure_dispatch_share_action_table(conn)
+    params: list[Any] = []
+    where = ""
+    if job_id is not None:
+        where = "WHERE dsa.job_id = ?"
+        params.append(int(job_id))
+    params.append(max(1, int(limit)))
+    rows = conn.execute(
+        f"""
+        SELECT
+            dsa.*,
+            j.client AS job_client,
+            j.origin AS job_origin,
+            j.destination AS job_destination
+        FROM dispatch_share_actions AS dsa
+        JOIN jobs AS j ON j.id = dsa.job_id
+        {where}
+        ORDER BY dsa.created_at DESC, dsa.id DESC
+        LIMIT ?
+        """,
+        params,
+    ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "jobId": int(row["job_id"]),
+            "jobClient": row["job_client"],
+            "jobOrigin": row["job_origin"],
+            "jobDestination": row["job_destination"],
+            "opportunityType": row["opportunity_type"],
+            "utilizationState": row["utilization_state"],
+            "actionType": row["action_type"],
+            "actionStatus": row["action_status"],
+            "actor": row["actor"],
+            "note": row["note"],
+            "createdAt": row["created_at"],
+        }
+        for row in rows
+    ]
+
+
 def list_operational_share_opportunities(
     conn: sqlite3.Connection,
     *,
     job_id: int | None = None,
 ) -> list[dict[str, Any]]:
+    latest_action_by_key: dict[tuple[int, str], dict[str, Any]] = {}
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='dispatch_share_actions'"
+    ).fetchone():
+        for action in list_dispatch_share_actions(conn, limit=500):
+            key = (int(action["jobId"]), str(action["opportunityType"]))
+            if key not in latest_action_by_key:
+                latest_action_by_key[key] = action
     opportunities: list[dict[str, Any]] = []
     for row in list_job_operations_board(conn, job_id=job_id):
         spare_label = str(row.get("spareCapacityLabel") or "untracked")
@@ -2417,6 +2581,16 @@ def list_operational_share_opportunities(
         if opportunity_type is None:
             continue
 
+        response_class = (
+            "under_utilised"
+            if utilization_state == "under_utilised"
+            else "over_utilised"
+            if utilization_state in {"pressure_constrained", "pressure_with_relief_option"}
+            else utilization_state
+        )
+        action_options = _share_opportunity_actions(opportunity_type, utilization_state)
+        latest_action = latest_action_by_key.get((int(row["jobId"]), opportunity_type))
+
         opportunities.append(
             {
                 "jobId": row["jobId"],
@@ -2427,7 +2601,10 @@ def list_operational_share_opportunities(
                 "jobStatus": row.get("jobStatus"),
                 "opportunityType": opportunity_type,
                 "utilizationState": utilization_state,
+                "utilizationResponse": response_class,
                 "recommendedAction": recommendation,
+                "recommendedActionKey": action_options[0],
+                "operatorActions": action_options,
                 "spareCapacityLabel": row.get("spareCapacityLabel"),
                 "spareCapacityScore": row.get("spareCapacityScore"),
                 "matchingSpareTrucks": row.get("matchingSpareTrucks", 0),
@@ -2436,6 +2613,10 @@ def list_operational_share_opportunities(
                 "containerShortageQuantity": row.get("containerShortageQuantity", 0.0),
                 "shortageQuantity": row.get("shortageQuantity", 0.0),
                 "plannedStart": row.get("plannedStart"),
+                "latestActionType": latest_action.get("actionType") if latest_action else None,
+                "latestActionStatus": latest_action.get("actionStatus") if latest_action else None,
+                "latestActionActor": latest_action.get("actor") if latest_action else None,
+                "latestActionAt": latest_action.get("createdAt") if latest_action else None,
             }
         )
 
@@ -2513,6 +2694,7 @@ __all__ = [
     "ensure_worker_role",
     "evaluate_segment_readiness",
     "get_operations_policy",
+    "list_dispatch_share_actions",
     "list_job_operations_board",
     "list_labor_reconciliation",
     "list_operations_cutover_events",
@@ -2530,6 +2712,7 @@ __all__ = [
     "apply_operations_cutover_recommendation",
     "reject_operations_cutover_promotion",
     "record_operations_cutover_event",
+    "record_dispatch_share_action",
     "request_operations_cutover_promotion",
     "upsert_operations_cutover_workflow",
     "update_operations_policy",
