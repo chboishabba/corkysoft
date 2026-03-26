@@ -1147,6 +1147,11 @@ def build_job_usage_details(conn: sqlite3.Connection, *, job_id: int) -> dict[st
     bill_reviews = list_subcontractor_bill_reviews(conn, job_id=int(job_id))
     vehicle_usage = build_vehicle_usage_for_job(conn, job_id=int(job_id))
     staff_usage = build_staff_usage_for_job(conn, job_id=int(job_id))
+    labor_reconciliation = [
+        row
+        for row in list_labor_reconciliation(conn)
+        if row.get("jobId") is not None and int(row["jobId"]) == int(job_id)
+    ]
     return {
         "job": board_row,
         "tasks": tasks,
@@ -1154,6 +1159,7 @@ def build_job_usage_details(conn: sqlite3.Connection, *, job_id: int) -> dict[st
         "billReviews": bill_reviews,
         "vehicleUsage": vehicle_usage,
         "staffUsage": staff_usage,
+        "laborReconciliation": labor_reconciliation,
         "reconciliationExposure": build_reconciliation_exposure_summary(conn, as_of_date=_date_only(_utc_now_iso()) or date.today().isoformat(), job_id=int(job_id)),
     }
 

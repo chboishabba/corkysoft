@@ -197,6 +197,35 @@ def test_build_job_usage_details_includes_vehicle_and_staff_usage() -> None:
     assert len(details["staffUsage"]) == 1
     assert details["staffUsage"][0]["workerName"] == "Alex Planner"
     assert details["staffUsage"][0]["actualShiftCount"] == 1
+    assert len(details["laborReconciliation"]) == 1
+    assert details["laborReconciliation"][0]["jobId"] == ids["job1"]
+    assert details["laborReconciliation"][0]["status"] == "matched"
+
+
+def test_build_job_usage_details_includes_job_linked_imported_only_labor_rows() -> None:
+    conn, ids = _seed_conn()
+    extra_worker = upsert_worker(conn, name="Imported Only Worker")
+    upsert_driver_shift(
+        conn,
+        shift_date="2026-03-20",
+        truck_id="TRK-1",
+        worker_name="Imported Only Worker",
+        shift_start="2026-03-20T13:00:00+00:00",
+        shift_end="2026-03-20T15:00:00+00:00",
+        hours=2.0,
+        hourly_rate=35.0,
+        job_id=ids["job1"],
+        source="import",
+    )
+    conn.commit()
+
+    details = build_job_usage_details(conn, job_id=ids["job1"])
+
+    statuses = {row["status"] for row in details["laborReconciliation"]}
+    workers = {row["workerName"] for row in details["laborReconciliation"]}
+    assert "imported_only" in statuses
+    assert "Imported Only Worker" in workers
+    assert all(int(row["jobId"]) == ids["job1"] for row in details["laborReconciliation"])
 
 
 def test_reconciliation_exposure_summary_uses_bill_receipt_for_age_and_job_for_latency() -> None:

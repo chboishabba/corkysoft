@@ -48,6 +48,47 @@ def _rerun() -> None:
         experimental_rerun()
 
 
+def _labor_reconciliation_table_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return compact, diary-friendly table rows for labor reconciliation."""
+
+    return [
+        {
+            "Status": row.get("status"),
+            "Shift date": row.get("shiftDate"),
+            "Worker": row.get("workerName"),
+            "Trucks": _join_non_empty(row.get("truckIds", [])),
+            "Planned start": row.get("plannedStart"),
+            "Planned end": row.get("plannedEnd"),
+            "Segment": row.get("segmentId"),
+            "Source": row.get("source"),
+        }
+        for row in rows
+    ]
+
+
+def _labor_reconciliation_detail_rows(row: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return a key/value detail view for one labor reconciliation row."""
+
+    return [
+        {"Field": "Status", "Value": row.get("status")},
+        {"Field": "Shift date", "Value": row.get("shiftDate")},
+        {"Field": "Worker", "Value": row.get("workerName")},
+        {"Field": "Worker ID", "Value": row.get("workerId")},
+        {"Field": "Job", "Value": row.get("jobId")},
+        {"Field": "Segment", "Value": row.get("segmentId")},
+        {"Field": "Planned start", "Value": row.get("plannedStart")},
+        {"Field": "Planned end", "Value": row.get("plannedEnd")},
+        {"Field": "Trucks", "Value": _join_non_empty(row.get("truckIds", []))},
+        {"Field": "Source", "Value": row.get("source")},
+    ]
+
+
+def _join_non_empty(values: Any) -> str:
+    if not isinstance(values, list):
+        return ""
+    return ", ".join(str(value) for value in values if value not in (None, ""))
+
+
 def render_operations_diary_tab(conn: sqlite3.Connection) -> None:
     st.subheader("Operations diary")
     st.caption(
@@ -385,6 +426,47 @@ def render_operations_diary_tab(conn: sqlite3.Connection) -> None:
             if "plannedTruckIds" in staff_df.columns:
                 staff_df["plannedTruckIds"] = staff_df["plannedTruckIds"].apply(lambda values: ", ".join(values))
             st.dataframe(staff_df, width="stretch", hide_index=True)
+
+    st.markdown("#### Labor reconciliation")
+    labor_df = pd.DataFrame(details["laborReconciliation"])
+    if labor_df.empty:
+        st.caption("No labor reconciliation rows are linked to this job yet.")
+    else:
+        recon_cols = st.columns(3)
+        recon_cols[0].metric("Planned only", int((labor_df["status"] == "planned_only").sum()))
+        recon_cols[1].metric("Imported only", int((labor_df["status"] == "imported_only").sum()))
+        recon_cols[2].metric("Matched", int((labor_df["status"] == "matched").sum()))
+        display_df = labor_df.copy()
+        display_df["truckIds"] = display_df["truckIds"].apply(
+            lambda values: ", ".join(values) if isinstance(values, list) else ""
+        )
+        st.dataframe(
+            display_df[
+                [
+                    "status",
+                    "shiftDate",
+                    "workerName",
+                    "truckIds",
+                    "segmentId",
+                    "plannedStart",
+                    "plannedEnd",
+                    "source",
+                ]
+            ].rename(
+                columns={
+                    "status": "Status",
+                    "shiftDate": "Date",
+                    "workerName": "Worker",
+                    "truckIds": "Trucks",
+                    "segmentId": "Segment",
+                    "plannedStart": "Planned start",
+                    "plannedEnd": "Planned end",
+                    "source": "Source",
+                }
+            ),
+            width="stretch",
+            hide_index=True,
+        )
 
     fin_cols = st.columns(2)
     with fin_cols[0]:

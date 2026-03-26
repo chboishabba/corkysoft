@@ -59,3 +59,4 @@
 - decomposed the main dashboard shell, API root, pricing surface, and call-ops surface into smaller bounded modules while preserving stable import and test monkeypatch surfaces
 - added `docs/contributor_docs_sync.md` and synced README, roadmap, progress board, module guide, and positioning docs to reflect the current architecture and product state
 - added observer-outbox visibility to the Operations diary so emitted planning/reconciliation envelopes can be filtered and inspected inside the dashboard
+- added job-scoped labor reconciliation to the Operations diary detail so managers can compare planned labor against imported shifts inside the same usage/reconciliation cockpit

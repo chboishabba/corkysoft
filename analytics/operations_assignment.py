@@ -2019,12 +2019,22 @@ def list_labor_reconciliation(
     end_date: str | None = None,
 ) -> list[dict[str, Any]]:
     planned_rows = list_planned_labor_assignments(conn, start_date=start_date, end_date=end_date)
+    driver_shift_columns = {
+        row["name"] if hasattr(row, "keys") else row[1]
+        for row in conn.execute("PRAGMA table_info(driver_shifts)").fetchall()
+    }
+    linked_job_column = (
+        "ds.job_id AS linked_job_id"
+        if "job_id" in driver_shift_columns
+        else "NULL AS linked_job_id"
+    )
     imported_rows = conn.execute(
-        """
+        f"""
         SELECT
             ds.id,
             ds.shift_date,
             ds.truck_id,
+            {linked_job_column},
             ds.worker_id,
             w.name AS worker_name,
             ds.shift_window_start,
@@ -2098,7 +2108,7 @@ def list_labor_reconciliation(
                 "workerId": row["worker_id"],
                 "workerName": row["worker_name"],
                 "truckIds": [row["truck_id"]] if row["truck_id"] else [],
-                "jobId": None,
+                "jobId": row["linked_job_id"],
                 "segmentId": None,
                 "plannedStart": row["shift_window_start"] or row["shift_start"],
                 "plannedEnd": row["shift_window_end"] or row["shift_end"],

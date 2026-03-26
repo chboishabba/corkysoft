@@ -112,7 +112,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Replace `VEHICLE_DRIVER` as the primary roster/planning surface with native labor planning and imported-shift reconciliation.
 - Link inventory allocation and supplier coordination directly to `job_segments` so stock planning cooperates with truck/worker planning.
 - Make the Dispatch tab the primary job-centric execution surface across trucks, workers, inventory, suppliers, and readiness flags.
-- Add a manager-facing day/week diary that links jobs, tasks, vehicle usage, staff usage, customer invoice readiness, and subcontractor-bill reconciliation.
+- Add a manager-facing day/week diary that links jobs, tasks, vehicle usage, staff usage, labor reconciliation, customer invoice readiness, and subcontractor-bill reconciliation.
 - Add persistent diary tasks for day/week/job/segment follow-through that do not need to masquerade as `job_segments`.
 - Add invoice and subcontractor-bill review records tied to jobs, with explicit exception states when operational truth is incomplete.
 - Implemented a Corkysoft-native observer outbox for diary/planner/reconciliation

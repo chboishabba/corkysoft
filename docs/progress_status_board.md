@@ -10,7 +10,7 @@ Use it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and [COMPACT
 - Core routing and costing: **🟢 implemented**
 - Streamlit dashboard baseline: **🟢 implemented**
 - Planner core interaction flow: **🟢 implemented** (hybrid planner scaffold and site-risk data model)
-- Operations diary surface: **🟢 implemented** (core day/week/task/invoice-bill views)
+- Operations diary surface: **🟢 implemented** (core day/week/task/invoice-bill views plus job-scoped labor reconciliation detail)
 - Auth and role-boundary hardening: **🟢 implemented** (Google OIDC + local allowlist + hidden-tab guards)
 - Historical job corridor/lane model: **🟢 implemented** (canonical clusters/lanes/groups, assignment status, promotion governance, and planner-safe consumption)
 - Inventory execution maturity beyond baseline: **🟡 in progress**
