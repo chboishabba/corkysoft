@@ -77,7 +77,7 @@ def _json_dumps(value: Any) -> str:
 
 
 def _observer_row_to_event(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
-    record = dict(row)
+    record = _row_to_dict(row)
     event_time = record["event_time"]
     return {
         "id": int(record["id"]),
@@ -107,6 +107,29 @@ def _observer_row_to_event(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         "recordedAt": record["recorded_at"],
         "cursor": f"{event_time}|observer|{record['event_id']}",
     }
+
+
+def _row_to_dict(row: Any) -> dict[str, Any]:
+    if isinstance(row, dict):
+        return row
+    if hasattr(row, "keys"):
+        return {key: row[key] for key in row.keys()}
+    raise TypeError("Row does not expose named columns")
+
+
+def _fetch_dict_rows(
+    conn: sqlite3.Connection,
+    query: str,
+    params: list[Any],
+) -> list[dict[str, Any]]:
+    cursor = conn.execute(query, params)
+    rows = cursor.fetchall()
+    if not rows:
+        return []
+    if hasattr(rows[0], "keys"):
+        return [_row_to_dict(row) for row in rows]
+    columns = [description[0] for description in cursor.description or []]
+    return [dict(zip(columns, row, strict=False)) for row in rows]
 
 
 def _emit_observer_event(
@@ -191,11 +214,19 @@ def _emit_observer_event(
             recorded_at,
         ),
     )
-    row = conn.execute(
+    cursor = conn.execute(
         "SELECT * FROM observer_outbox_events WHERE idempotency_key = ?",
         (idempotency_key,),
-    ).fetchone()
-    return _observer_row_to_event(row)
+    )
+    row = cursor.fetchone()
+    if row is None:
+        raise ValueError("Failed to read emitted observer event")
+    if hasattr(row, "keys"):
+        event_row = _row_to_dict(row)
+    else:
+        columns = [description[0] for description in cursor.description or []]
+        event_row = dict(zip(columns, row, strict=False))
+    return _observer_row_to_event(event_row)
 
 
 def list_observer_outbox_events(
@@ -263,7 +294,8 @@ def list_operations_diary_tasks(
         filters.append("t.job_id = ?")
         params.append(int(job_id))
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
-    rows = conn.execute(
+    return _fetch_dict_rows(
+        conn,
         f"""
         SELECT
             t.*,
@@ -278,8 +310,7 @@ def list_operations_diary_tasks(
         ORDER BY t.task_date, COALESCE(t.planned_start, ''), t.id
         """,
         params,
-    ).fetchall()
-    return [dict(row) for row in rows]
+    )
 
 
 def upsert_operations_diary_task(
@@ -457,7 +488,8 @@ def list_customer_invoice_reviews(conn: sqlite3.Connection, *, job_id: int | Non
     if job_id is not None:
         where = "WHERE cir.job_id = ?"
         params.append(int(job_id))
-    rows = conn.execute(
+    return _fetch_dict_rows(
+        conn,
         f"""
         SELECT cir.*, j.client AS job_client, j.origin, j.destination
         FROM customer_invoice_reviews AS cir
@@ -466,8 +498,7 @@ def list_customer_invoice_reviews(conn: sqlite3.Connection, *, job_id: int | Non
         ORDER BY COALESCE(cir.invoice_date, ''), cir.job_id
         """,
         params,
-    ).fetchall()
-    return [dict(row) for row in rows]
+    )
 
 
 def upsert_customer_invoice_review(
@@ -555,7 +586,8 @@ def list_subcontractor_bill_reviews(
     if job_id is not None:
         where = "WHERE sbr.job_id = ?"
         params.append(int(job_id))
-    rows = conn.execute(
+    return _fetch_dict_rows(
+        conn,
         f"""
         SELECT
             sbr.*,
@@ -568,8 +600,7 @@ def list_subcontractor_bill_reviews(
         ORDER BY COALESCE(sbr.bill_date, ''), sbr.job_id, sbr.id
         """,
         params,
-    ).fetchall()
-    return [dict(row) for row in rows]
+    )
 
 
 def upsert_subcontractor_bill_review(
@@ -1024,7 +1055,9 @@ def build_operations_diary(
         bills_by_job.setdefault(int(row["job_id"]), []).append(row)
 
     planned_labor = list_planned_labor_assignments(conn, start_date=start_date, end_date=end_date)
-    imported_shifts = [dict(row) for row in fetch_driver_shifts(conn, start_date=start_date, end_date=end_date)]
+    imported_shifts = [
+        _row_to_dict(row) for row in fetch_driver_shifts(conn, start_date=start_date, end_date=end_date)
+    ]
     imported_by_job: dict[int, list[dict[str, Any]]] = {}
     for row in imported_shifts:
         linked = row.get("linked_job_id")
@@ -1045,7 +1078,12 @@ def build_operations_diary(
             for segment in segments
             if _date_only(segment.get("plannedStart"))
         )
-        if not in_range and int(row["jobId"]) not in task_counts_by_job:
+        has_reconciliation_record = (
+            int(row["jobId"]) in invoice_reviews
+            or int(row["jobId"]) in bills_by_job
+            or int(row["jobId"]) in imported_by_job
+        )
+        if not in_range and int(row["jobId"]) not in task_counts_by_job and not has_reconciliation_record:
             continue
         invoice_status = _derive_invoice_status(invoice_reviews.get(int(row["jobId"])), row)
         bill_status = _derive_bill_status(bills_by_job.get(int(row["jobId"]), []), row)

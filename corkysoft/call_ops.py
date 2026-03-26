@@ -367,7 +367,7 @@ def _normalize_phone(value: str | None) -> str | None:
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
     existing = {
-        row["name"]
+        (row["name"] if hasattr(row, "keys") else row[1])
         for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
     }
     if column not in existing:
@@ -2309,31 +2309,60 @@ def list_worker_time_capture_events(
     return [_worker_time_row_to_dict(row) for row in rows]
 
 
-def _worker_time_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+def _worker_time_row_to_dict(row: sqlite3.Row | tuple[Any, ...]) -> dict[str, Any]:
+    if hasattr(row, "keys"):
+        record: dict[str, Any] = {key: row[key] for key in row.keys()}
+    else:
+        columns = [
+            "id",
+            "call_event_id",
+            "call_session_id",
+            "call_leg_id",
+            "worker_id",
+            "worker_name",
+            "worker_name_raw",
+            "employee_code_raw",
+            "event_type",
+            "channel",
+            "effective_timestamp",
+            "captured_timestamp",
+            "caller_phone",
+            "job_id",
+            "segment_id",
+            "truck_id",
+            "confidence",
+            "review_status",
+            "reviewer",
+            "review_note",
+            "raw_payload",
+            "created_at",
+            "reviewed_at",
+        ]
+        record = dict(zip(columns, row, strict=False))
     return {
-        "id": int(row["id"]),
-        "callEventId": row["call_event_id"],
-        "callSessionId": row["call_session_id"] if "call_session_id" in row.keys() else None,
-        "callLegId": row["call_leg_id"] if "call_leg_id" in row.keys() else None,
-        "workerId": row["worker_id"],
-        "workerName": row["worker_name"] if "worker_name" in row.keys() else None,
-        "workerNameRaw": row["worker_name_raw"],
-        "employeeCodeRaw": row["employee_code_raw"],
-        "eventType": row["event_type"],
-        "channel": row["channel"],
-        "effectiveTimestamp": row["effective_timestamp"],
-        "capturedTimestamp": row["captured_timestamp"],
-        "callerPhone": row["caller_phone"],
-        "jobId": row["job_id"],
-        "segmentId": row["segment_id"],
-        "truckId": row["truck_id"],
-        "confidence": row["confidence"],
-        "reviewStatus": row["review_status"],
-        "reviewer": row["reviewer"],
-        "reviewNote": row["review_note"],
-        "rawPayload": json.loads(row["raw_payload"] or "{}"),
-        "createdAt": row["created_at"],
-        "reviewedAt": row["reviewed_at"],
+        "id": int(record["id"]),
+        "callEventId": record.get("call_event_id"),
+        "callSessionId": record.get("call_session_id"),
+        "callLegId": record.get("call_leg_id"),
+        "workerId": record.get("worker_id"),
+        "workerName": record.get("worker_name"),
+        "workerNameRaw": record.get("worker_name_raw"),
+        "employeeCodeRaw": record.get("employee_code_raw"),
+        "eventType": record.get("event_type"),
+        "channel": record.get("channel"),
+        "effectiveTimestamp": record.get("effective_timestamp"),
+        "capturedTimestamp": record.get("captured_timestamp"),
+        "callerPhone": record.get("caller_phone"),
+        "jobId": record.get("job_id"),
+        "segmentId": record.get("segment_id"),
+        "truckId": record.get("truck_id"),
+        "confidence": record.get("confidence"),
+        "reviewStatus": record.get("review_status"),
+        "reviewer": record.get("reviewer"),
+        "reviewNote": record.get("review_note"),
+        "rawPayload": json.loads(record.get("raw_payload") or "{}"),
+        "createdAt": record.get("created_at"),
+        "reviewedAt": record.get("reviewed_at"),
     }
 
 

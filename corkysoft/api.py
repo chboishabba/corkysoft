@@ -10,18 +10,11 @@ from typing import Any, Dict, List, Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 
-from analytics.db import (
-    ABSENCE_RECORD_STATUSES,
-    ABSENCE_RECORD_TYPES,
-    create_worker_absence_record,
-    fetch_driver_shifts,
-    list_worker_absence_records,
-)
+from analytics.db import fetch_driver_shifts
 from analytics.db.inventory import (
     allocate_inventory_to_segment,
     list_segment_inventory_coordination,
 )
-from analytics.labor_analytics import build_payroll_labor_analytics
 from analytics.db_connection import connection_scope
 from analytics.kent_ams_import import (
     get_kent_tender_policy_config,
@@ -46,13 +39,11 @@ from analytics.operations_assignment import (
     ensure_worker_role,
     get_operations_policy,
     list_job_operations_board,
-    list_labor_reconciliation,
     list_operations_cutover_events,
     list_operations_cutover_rollout,
     list_operations_cutover_workflows,
     list_operational_readiness_items,
     list_operational_conflicts,
-    list_planned_labor_assignments,
     list_segment_readiness,
     reject_operations_cutover_promotion,
     record_operations_cutover_event,
@@ -108,6 +99,7 @@ from corkysoft.call_ops import (
     resolve_call_links,
     submit_call_audio_for_transcription,
 )
+from corkysoft.api_labor import router as labor_router
 
 
 def _current_db_path() -> str:
@@ -580,153 +572,6 @@ class WorkerComplianceAssignmentRequest(BaseModel):
     complianceName: Optional[str] = None
     description: Optional[str] = None
     expiryDate: Optional[str] = None
-
-
-class PlannedLaborAssignmentResponse(BaseModel):
-    segmentId: int
-    jobId: int
-    jobClient: Optional[str] = None
-    segmentSequence: int
-    workerId: int
-    workerName: Optional[str] = None
-    roleId: Optional[int] = None
-    truckIds: List[str] = Field(default_factory=list)
-    truckNames: List[str] = Field(default_factory=list)
-    plannedStart: Optional[str] = None
-    plannedEnd: Optional[str] = None
-    fromLocation: Optional[str] = None
-    toLocation: Optional[str] = None
-    assignmentStatus: Optional[str] = None
-
-
-class LaborReconciliationResponse(BaseModel):
-    status: str
-    workerId: Optional[int] = None
-    workerName: Optional[str] = None
-    truckIds: List[str] = Field(default_factory=list)
-    jobId: Optional[int] = None
-    segmentId: Optional[int] = None
-    plannedStart: Optional[str] = None
-    plannedEnd: Optional[str] = None
-    shiftDate: Optional[str] = None
-    source: Optional[str] = None
-
-
-class LaborAnalyticsSummaryResponse(BaseModel):
-    plannedHours: float
-    plannedExposure: float
-    importedHours: float
-    importedCost: float
-    reviewedActualCost: float
-    workerCount: int
-    confidenceScore: int
-    confidenceLabel: str
-    absenceModelStatus: str
-    absenceRecordCount: int
-    confirmedAbsenceCount: int
-    overtimeDailyHours: float
-
-
-class PayForecastRowResponse(BaseModel):
-    workerName: str
-    plannedHours: float
-    plannedExposure: float
-    importedHours: float
-    importedCost: float
-    reviewedActualCost: float
-    acceptedEventCount: int
-    hourlyRateBasis: float
-    absenceDays: float
-    absenceHours: float
-
-
-class ExportReadyLaborSummaryRowResponse(BaseModel):
-    workerName: str
-    dateRangeStart: str
-    dateRangeEnd: str
-    plannedExposure: float
-    importedCost: float
-    reviewedActualCost: float
-    importedHours: float
-    overtimeHours: float
-    absenceDays: float
-    absenceHours: float
-    acceptedEventCount: int
-    pendingReviewCount: int
-    hourlyRateBasis: float
-    exportReady: bool
-
-
-class OvertimeDistributionRowResponse(BaseModel):
-    workerName: str
-    date: str
-    totalHours: float
-    overtimeHours: float
-    totalCost: float
-    shiftCount: int
-
-
-class LaborConfidenceSummaryResponse(BaseModel):
-    pendingReviewCount: int
-    acceptedEventCount: int
-    rejectedEventCount: int
-    duplicateEventCount: int
-    missingPriorClockOnCount: int
-    plannedOnlyCount: int
-    importedOnlyCount: int
-    matchedPlanImportCount: int
-    acceptedUnmatchedCount: int
-    confidenceScore: int
-    confidenceLabel: str
-
-
-class LaborCostDriverRowResponse(BaseModel):
-    dimension: str
-    dimensionValue: str
-    totalHours: float
-    totalCost: float
-    shiftCount: int
-
-
-class LaborAbsenceSummaryResponse(BaseModel):
-    recordCount: int
-    confirmedCount: int
-    plannedCount: int
-    cancelledCount: int
-    sickDays: float
-    annualLeaveDays: float
-    personalLeaveDays: float
-    unpaidLeaveDays: float
-    carersLeaveDays: float
-    otherDays: float
-
-
-class WorkerAbsenceRecordResponse(BaseModel):
-    id: int
-    workerId: int
-    workerName: str
-    startDate: str
-    endDate: str
-    absenceType: str
-    status: str
-    hoursPerDay: Optional[float] = None
-    note: Optional[str] = None
-    source: Optional[str] = None
-    recordedBy: Optional[str] = None
-    createdAt: str
-    updatedAt: str
-
-
-class WorkerAbsenceRecordRequest(BaseModel):
-    workerId: int
-    startDate: str
-    endDate: Optional[str] = None
-    absenceType: str = Field(default="other", description="One of the supported absence/leave types")
-    status: str = Field(default="confirmed", description="One of the supported absence statuses")
-    hoursPerDay: Optional[float] = None
-    note: Optional[str] = None
-    source: Optional[str] = None
-    recordedBy: Optional[str] = None
 
 
 class SegmentInventoryCoordinationResponse(BaseModel):
@@ -1325,6 +1170,7 @@ class AmbientTranscriptArtifactResponse(BaseModel):
 
 
 app = FastAPI(title="Corkysoft API", version="0.1.0")
+app.include_router(labor_router)
 
 
 def _optional_column(row: Any, column: str) -> Optional[Any]:
@@ -1825,280 +1671,6 @@ def post_operations_worker_compliance(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"workerId": worker_id, "complianceId": compliance_id, "expiryDate": payload.expiryDate}
-
-
-@app.get(
-    "/operations/labor/roster",
-    response_model=List[PlannedLaborAssignmentResponse],
-    summary="List native planned labor assignments from job segments",
-)
-def get_operations_labor_roster(
-    start_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD lower bound"),
-    end_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD upper bound"),
-    worker_id: Optional[int] = Query(default=None, description="Optional worker filter"),
-    truck_id: Optional[str] = Query(default=None, description="Optional truck filter"),
-) -> List[PlannedLaborAssignmentResponse]:
-    with connection_scope(_current_db_path()) as conn:
-        rows = list_planned_labor_assignments(
-            conn,
-            start_date=start_date,
-            end_date=end_date,
-            worker_id=worker_id,
-            truck_id=truck_id,
-        )
-    return [PlannedLaborAssignmentResponse(**row) for row in rows]
-
-
-@app.get(
-    "/operations/labor/reconciliation",
-    response_model=List[LaborReconciliationResponse],
-    summary="Compare native planned labor with imported VEHICLE_DRIVER shifts",
-)
-def get_operations_labor_reconciliation(
-    start_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD lower bound"),
-    end_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD upper bound"),
-) -> List[LaborReconciliationResponse]:
-    with connection_scope(_current_db_path()) as conn:
-        rows = list_labor_reconciliation(
-            conn,
-            start_date=start_date,
-            end_date=end_date,
-    )
-    return [LaborReconciliationResponse(**row) for row in rows]
-
-
-@app.get(
-    "/labor-analytics/summary",
-    response_model=LaborAnalyticsSummaryResponse,
-    summary="Summarize payroll-preparation and labor analytics for a date range",
-)
-def get_labor_analytics_summary(
-    start_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD lower bound"),
-    end_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD upper bound"),
-    overtime_daily_hours: Optional[float] = Query(
-        default=None, description="Optional daily overtime threshold in hours"
-    ),
-) -> LaborAnalyticsSummaryResponse:
-    with connection_scope(_current_db_path()) as conn:
-        payload = build_payroll_labor_analytics(
-            conn,
-            start_date=start_date,
-            end_date=end_date,
-            overtime_daily_hours=overtime_daily_hours,
-        )
-    return LaborAnalyticsSummaryResponse(**payload["summary"])
-
-
-@app.get(
-    "/labor-analytics/pay-forecast",
-    response_model=List[PayForecastRowResponse],
-    summary="List pay-forecast rows by worker for a date range",
-)
-def get_labor_analytics_pay_forecast(
-    start_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD lower bound"),
-    end_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD upper bound"),
-    overtime_daily_hours: Optional[float] = Query(
-        default=None, description="Optional daily overtime threshold in hours"
-    ),
-) -> List[PayForecastRowResponse]:
-    with connection_scope(_current_db_path()) as conn:
-        payload = build_payroll_labor_analytics(
-            conn,
-            start_date=start_date,
-            end_date=end_date,
-            overtime_daily_hours=overtime_daily_hours,
-        )
-    return [PayForecastRowResponse(**row) for row in payload["payForecastRows"]]
-
-
-@app.get(
-    "/labor-analytics/export-summary",
-    response_model=List[ExportReadyLaborSummaryRowResponse],
-    summary="List export-ready labor summary rows for payroll/accounting handoff",
-)
-def get_labor_analytics_export_summary(
-    start_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD lower bound"),
-    end_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD upper bound"),
-    overtime_daily_hours: Optional[float] = Query(
-        default=None, description="Optional daily overtime threshold in hours"
-    ),
-) -> List[ExportReadyLaborSummaryRowResponse]:
-    with connection_scope(_current_db_path()) as conn:
-        payload = build_payroll_labor_analytics(
-            conn,
-            start_date=start_date,
-            end_date=end_date,
-            overtime_daily_hours=overtime_daily_hours,
-        )
-    return [
-        ExportReadyLaborSummaryRowResponse(**row)
-        for row in payload["exportReadyLaborSummaries"]
-    ]
-
-
-@app.get(
-    "/labor-analytics/overtime",
-    response_model=List[OvertimeDistributionRowResponse],
-    summary="List daily overtime distribution rows for a date range",
-)
-def get_labor_analytics_overtime(
-    start_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD lower bound"),
-    end_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD upper bound"),
-    overtime_daily_hours: Optional[float] = Query(
-        default=None, description="Optional daily overtime threshold in hours"
-    ),
-) -> List[OvertimeDistributionRowResponse]:
-    with connection_scope(_current_db_path()) as conn:
-        payload = build_payroll_labor_analytics(
-            conn,
-            start_date=start_date,
-            end_date=end_date,
-            overtime_daily_hours=overtime_daily_hours,
-        )
-    return [OvertimeDistributionRowResponse(**row) for row in payload["overtimeRows"]]
-
-
-@app.get(
-    "/labor-analytics/confidence",
-    response_model=LaborConfidenceSummaryResponse,
-    summary="Summarize payroll-prep confidence and worker-time anomalies for a date range",
-)
-def get_labor_analytics_confidence(
-    start_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD lower bound"),
-    end_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD upper bound"),
-    overtime_daily_hours: Optional[float] = Query(
-        default=None, description="Optional daily overtime threshold in hours"
-    ),
-) -> LaborConfidenceSummaryResponse:
-    with connection_scope(_current_db_path()) as conn:
-        payload = build_payroll_labor_analytics(
-            conn,
-            start_date=start_date,
-            end_date=end_date,
-            overtime_daily_hours=overtime_daily_hours,
-        )
-    return LaborConfidenceSummaryResponse(**payload["confidence"])
-
-
-@app.get(
-    "/labor-analytics/absence",
-    response_model=LaborAbsenceSummaryResponse,
-    summary="Summarize recorded absence and leave rows for a date range",
-)
-def get_labor_analytics_absence(
-    start_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD lower bound"),
-    end_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD upper bound"),
-    overtime_daily_hours: Optional[float] = Query(
-        default=None, description="Optional daily overtime threshold in hours"
-    ),
-) -> LaborAbsenceSummaryResponse:
-    with connection_scope(_current_db_path()) as conn:
-        payload = build_payroll_labor_analytics(
-            conn,
-            start_date=start_date,
-            end_date=end_date,
-            overtime_daily_hours=overtime_daily_hours,
-        )
-    return LaborAbsenceSummaryResponse(**payload["absenceSummary"])
-
-
-@app.get(
-    "/labor-analytics/cost-drivers",
-    response_model=List[LaborCostDriverRowResponse],
-    summary="List labor cost drivers grouped by worker, client, corridor, truck, or job",
-)
-def get_labor_analytics_cost_drivers(
-    dimension: str = Query(
-        default="worker",
-        description="Grouping dimension: worker, client, corridor, truck, or job",
-    ),
-    start_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD lower bound"),
-    end_date: Optional[str] = Query(default=None, description="Optional YYYY-MM-DD upper bound"),
-    overtime_daily_hours: Optional[float] = Query(
-        default=None, description="Optional daily overtime threshold in hours"
-    ),
-) -> List[LaborCostDriverRowResponse]:
-    normalized_dimension = dimension.strip().lower()
-    if normalized_dimension not in {"worker", "client", "corridor", "truck", "job"}:
-        raise HTTPException(status_code=400, detail="Unsupported labor cost-driver dimension")
-    with connection_scope(_current_db_path()) as conn:
-        payload = build_payroll_labor_analytics(
-            conn,
-            start_date=start_date,
-            end_date=end_date,
-            overtime_daily_hours=overtime_daily_hours,
-        )
-    return [
-        LaborCostDriverRowResponse(**row)
-        for row in payload["laborCostDrivers"][normalized_dimension]
-    ]
-
-
-@app.get(
-    "/worker-absence/records",
-    response_model=List[WorkerAbsenceRecordResponse],
-    summary="List worker absence and leave records",
-)
-def get_worker_absence_records(
-    worker_id: Optional[int] = Query(default=None),
-    start_date: Optional[str] = Query(default=None),
-    end_date: Optional[str] = Query(default=None),
-    status: Optional[str] = Query(default=None),
-) -> List[WorkerAbsenceRecordResponse]:
-    with connection_scope(_current_db_path()) as conn:
-        rows = list_worker_absence_records(
-            conn,
-            worker_id=worker_id,
-            start_date=start_date,
-            end_date=end_date,
-            status=status,
-        )
-    return [WorkerAbsenceRecordResponse(**row) for row in rows]
-
-
-@app.post(
-    "/worker-absence/records",
-    response_model=WorkerAbsenceRecordResponse,
-    dependencies=[Depends(require_internal_api_token)],
-    summary="Create a worker absence or leave record",
-)
-def create_worker_absence(
-    payload: WorkerAbsenceRecordRequest,
-) -> WorkerAbsenceRecordResponse:
-    if payload.absenceType.strip().lower() not in ABSENCE_RECORD_TYPES:
-        raise HTTPException(status_code=400, detail="Unsupported absence type")
-    if payload.status.strip().lower() not in ABSENCE_RECORD_STATUSES:
-        raise HTTPException(status_code=400, detail="Unsupported absence status")
-    with connection_scope(_current_db_path()) as conn:
-        row = create_worker_absence_record(
-            conn,
-            worker_id=payload.workerId,
-            start_date=payload.startDate,
-            end_date=payload.endDate,
-            absence_type=payload.absenceType,
-            status=payload.status,
-            hours_per_day=payload.hoursPerDay,
-            note=payload.note,
-            source=payload.source,
-            recorded_by=payload.recordedBy,
-        )
-    return WorkerAbsenceRecordResponse(
-        **{
-            "id": int(row["id"]),
-            "workerId": int(row["worker_id"]),
-            "workerName": row["worker_name"],
-            "startDate": row["start_date"],
-            "endDate": row["end_date"],
-            "absenceType": row["absence_type"],
-            "status": row["status"],
-            "hoursPerDay": row["hours_per_day"],
-            "note": row["note"],
-            "source": row["source"],
-            "recordedBy": row["recorded_by"],
-            "createdAt": row["created_at"],
-            "updatedAt": row["updated_at"],
-        }
-    )
 
 
 @app.get(
