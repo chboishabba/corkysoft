@@ -52,3 +52,9 @@
 - implemented a Corkysoft-native observer outbox for diary/reconciliation review state, plus explicit export for planning snapshots and reconciliation exceptions
 - synced README, roadmap, progress board, and compactified context to reflect the new ingest and lane-governance baseline
 - documented the remaining observer-export follow-ups: delivery receipt / watermark semantics and dashboard visibility of emitted envelopes
+
+## 2026-03-26
+
+- implemented commercial quote guidance overlays with benchmark context and backhaul-aware discount guidance in the live quote workflow
+- decomposed the main dashboard shell, API root, pricing surface, and call-ops surface into smaller bounded modules while preserving stable import and test monkeypatch surfaces
+- added `docs/contributor_docs_sync.md` and synced README, roadmap, progress board, module guide, and positioning docs to reflect the current architecture and product state

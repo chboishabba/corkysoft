@@ -34,6 +34,7 @@
 [Payroll and Labor Analytics](docs/payroll_and_labor_analytics.md)
 [Accommodation Availability Operations](docs/accommodation_availability_operations.md)
 [Call Intelligence Workflow](docs/call_intelligence_workflow.md)
+[Contributor Docs Sync](docs/contributor_docs_sync.md)
 [Roadmap](ROADMAP.md)
 
 
@@ -78,7 +79,7 @@ Run `./start_app.sh` or `start_app.bat` to run the app.
 
 See [UI Role Coverage Matrix](docs/ui_role_coverage_matrix.md) for the authoritative tab ownership map.
 
-## Current Status (2026-03-25)
+## Current Status (2026-03-26)
 
 Latest tracking page: [Progress status board](docs/progress_status_board.md)
 
@@ -86,6 +87,8 @@ Core routing + costing are stable. The Streamlit dashboard is implemented and
 usable, but some workflows remain provisional or governance-light:
 
 - quote builder is implemented and persists quotes
+- quote builder now includes benchmark overlays, recommendation guidance, and
+  backhaul-aware discount headroom in the live workflow
 - Kent tender triage is implemented for internal/provisional use
 - profitability and route analytics are implemented across multiple tabs
 - situational-awareness ingestion now persists closure, weather, and traffic
@@ -101,6 +104,9 @@ usable, but some workflows remain provisional or governance-light:
 - live network, corridor, and optimization docs still describe more than the
   current MVP guarantees
 - visual last-mile planning now has a durable data model for site media, accepted site assessments, reviewed advisory CV/volume outputs, and first derived planning constraints (truck suitability, shuttle need, labor/access uplift). Actual model-backed CV inference remains scaffold-only
+- the major app/api/pricing refactor wave is complete enough that the main
+  dashboard shell, API root, and pricing entry surface are now composition
+  layers rather than the previous main hotspots
 
 Main blockers to reach the next phase:
 - operator workflow and governance completion
@@ -122,7 +128,6 @@ High-leverage next features:
 - dual-marker reconciliation aging so delayed supplier bills can be reviewed by
   job execution date, bill receipt date, latency, and unresolved age
 - Kent admin/operator workflow split
-- backhaul detection and discount suggestions
 - multi-truck transfer and split policy definition before solver work
 
 Note: `Crusader.xlsx` remains a local fallback/fixture, but the intended source of truth for fleet/staff/supplier operational data is Google Sheets.
@@ -488,6 +493,8 @@ Flags:
 Historical jobs with geocoded origins/destinations backfill the mock data so the map always has active corridors.
 
 ## Development Workflow
+
+Contributor docs/update policy: see [Contributor Docs Sync](docs/contributor_docs_sync.md).
 
 - **Bootstrap the environment**: Run `python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt`
   (or execute `./start_app.sh` or `start_app.bat` to combine setup with a `streamlit run dashboard/app.py`).

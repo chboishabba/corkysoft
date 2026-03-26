@@ -8,7 +8,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Keep `docs/progress_status_board.md` and this roadmap synchronized after any feature status changes.
 - Validate the deliverable status tables against the current code and tests.
 - Decide whether `corkysoft/src/dashboard` remains a packaging stub or should be wired to the main Streamlit entry point.
-- Add a short contributor note on how to keep README and docs in sync with new features.
+- Maintain `docs/contributor_docs_sync.md` as the contributor-facing rule for README/ROADMAP/progress-board/docs alignment after feature or refactor changes.
 - Keep `docs/modules.md` updated when module responsibilities or entry points change.
 - Add analytics documentation for historical ingest readiness, lane governance, and planner consumption defaults.
 - Add a system architecture diagram (truck ↔ server ↔ cloud).
@@ -41,7 +41,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Expand Kent adapter from import-only to operator triage with tender pre-scoring calibration and peak-season weighting validation.
 - Review `GET /kent-ams/tenders/calibration` weekly and tune score weights only when band monotonicity and margin-error metrics improve.
 - Validate route/location scoring against historical lane outcomes to avoid over-prioritizing unfamiliar but risky tenders.
-- Integrate en-route spare capacity signals into quote creation outputs and ingestion triage so operators can combine price and operational fit.
+- Integrate en-route spare capacity signals more broadly into ingestion triage and operational review; quote creation already surfaces benchmark overlays plus backhaul-aware discount guidance.
 - Normalize state/national closure, traffic, and weather signals into a common disruption input layer before using them in quote or ETA policy updates.
 - Keep adaptive policy learning bounded and reviewable: bootstrap explicit parameters first, then add proposal generation, then approval/audit flows.
 - Maintain `docs/multi_truck_route_load_optimization.md` and align implementation milestones to its transfer/split/sequence constraints.
@@ -194,7 +194,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 | **Base-rate schedule (Sunshine Coast 120 → Cairns 185)** |    ✅   | Encoded in lane base rate table. |
 | **Packing / bad-access fees**                            |    ✅   | Modifier tables include packing + access fees. |
 | **Seasonal margin uplift (20–80 %)**                     |   🧩   | Seasonal uplifts table exists; validate usage. |
-| **Backhaul / container sharing**                         |   🔜   | Handle under-/over-utilisation.        |
+| **Backhaul / container sharing**                         |   🧩   | Quote backhaul detection and discount guidance are implemented; broader operational container-sharing and under-/over-utilisation handling still pending. |
 | **Truck / driver cost baselines**                        |    ✅   | Base fuel/driver/maintenance + overhead parameters drive break-even engine. |
 | **Private cost component ledger**                        |    ✅   | Record crew, truck, fuel and other cost inputs per job inside SQLite.       |
 

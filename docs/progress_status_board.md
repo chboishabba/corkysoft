@@ -1,6 +1,6 @@
 # Progress Status Board
 
-Last updated: **2026-03-25**
+Last updated: **2026-03-26**
 
 This page is the operational tracker for implementation-to-docs alignment.  
 Use it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and [COMPACTIFIED_CONTEXT.md](../COMPACTIFIED_CONTEXT.md).
@@ -21,11 +21,12 @@ Use it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and [COMPACT
 - Lane trust-boundary controls across analytics: **🟢 implemented** (Planner, route maps, live network, profitability, price history, optimizer, summary/histogram)
 - Grouped lane promotion review: **🟢 implemented** (repeated candidate cluster pairs can collapse into one governance proposal)
 - Observer export for diary/reconciliation: **🟢 implemented** (observer outbox for task/review families plus explicit planning-snapshot and reconciliation-exception export)
+- Quote recommendation and benchmarking overlays: **🟢 implemented** (live quote workflow now shows benchmark guidance and recommendation overlays)
+- Backhaul-aware quote discount guidance: **🟢 implemented** (quote workflow now surfaces backhaul discount headroom and recommendation support)
+- App/API/pricing decomposition pass: **🟢 implemented** (major shell/router/pricing hotspots collapsed into bounded modules with compatibility facades preserved)
 
 ## Active TODO Alignment (Current Wave)
 
-- Build quote recommendation/benchmarking overlays with market distribution context.
-- Improve backhaul detection and quote discount guidance.
 - Continue operations-diary expansion toward fuller job/staff/invoice reconciliation workflow.
 - Add delivery receipt / watermark semantics to the observer outbox when deployment posture matters.
 - Surface observer-outbox visibility in the dashboard for admin/operator inspection.

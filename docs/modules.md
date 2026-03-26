@@ -21,7 +21,13 @@ Analytics helpers, data preparation, and telemetry processing.
 - Inventory, fleet, shifts, schema: `analytics/db/`
 - Adaptive policy helpers: `analytics/adaptive_policy.py`
 - Operations diary and reconciliation helpers: `analytics/operations_diary.py`
-- Price distribution and chart helpers: `analytics/price_distribution.py`
+- Pricing facade and stable imports: `analytics/price_distribution.py`
+- Historical ingest and column inference: `analytics/historical_ingest.py`
+- Job loading and dataset preparation: `analytics/job_loading.py`
+- Profitability analysis, charts, and map prep: `analytics/profitability_*.py`
+- Price-history analysis: `analytics/price_history_analysis.py`
+- Corridor rollups: `analytics/corridor_performance.py`
+- Route-map and reachability prep: `analytics/route_map_prep.py`
 - Live data loaders: `analytics/live_data.py`
 - Telemetry ingestion: `analytics/ingest_live_data.py`, `analytics/ingest_real_gps.py`
 - Route map aggregation: `analytics/routes_map.py`
@@ -30,7 +36,8 @@ Analytics helpers, data preparation, and telemetry processing.
 
 Streamlit UI entry point and reusable components.
 
-- Main Streamlit app: `dashboard/app.py`
+- Main Streamlit app/composition shell: `dashboard/app.py`
+- Shared dashboard data preparation: `dashboard/data.py`
 - UI tabs and widgets: `dashboard/components/`
 - Operations diary surface: `dashboard/components/operations_diary.py`
 - Map provider configuration: `dashboard/map_provider.py`

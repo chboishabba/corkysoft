@@ -54,7 +54,7 @@ Unique capabilities in this domain:
 - Lane performance benchmarking.
 - Break-even visualization and margin overlays.
 - Backhaul detection and discount recommendations.
-- Pricing recommendation engine tied to corridor outcomes.
+- Pricing recommendation engine tied to corridor outcomes and live quote benchmarking overlays.
 - Growing operational evidence layer linking planning, usage review, and
   invoice/bill reconciliation around the same job truth.
 
@@ -72,6 +72,8 @@ Corkysoft should own:
 - Pricing intelligence and profitability analytics.
 - Route profitability and corridor/lane rollups.
 - Recommendation logic (pricing, backhaul, margin risk).
+- Quoting guidance that combines benchmark context, operator policy, and
+  operational-fit signals instead of leaving discounting as ad hoc judgement.
 - Decision workflows where the commercial/operational question matters more
   than raw record storage.
 
