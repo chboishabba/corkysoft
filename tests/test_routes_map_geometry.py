@@ -149,6 +149,81 @@ def test_populate_route_geometry_historical_inserts_geojson(conn, provider_kind)
 
 
 @pytest.mark.parametrize("provider_kind", ["geojson", "encoded"])
+def test_populate_route_geometry_historical_replaces_two_point_chord(conn, provider_kind):
+    origin_address_id = conn.execute(
+        """
+        INSERT INTO addresses (raw_input, normalized, country, lon, lat)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("Origin", "origin-chord", "Australia", 151.2093, -33.8688),
+    ).lastrowid
+    dest_address_id = conn.execute(
+        """
+        INSERT INTO addresses (raw_input, normalized, country, lon, lat)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("Destination", "destination-chord", "Australia", 153.0260, -27.4705),
+    ).lastrowid
+
+    conn.execute(
+        """
+        INSERT INTO historical_jobs (
+            job_date,
+            client,
+            origin,
+            destination,
+            origin_address_id,
+            destination_address_id
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "2024-01-01",
+            "Test Client",
+            "Origin",
+            "Destination",
+            origin_address_id,
+            dest_address_id,
+        ),
+    )
+    job_id = conn.execute("SELECT MAX(id) FROM historical_jobs").fetchone()[0]
+    original_geojson = json.dumps(
+        {
+            "type": "Feature",
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [151.2093, -33.8688],
+                    [153.0260, -27.4705],
+                ],
+            },
+            "properties": {},
+        }
+    )
+    conn.execute(
+        """
+        INSERT INTO historical_job_routes (
+            historical_job_id, geojson, created_at, updated_at
+        ) VALUES (?, ?, datetime('now'), datetime('now'))
+        """,
+        (
+            job_id,
+            original_geojson,
+        ),
+    )
+
+    provider = make_provider(provider_kind, distance_km=5.0, duration_hr=1.0)
+    updated = populate_route_geometry(conn, [job_id], dataset="historical", provider=provider)
+
+    assert updated == 1
+    stored = conn.execute(
+        "SELECT geojson FROM historical_job_routes WHERE historical_job_id = ?",
+        (job_id,),
+    ).fetchone()
+    assert stored["geojson"] != original_geojson
+    assert provider.calls
+
+
+@pytest.mark.parametrize("provider_kind", ["geojson", "encoded"])
 def test_populate_route_geometry_live_updates_job(conn, provider_kind):
     conn.execute("ALTER TABLE jobs ADD COLUMN duration_hr REAL")
     conn.execute(

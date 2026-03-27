@@ -15,6 +15,38 @@ from .routing_provider import RoutingProvider, get_routing_provider
 
 logger = logging.getLogger(__name__)
 
+
+def _has_resolved_geojson(value: Any) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        payload = json.loads(value)
+    except Exception:
+        return False
+
+    if isinstance(payload, dict) and payload.get("type") == "FeatureCollection":
+        features = payload.get("features") or []
+        if not features:
+            return False
+        geometry = features[0].get("geometry") if isinstance(features[0], Mapping) else None
+    elif isinstance(payload, dict) and payload.get("type") == "Feature":
+        geometry = payload.get("geometry")
+    elif isinstance(payload, dict):
+        geometry = payload
+    else:
+        return False
+
+    if not isinstance(geometry, Mapping):
+        return False
+
+    geometry_type = geometry.get("type")
+    coordinates = geometry.get("coordinates") or []
+    if geometry_type == "LineString":
+        return len(coordinates) > 2
+    if geometry_type == "MultiLineString":
+        return sum(len(segment) for segment in coordinates if isinstance(segment, list)) > 2
+    return False
+
 def _row_get(row: Any, key: str, default: Any = None) -> Any:
     if isinstance(row, Mapping):
         return row.get(key, default)
@@ -484,7 +516,7 @@ def populate_route_geometry(
         for row in rows:
             job_id = int(row["id"])
             existing = row["existing_geojson"]
-            if isinstance(existing, str) and existing.strip():
+            if _has_resolved_geojson(existing):
                 continue
 
             coords = _extract_coordinates(row)

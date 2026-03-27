@@ -10,6 +10,26 @@ from .lane_assignment import backfill_lane_assignments, ensure_lane_assignment_s
 from .routes_map import populate_route_geometry
 
 
+def _has_resolved_route_geometry(value: object) -> bool:
+    """Return whether *value* contains non-trivial routed geometry.
+
+    Two-point lines are treated as unresolved straight-line chords and should be
+    repopulated from the routing provider.
+    """
+
+    from .price_distribution import _has_geometry
+    from .live_data import extract_route_path
+
+    if not _has_geometry(value):
+        return False
+
+    try:
+        path = extract_route_path(str(value))
+    except Exception:
+        return False
+    return len(path) > 2
+
+
 def _historical_jobs_query() -> str:
     """Return the default query joining address metadata for historical jobs."""
 
@@ -253,7 +273,6 @@ def load_historical_jobs(
 
     from .price_distribution import (
         _deduplicate_columns,
-        _has_geometry,
         ensure_base_cost_parameters,
         infer_columns,
     )
@@ -277,7 +296,7 @@ def load_historical_jobs(
         missing_ids = [
             int(value)
             for value in df.loc[
-                ~df["route_geojson"].apply(_has_geometry), "id"
+                ~df["route_geojson"].apply(_has_resolved_route_geometry), "id"
             ].dropna().tolist()
         ]
         if missing_ids:
@@ -445,7 +464,6 @@ def load_live_jobs(
 
     from .price_distribution import (
         _deduplicate_columns,
-        _has_geometry,
         ensure_base_cost_parameters,
         infer_columns,
     )
@@ -462,7 +480,7 @@ def load_live_jobs(
         missing_ids = [
             int(value)
             for value in df.loc[
-                ~df["route_geojson"].apply(_has_geometry), "id"
+                ~df["route_geojson"].apply(_has_resolved_route_geometry), "id"
             ].dropna().tolist()
         ]
         if missing_ids:

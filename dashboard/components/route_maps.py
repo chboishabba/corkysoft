@@ -28,6 +28,7 @@ from analytics.price_distribution import (
     prepare_metric_route_map_data,
     prepare_route_map_data,
 )
+from analytics.live_data import extract_route_path
 from analytics.routes_map import (
     build_job_route_map,
     fetch_job_route_rows,
@@ -303,7 +304,7 @@ def _render_route_lines_tab(map_df: pd.DataFrame, dataset_key: str, conn: Connec
         if geometry_series is None:
             st.caption("Stored route geometry is not available for this dataset yet.")
         else:
-            missing_mask = ~geometry_series.apply(_has_geometry)
+            missing_mask = ~geometry_series.apply(_has_resolved_geometry)
             missing_count = int(missing_mask.sum())
             if missing_count > 0:
                 st.info(
@@ -334,6 +335,15 @@ def _has_geometry(value: Any) -> bool:
     if isinstance(value, str):
         return bool(value.strip())
     return True
+
+
+def _has_resolved_geometry(value: Any) -> bool:
+    if not _has_geometry(value):
+        return False
+    try:
+        return len(extract_route_path(str(value))) > 2
+    except Exception:
+        return False
 
 
 def _render_categorical_route_map(
@@ -674,7 +684,7 @@ def _render_isochrone_tab(map_df: pd.DataFrame) -> None:
 def _enrich_route_geometry(df: pd.DataFrame) -> pd.DataFrame:
     """Fill missing ``route_geojson`` values using the configured routing provider."""
 
-    if df.empty or "route_geojson" in df.columns and df["route_geojson"].apply(_has_geometry).all():
+    if df.empty or "route_geojson" in df.columns and df["route_geojson"].apply(_has_resolved_geometry).all():
         return df
 
     working = df.copy()
@@ -687,7 +697,7 @@ def _enrich_route_geometry(df: pd.DataFrame) -> pd.DataFrame:
         except (TypeError, ValueError):
             return None
 
-    missing_mask = ~working["route_geojson"].apply(_has_geometry) if "route_geojson" in working.columns else pd.Series(True, index=working.index)
+    missing_mask = ~working["route_geojson"].apply(_has_resolved_geometry) if "route_geojson" in working.columns else pd.Series(True, index=working.index)
     for idx, row in working.loc[missing_mask].iterrows():
         origin_lon = _coerce_float(row.get("origin_lon"))
         origin_lat = _coerce_float(row.get("origin_lat"))

@@ -11,6 +11,8 @@ np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 
 from analytics.db import ensure_global_parameters_table, set_parameter_value
+from analytics.db import ensure_dashboard_tables
+from analytics.lane_assignment import ensure_lane_assignment_schema
 from analytics.price_distribution import (
     BREAK_EVEN_KEY,
     DRIVER_COST_KEY,
@@ -44,6 +46,7 @@ from analytics.price_distribution import (
     summarise_profitability,
 )
 from analytics.routing_provider import GoogleRoutesProvider, IsochroneResult
+from dashboard.components.maintenance import _recent_lane_assignment_gaps
 from dashboard.components.maps import build_route_map
 
 
@@ -392,6 +395,107 @@ def test_load_historical_jobs_handles_duplicate_columns():
         assert "corridor_display" in df.columns
         assert df["corridor_display"].notna().all()
         assert "Legacy" not in set(df["origin"].astype(str))
+    finally:
+        conn.close()
+
+
+def test_load_historical_jobs_repopulates_two_point_route_geojson(monkeypatch):
+    conn = build_conn()
+    try:
+        conn.execute(
+            """
+            CREATE TABLE historical_job_routes (
+                historical_job_id INTEGER PRIMARY KEY,
+                geojson TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO historical_job_routes (
+                historical_job_id, geojson, created_at, updated_at
+            ) VALUES (?, ?, datetime('now'), datetime('now'))
+            """,
+            (
+                1,
+                '{"type":"Feature","geometry":{"type":"LineString","coordinates":[[153.026,-27.4705],[151.9507,-27.5598]]},"properties":{}}',
+            ),
+        )
+        conn.commit()
+
+        calls: list[tuple[list[int], str]] = []
+
+        def fake_populate_route_geometry(conn, job_ids, *, dataset, provider=None, client=None):
+            calls.append((list(job_ids), dataset))
+            conn.execute(
+                """
+                UPDATE historical_job_routes
+                SET geojson = ?, updated_at = datetime('now')
+                WHERE historical_job_id = ?
+                """,
+                (
+                    '{"type":"Feature","geometry":{"type":"LineString","coordinates":[[153.026,-27.4705],[152.8,-27.5],[152.4,-27.54],[151.9507,-27.5598]]},"properties":{}}',
+                    1,
+                ),
+            )
+            conn.commit()
+            return len(list(job_ids))
+
+        monkeypatch.setattr(
+            "analytics.job_loading.populate_route_geometry",
+            fake_populate_route_geometry,
+        )
+
+        df, _ = load_historical_jobs(conn)
+
+        assert calls
+        assert calls[0][1] == "historical"
+        assert 1 in calls[0][0]
+        route_geojson = df.loc[df["id"] == 1, "route_geojson"].iloc[0]
+        assert route_geojson.count("[") > 4
+    finally:
+        conn.close()
+
+
+def test_recent_lane_assignment_gaps_includes_cluster_columns() -> None:
+    conn = sqlite3.connect(":memory:")
+    try:
+        ensure_dashboard_tables(conn)
+        ensure_lane_assignment_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO historical_jobs (
+                job_date,
+                client,
+                corridor_display,
+                lane_assignment_status,
+                lane_assignment_source,
+                lane_assignment_note,
+                origin_cluster_key,
+                destination_cluster_key
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "2026-03-27",
+                "Client A",
+                "Brisbane → Gold Coast",
+                "ambiguous",
+                "postcode|postcode",
+                "Need review",
+                "pc:4000",
+                "pc:4217",
+            ),
+        )
+        conn.commit()
+
+        gap_df = _recent_lane_assignment_gaps(conn, limit=10)
+
+        assert "origin_cluster_key" in gap_df.columns
+        assert "destination_cluster_key" in gap_df.columns
+        assert gap_df.iloc[0]["origin_cluster_key"] == "pc:4000"
+        assert gap_df.iloc[0]["destination_cluster_key"] == "pc:4217"
     finally:
         conn.close()
 

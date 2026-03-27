@@ -139,13 +139,33 @@ def _lane_assignment_health_summary(conn) -> pd.DataFrame:
 
 def _recent_lane_assignment_gaps(conn, *, limit: int = 20) -> pd.DataFrame:
     ensure_lane_assignment_schema(conn)
+    historical_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(historical_jobs)").fetchall()
+    }
+    live_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+    }
+    historical_origin_cluster = (
+        "origin_cluster_key" if "origin_cluster_key" in historical_columns else "NULL"
+    )
+    historical_destination_cluster = (
+        "destination_cluster_key" if "destination_cluster_key" in historical_columns else "NULL"
+    )
+    live_origin_cluster = (
+        "origin_cluster_key" if "origin_cluster_key" in live_columns else "NULL"
+    )
+    live_destination_cluster = (
+        "destination_cluster_key" if "destination_cluster_key" in live_columns else "NULL"
+    )
     return pd.read_sql_query(
-        """
+        f"""
         SELECT
             dataset,
             row_id,
             reference,
             corridor_display,
+            origin_cluster_key,
+            destination_cluster_key,
             lane_assignment_status,
             lane_assignment_source,
             lane_assignment_note,
@@ -156,6 +176,8 @@ def _recent_lane_assignment_gaps(conn, *, limit: int = 20) -> pd.DataFrame:
                 id AS row_id,
                 COALESCE(client, CAST(id AS TEXT)) AS reference,
                 corridor_display,
+                {historical_origin_cluster} AS origin_cluster_key,
+                {historical_destination_cluster} AS destination_cluster_key,
                 COALESCE(NULLIF(TRIM(lane_assignment_status), ''), 'unassigned') AS lane_assignment_status,
                 lane_assignment_source,
                 lane_assignment_note,
@@ -170,6 +192,8 @@ def _recent_lane_assignment_gaps(conn, *, limit: int = 20) -> pd.DataFrame:
                 id AS row_id,
                 COALESCE(client, CAST(id AS TEXT)) AS reference,
                 COALESCE(origin, '?') || ' → ' || COALESCE(destination, '?') AS corridor_display,
+                {live_origin_cluster} AS origin_cluster_key,
+                {live_destination_cluster} AS destination_cluster_key,
                 COALESCE(NULLIF(TRIM(lane_assignment_status), ''), 'unassigned') AS lane_assignment_status,
                 lane_assignment_source,
                 lane_assignment_note,
