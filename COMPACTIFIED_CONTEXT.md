@@ -1,3 +1,43 @@
+## 2026-03-27 (Corkysoft MCP v1 Implemented Scaffold)
+
+Implemented the first Corkysoft MCP slice using the ITIR-style adapter pattern.
+
+What landed:
+- `corkysoft/mcp/registry.py`
+  - namespaced in-process registry
+- `corkysoft/mcp/tools.py`
+  - four bounded read-only tools:
+    - `corkysoft.profitability_summary`
+    - `corkysoft.dispatch_recommendations`
+    - `corkysoft.operations_diary_summary`
+    - `corkysoft.quote_guidance_preview`
+- `corkysoft/mcp/bridge.py`
+  - local JSON-line bridge with `health`, `info`, `list`, and `call`
+- `corkysoft/mcp/server.py`
+  - optional FastMCP server when the Python MCP SDK is installed
+- `tests/test_corkysoft_mcp.py`
+  - registry, quote-guidance, dispatch/diary, and profitability coverage
+
+Policy held:
+- read-only first
+- stable success/error envelopes
+- producer ownership preserved in analytics and existing workflow helpers
+- mutable dispatch/admin/policy tools still deferred
+
+Validation:
+- `venv/bin/python -m pytest tests/test_corkysoft_mcp.py tests/test_operations_assignment.py tests/test_operations_diary.py tests/test_quote_service.py tests/test_price_distribution.py -q`
+- `116 passed`
+
+Docs updated:
+- README.md
+- ROADMAP.md
+- docs/progress_status_board.md
+- docs/architecture.md
+- docs/modules.md
+- docs/corkysoft_mcp_v1.md
+- CHANGELOG.md
+- COMPACTIFIED_CONTEXT.md
+
 ## 2026-03-27 (Corkysoft MCP v1 Direction)
 
 Checked `ITIR-suite` MCP integration as the reference pattern and locked the

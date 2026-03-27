@@ -12,6 +12,7 @@ Core routing, pricing, and quote services.
 - Quote calculation and formatting: `corkysoft/quote_service.py`
 - Quote persistence and client matching: `corkysoft/repo.py`
 - Core schema bootstrap: `corkysoft/schema.py`
+- MCP adapter registry, bridge, and optional transport server: `corkysoft/mcp/`
 
 ## analytics
 

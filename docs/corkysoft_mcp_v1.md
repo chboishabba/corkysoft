@@ -120,6 +120,23 @@ Likely viable transport shapes:
 The transport may change later. The result envelope and tool semantics should
 not.
 
+## Current Implementation Status
+
+The first implementation slice now exists locally:
+
+- `corkysoft/mcp/registry.py`
+  - namespaced tool registry
+- `corkysoft/mcp/tools.py`
+  - four read-only tool adapters over existing Corkysoft helpers
+- `corkysoft/mcp/bridge.py`
+  - working JSON-line local bridge
+- `corkysoft/mcp/server.py`
+  - optional FastMCP transport when the Python MCP SDK is installed
+
+The contract is therefore no longer docs-only. The local bridge and registry
+are implemented, but transport hardening and any mutable tool posture remain
+deferred.
+
 ## Governance
 
 Promotion criteria for the first implementation:
@@ -143,8 +160,7 @@ boundaries are strong enough to govern them.
 
 ## Ordered Next Steps
 
-1. Add the MCP adapter scaffold and registry without exposing mutable actions.
-2. Implement the first read-only tool family.
-3. Validate one local transport path end-to-end.
-4. Add explicit tests for envelope stability and producer-boundary discipline.
-5. Reassess whether any mutable workflow tools are governable enough for a v2.
+1. Keep the current local bridge and registry stable while validating more real DB states.
+2. Decide whether the optional FastMCP stdio server should become a supported default transport.
+3. Add explicit tests for envelope stability and producer-boundary discipline across more seeded scenarios.
+4. Reassess whether any mutable workflow tools are governable enough for a v2.

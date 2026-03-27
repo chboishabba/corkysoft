@@ -220,7 +220,7 @@ tree highlights the directories you will touch most often:
 │   ├── db.py               # SQLite helpers and schema bootstrap
 │   ├── ingest_live_data.py # Mock truck/route streamer backing the dashboard map
 │   └── price_distribution.py # Corridor rollups, exports, and optimiser prep
-├── corkysoft/              # Core routing, pricing, and quote helpers
+├── corkysoft/              # Core routing, pricing, quote helpers, and MCP adapter
 ├── dashboard/              # Streamlit entry point and reusable widgets
 │   ├── app.py              # Main Streamlit application
 │   └── components/         # Leafy widgets shared across tabs
@@ -246,6 +246,7 @@ dashboard screenshots and `MIGRATE_AWAY_FROM_streamlit_price_distribution.py` fo
 - `analytics/`: Data access, pricing insights, export helpers, and live data processing.
 - `analytics/db.py`: Connection helpers and schema bootstrap.
 - `analytics/adaptive_policy.py`: Adaptive policy parameter bootstrap, reads, and bounded updates.
+- `corkysoft/mcp/`: Read-only-first MCP adapter registry, local bridge, and optional transport server.
 - `docs/`: Feature specs such as `live_network_overview.md` and `price_history.md`.
 - `routes_to_sqlite.py`: CLI for geocoding, routing, and cost capture.
 - `tests/`: Pytest suites mirroring the main feature areas.

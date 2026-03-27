@@ -70,3 +70,4 @@
 - added a first regression/modeling baseline for profitability: historical margin-per-m³ regression over distance and season, surfaced inside profitability insights with fit metrics and scenario previews
 - extended the profitability model with corridor-aware margin prediction, baseline-vs-corridor fit deltas, and explicit operator-safe interpretation guidance in the UI
 - added chronological holdout validation and trust labels for the corridor-aware model so operators can distinguish reviewable output from low-support or weak-fit cases
+- added a first Corkysoft MCP adapter scaffold with a local JSON bridge, stable result envelopes, and four read-only tools over profitability, dispatch recommendations, operations-diary summary, and quote-guidance preview

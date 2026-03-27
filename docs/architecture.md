@@ -23,6 +23,7 @@ business logic lives under `corkysoft/`, analytics and data prep live under
   - `corkysoft/quote_service.py`: Quote calculation and formatting helpers.
   - `corkysoft/repo.py`: Quote persistence and client matching.
   - `corkysoft/schema.py`: Core schema bootstrap for CLI workflows.
+  - `corkysoft/mcp/`: Read-only-first MCP adapter registry, bridge, and optional transport server.
 - `analytics/`: Data prep, analytics, and telemetry helpers.
   - `analytics/db.py`: Public exports for the analytics database layer.
   - `analytics/db/`: Inventory, fleet, shifts, and schema definitions.
@@ -68,8 +69,8 @@ The main Streamlit entry point remains `dashboard/app.py`.
   expose bounded read-only adapters over existing Corkysoft logic rather than
   making MCP a second workflow owner.
 - Diary/planner/reconciliation export now exists as a native observer-outbox
-  surface, while a broader Corkysoft MCP adapter remains contract-defined and
-  not yet implemented.
+  surface, while a broader Corkysoft MCP adapter now has an implemented local
+  registry plus JSON bridge for bounded read-only tools.
 
 ## Routing providers and configuration
 
