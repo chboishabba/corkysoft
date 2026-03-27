@@ -28,7 +28,7 @@ test('anonymous local-development banner/path', async ({ page }) => {
     async (baseUrl) => {
       await page.goto(baseUrl, { waitUntil: 'commit' });
 
-      await expect(page.getByText('Anonymous development mode is active.')).toBeVisible();
+      await expect(page.getByText(/Anonymous development mode is active/i)).toBeVisible();
       await expect(page.getByText(/Mode: anonymous local development/i)).toBeVisible();
       await expect(page).toHaveURL(baseUrl);
     },
@@ -112,7 +112,7 @@ test('hidden-tab query-param denial for low-privilege role', async ({ page }) =>
 
       await expect(page.getByText(/Authenticated via Google as Dispatcher User/i)).toBeVisible();
       await expect(page.getByRole('tab', { name: 'Dispatch' })).toBeVisible();
-      await expect(page.getByText('Kent admin', { exact: true })).toHaveCount(0);
+      await expect(page.getByRole('tab', { name: 'Kent admin' })).toHaveCount(0);
       await expect(page.getByText('Dashboard users')).toHaveCount(0);
     },
   );

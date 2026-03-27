@@ -64,6 +64,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Maintain a focused auth red-team plan now that executable browser-based auth checks exist for the local harnessed states.
 - Keep the implemented browser-testable auth-state harness current so Playwright continues to cover anonymous, misconfigured, unauthorized, inactive, and hidden-tab-denial flows without needing live Google automation.
 - Keep tunneled/public-origin auth behavior explicit so `redirect_uri` / origin mismatches fail clearly and remain documented as deployment/configuration errors.
+- Support a temporary, explicit owner/testing shortcut where successful Google logins auto-provision as local admins, while preserving a clean path back to proper per-user roles.
 - Treat role-hidden admin tabs as part of the authz boundary; do not allow query-param navigation or stale session state to re-expose them.
 - Keep bootstrap-admin seeding one-shot and explicit; do not let lingering env vars silently reassert admin access after user setup exists.
 - Deepen the `Planner` tab from the current hybrid scaffold toward richer site-aware and more interactive visual planning.

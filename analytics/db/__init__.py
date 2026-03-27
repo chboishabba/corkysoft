@@ -78,6 +78,7 @@ from .parameters import (
     set_parameter_value,
 )
 from ..auth import (
+    auto_provision_google_admin_user,
     bootstrap_dashboard_admin,
     get_dashboard_user_by_email,
     list_dashboard_users,
@@ -108,6 +109,7 @@ from .shipments import (
 
 __all__ = [
     "DEFAULT_DB_PATH",
+    "auto_provision_google_admin_user",
     "INVENTORY_ARCHITECTURES",
     "INVENTORY_CUSTODY_TYPES",
     "INVENTORY_EXECUTION_STAGES",

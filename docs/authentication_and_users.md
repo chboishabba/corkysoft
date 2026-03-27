@@ -39,6 +39,7 @@ Shared/deployed environments:
 - should not expose anonymous access
 - should rely on Streamlit OIDC secrets for Google login
 - should align the configured OIDC `redirect_uri` with the actual public origin used by operators
+- may temporarily enable `CORKYSOFT_AUTO_PROVISION_GOOGLE_ADMIN=1` during tightly controlled owner/testing phases when every successful Google login should land as local admin
 
 Local development:
 
@@ -47,6 +48,13 @@ Local development:
   - `CORKYSOFT_ALLOW_ANONYMOUS_UI=1`
 - should use the normal Google sign-in path otherwise
 - should display an explicit in-app banner stating that Google sign-in is being bypassed for local development
+
+Temporary owner/testing shortcut:
+
+- `CORKYSOFT_AUTO_PROVISION_GOOGLE_ADMIN=1` auto-creates any successfully signed-in Google user as a local `system_rollout_admin`
+- this keeps the local `dashboard_users` table populated so the shortcut is easier to unwind later than a pure auth bypass
+- the dashboard should display an explicit warning banner while this mode is active
+- this is a temporary sharing/testing posture, not the intended long-term authorization model
 
 Tunneled or remote development:
 

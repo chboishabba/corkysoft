@@ -435,7 +435,7 @@ Common commands:
 - Fake transcript generation remains the current practical ingest surface for call-session and ambient-session workflow testing while live telephony remains pending.
 - Accommodation availability should be treated as an operational support signal for remote/peak-period work, not as a separate travel product.
 - Treat the current live profitability/network views as MVP analytics surfaces; advanced drill-down and auto-refresh behavior remain future work unless explicitly documented elsewhere.
-- Dashboard access now supports Google sign-in through Streamlit OIDC, backed by a local allowlist of Corkysoft users and role keys. See [Authentication and Users](docs/authentication_and_users.md).
+- Dashboard access now supports Google sign-in through Streamlit OIDC, backed by a local allowlist of Corkysoft users and role keys. A temporary owner/testing mode can auto-provision signed-in Google users as local admins via `CORKYSOFT_AUTO_PROVISION_GOOGLE_ADMIN=1`. See [Authentication and Users](docs/authentication_and_users.md).
 - Role-aware tab defaults remain the role-surface contract, but authenticated users now resolve into those roles from local user records instead of relying only on anonymous in-session switching.
 - The dashboard should visibly indicate whether the current run is authenticated via Google or operating in explicit anonymous local-development mode.
 - Hidden tabs should not be treated as mere presentation preferences for auth-sensitive surfaces. Query-param navigation should not re-expose role-hidden admin tabs.

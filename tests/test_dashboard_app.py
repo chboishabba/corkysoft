@@ -60,6 +60,7 @@ def test_planner_tab_is_rendered_in_dashboard_flow() -> None:
 
     auth_banner_source = inspect.getsource(getattr(module, "_render_authenticated_user_banner"))
     assert "Authenticated via Google" in auth_banner_source
+    assert "Temporary auth mode is active" in auth_banner_source
 
     anon_banner_source = inspect.getsource(getattr(module, "_render_anonymous_dev_banner"))
     assert "Anonymous development mode is active" in anon_banner_source

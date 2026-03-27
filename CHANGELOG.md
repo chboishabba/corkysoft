@@ -74,3 +74,4 @@
 - hardened the MCP entrypoint so `python -m corkysoft.mcp` now defaults to the supported JSON bridge, with explicit `--bridge` / `--server` selection and clearer optional-FastMCP failure behavior
 - added a development-only auth-state harness plus focused tests so browser automation can exercise anonymous, misconfigured, unauthorized, inactive, and low-privilege hidden-tab auth paths without live Google login
 - added Playwright auth harness coverage for the core denial/banner flows and hardened remote-origin / `redirect_uri` mismatch handling so tunneled deployments fail clearly instead of looking partially authenticated
+- added an explicit temporary auth shortcut so successful Google logins can auto-provision as local `system_rollout_admin` users behind `CORKYSOFT_AUTO_PROVISION_GOOGLE_ADMIN=1`, with a visible warning banner to keep the posture obvious during owner/testing sharing

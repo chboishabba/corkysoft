@@ -18,9 +18,10 @@ export default defineConfig({
   },
   projects: [
     {
-      name: 'firefox',
+      name: 'chromium',
       use: {
-        ...devices['Desktop Firefox'],
+        ...devices['Desktop Chrome'],
+        ...(isCI ? {} : { executablePath: '/usr/bin/chromium' }),
         viewport: { width: 1440, height: 1600 },
       },
     },

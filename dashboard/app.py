@@ -45,6 +45,7 @@ from analytics.db import (
     INVENTORY_SUBSTITUTION_APPROVER_ROLES,
     INVENTORY_SUBSTITUTION_STATUSES,
     allocate_inventory_to_segment,
+    auto_provision_google_admin_user,
     bootstrap_dashboard_admin,
     decide_inventory_substitution,
     ensure_dashboard_tables,
@@ -410,6 +411,14 @@ def _resolve_dashboard_identity(
     email = normalize_user_email(claims.get("email"))
     local_user = get_dashboard_user_by_email(conn, email=email)
     if local_user is None:
+        local_user = auto_provision_google_admin_user(
+            conn,
+            email=email,
+            google_sub=claims.get("sub"),
+            display_name=claims.get("name"),
+            allowed_role_keys=tuple(ROLE_LAYOUT_DEFAULTS.keys()),
+        )
+    if local_user is None:
         return {
             "mode": "unauthorized",
             "policy": policy,
@@ -482,6 +491,7 @@ def _render_auth_gate(auth_state: dict[str, Any]) -> None:
 def _render_authenticated_user_banner(auth_state: dict[str, Any]) -> None:
     user = auth_state.get("user") or {}
     claims = auth_state.get("claims") or {}
+    policy = auth_state.get("policy") or {}
     display_name = user.get("displayName") or claims.get("name") or user.get("email") or "Unknown user"
     email = user.get("email") or claims.get("email") or ""
     role_key = user.get("roleKey") or "dispatcher"
@@ -496,6 +506,10 @@ def _render_authenticated_user_banner(auth_state: dict[str, Any]) -> None:
     logout = getattr(st, "logout", None)
     if callable(logout) and banner_cols[2].button("Log out", key="dashboard_auth_logout_button"):
         logout()
+    if policy.get("autoProvisionGoogleAdmin"):
+        st.warning(
+            "Temporary auth mode is active: any successful Google login is auto-provisioned locally as System / Rollout Admin."
+        )
 
 
 def _render_anonymous_dev_banner(auth_state: dict[str, Any]) -> None:

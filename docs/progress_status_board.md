@@ -11,7 +11,7 @@ Use it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and [COMPACT
 - Streamlit dashboard baseline: **🟢 implemented**
 - Planner core interaction flow: **🟢 implemented** (hybrid planner scaffold and site-risk data model)
 - Operations diary surface: **🟢 implemented** (core day/week/task/invoice-bill views plus job-scoped labor reconciliation detail)
-- Auth and role-boundary hardening: **🟢 implemented** (Google OIDC + local allowlist + hidden-tab guards now include a browser-testable auth harness, Playwright coverage for the core denial/banner paths, and explicit remote-origin / `redirect_uri` mismatch handling; broader Google-backed browser automation remains later)
+- Auth and role-boundary hardening: **🟢 implemented** (Google OIDC + local allowlist + hidden-tab guards now include a browser-testable auth harness, Playwright coverage for the core denial/banner paths, explicit remote-origin / `redirect_uri` mismatch handling, and an explicit temporary auto-provision-admin mode for tightly controlled owner/testing sharing)
 - Historical job corridor/lane model: **🟢 implemented** (canonical clusters/lanes/groups, assignment status, promotion governance, and planner-safe consumption)
 - Inventory execution maturity beyond baseline: **🟡 in progress**
 - Adaptive policy: **🟡 bounded proposal/approval workflow implemented, broader operational rollout still pending**

@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start:dashboard": "PYTHONPATH=. streamlit run dashboard/app.py --server.address 127.0.0.1 --server.port 8501 --server.headless true",
-    "test:e2e:auth": "PLAYWRIGHT_SKIP_WEBSERVER=1 npx playwright test --project=firefox e2e/auth-harness.spec.ts"
+    "test:e2e:auth": "PLAYWRIGHT_SKIP_WEBSERVER=1 npx playwright test --project=chromium e2e/auth-harness.spec.ts"
   },
   "repository": {
     "type": "git",

@@ -1,3 +1,20 @@
+## 2026-03-27 (Temporary Google Admin Auto-Provision Mode)
+
+Added the safer temporary shortcut for the current sharing/testing phase.
+
+What changed:
+- successful Google logins can now auto-provision into `dashboard_users` as
+  `system_rollout_admin` when `CORKYSOFT_AUTO_PROVISION_GOOGLE_ADMIN=1`
+- the local user table remains populated, so this is easier to unwind later
+  than a pure auth bypass
+- the dashboard now shows a warning banner while this mode is active
+
+Why this path:
+- it matches the current need: business-owner sharing and testing without
+  managing proper roles yet
+- it preserves the local authorization surface so later migration back to
+  explicit per-user roles is simpler and safer
+
 ## 2026-03-27 (Auth Harness And Redirect Hardening Implemented)
 
 Promoted the next auth slice from plan to implementation.

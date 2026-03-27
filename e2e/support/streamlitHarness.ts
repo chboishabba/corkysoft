@@ -59,7 +59,7 @@ export async function startStreamlitHarness(
 ): Promise<StreamlitHarness> {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'corkysoft-playwright-auth-'));
   const dbPath = path.join(tmpDir, 'auth-harness.db');
-const baseUrl = `http://127.0.0.1:${port}/`;
+  const baseUrl = `http://127.0.0.1:${port}/`;
   const child = spawn(
     process.env.PYTHON ?? path.join(process.cwd(), 'venv', 'bin', 'python'),
     [
@@ -99,7 +99,7 @@ const baseUrl = `http://127.0.0.1:${port}/`;
   });
 
   try {
-    await waitForServer(baseUrl, 120_000);
+    await waitForServer(`${baseUrl}_stcore/health`, 120_000);
   } catch (error) {
     await stopProcess(child);
     throw new Error(`Failed to start Streamlit auth harness: ${String(error)}\n${startupOutput}`);

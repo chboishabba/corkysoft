@@ -94,6 +94,7 @@ def test_bootstrap_dashboard_admin_from_env(monkeypatch, tmp_path) -> None:
 
 def test_bootstrap_dashboard_admin_does_not_override_existing_users(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("CORKYSOFT_ENV", "production")
+    monkeypatch.delenv("CORKYSOFT_ALLOW_ANONYMOUS_UI", raising=False)
     monkeypatch.setenv("CORKYSOFT_BOOTSTRAP_ADMIN_EMAIL", "admin@example.com")
     monkeypatch.setenv("CORKYSOFT_BOOTSTRAP_ADMIN_NAME", "Admin User")
     monkeypatch.setenv("CORKYSOFT_BOOTSTRAP_ADMIN_ROLE", "system_rollout_admin")

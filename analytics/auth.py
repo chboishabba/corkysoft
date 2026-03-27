@@ -49,6 +49,9 @@ def resolve_ui_auth_policy() -> dict[str, Any]:
         "environment": environment,
         "allowAnonymous": allow_anonymous,
         "requireAuth": bool(require_auth),
+        "autoProvisionGoogleAdmin": bool(
+            _parse_bool(os.environ.get("CORKYSOFT_AUTO_PROVISION_GOOGLE_ADMIN"))
+        ),
         "enableTestAuth": bool(
             environment == "development"
             and _parse_bool(os.environ.get("CORKYSOFT_ENABLE_TEST_AUTH"))
@@ -346,7 +349,34 @@ def bootstrap_dashboard_admin(conn: sqlite3.Connection, *, allowed_role_keys: Se
     )
 
 
+def auto_provision_google_admin_user(
+    conn: sqlite3.Connection,
+    *,
+    email: str | None,
+    google_sub: str | None,
+    display_name: str | None,
+    allowed_role_keys: Sequence[str],
+) -> Optional[dict[str, Any]]:
+    policy = resolve_ui_auth_policy()
+    if not policy["autoProvisionGoogleAdmin"]:
+        return None
+    normalized_email = normalize_user_email(email)
+    if normalized_email is None:
+        return None
+    return upsert_dashboard_user(
+        conn,
+        email=normalized_email,
+        display_name=display_name,
+        role_key="system_rollout_admin",
+        active=True,
+        auth_provider="google",
+        google_sub=google_sub,
+        allowed_role_keys=allowed_role_keys,
+    )
+
+
 __all__ = [
+    "auto_provision_google_admin_user",
     "bootstrap_dashboard_admin",
     "get_dashboard_user_by_email",
     "list_dashboard_users",
