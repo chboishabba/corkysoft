@@ -26,7 +26,7 @@ Use it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and [COMPACT
 - Backhaul-aware quote discount guidance: **🟢 implemented** (quote workflow now surfaces backhaul discount headroom and recommendation support)
 - Broader backhaul / container-sharing operational visibility: **🟡 in progress** (Dispatch now surfaces persisted spare-capacity signals, container pressure, share/reallocation recommendations, and explicit operator response actions; deeper execution handling still pending)
 - Regression / corridor modeling: **🟡 in progress** (profitability insights now include baseline and corridor-aware margin-per-m³ regression over distance and season, fit-improvement reporting, and holdout trust signals; the next work is governance-first, with suppression/promotion rules and rolling backtests before broader feature expansion)
-- MCP adapter for cross-project/tooling access: **🟡 in progress** (read-only-first v1 contract, local registry, JSON bridge, and four bounded read-only tools are implemented; optional FastMCP transport hardening and broader rollout remain pending)
+- MCP adapter for cross-project/tooling access: **🟡 in progress** (read-only-first v1 contract, local registry, bridge-default CLI, JSON bridge, and four bounded read-only tools are implemented; FastMCP remains optional and broader rollout remains pending)
 - App/API/pricing decomposition pass: **🟢 implemented** (major shell/router/pricing hotspots collapsed into bounded modules with compatibility facades preserved)
 
 ## Active TODO Alignment (Current Wave)
@@ -39,7 +39,7 @@ Use it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and [COMPACT
 - Add operator-facing uncertainty ranges, with prediction intervals preferred over mean-only point estimates.
 - Keep customer/site class effects deferred until site-complexity and customer-type data are reliable enough to support them.
 - Harden the implemented Corkysoft MCP v1 adapter with more seeded scenarios, transport validation, and stronger result-envelope tests over the existing profitability, dispatch, diary, and quote-guidance surfaces.
-- Decide whether the optional FastMCP stdio server should become a supported default transport or remain an opt-in path.
+- Decide whether the optional FastMCP stdio server should remain an opt-in path or graduate into a separately supported transport tier.
 - Keep mutable dispatch/admin/policy tools out of MCP v1 until auth, audit, and operator-policy governance are stronger.
 - Add delivery receipt / watermark semantics to the observer outbox when deployment posture matters.
 - Extend operations inventory with barcode/QR and container-specific execution controls.

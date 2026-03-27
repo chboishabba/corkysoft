@@ -21,6 +21,7 @@ What landed:
 Policy held:
 - read-only first
 - stable success/error envelopes
+- bridge-default CLI, with FastMCP remaining optional
 - producer ownership preserved in analytics and existing workflow helpers
 - mutable dispatch/admin/policy tools still deferred
 

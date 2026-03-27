@@ -113,7 +113,7 @@ The contract should be transport-agnostic.
 
 Likely viable transport shapes:
 
-- stdio MCP server for local/agent use
+- JSON-line local bridge for local/agent use
 - FastMCP-style local adapter
 - a persistent JSON bridge when long-lived orchestration needs it
 
@@ -129,9 +129,12 @@ The first implementation slice now exists locally:
 - `corkysoft/mcp/tools.py`
   - four read-only tool adapters over existing Corkysoft helpers
 - `corkysoft/mcp/bridge.py`
-  - working JSON-line local bridge
+  - working JSON-line local bridge and supported default entrypoint
 - `corkysoft/mcp/server.py`
   - optional FastMCP transport when the Python MCP SDK is installed
+- `corkysoft/mcp/__main__.py`
+  - defaults to the JSON bridge and exposes explicit `--bridge` / `--server`
+    CLI selection
 
 The contract is therefore no longer docs-only. The local bridge and registry
 are implemented, but transport hardening and any mutable tool posture remain
@@ -160,7 +163,7 @@ boundaries are strong enough to govern them.
 
 ## Ordered Next Steps
 
-1. Keep the current local bridge and registry stable while validating more real DB states.
-2. Decide whether the optional FastMCP stdio server should become a supported default transport.
-3. Add explicit tests for envelope stability and producer-boundary discipline across more seeded scenarios.
+1. Keep the current bridge-default CLI and registry stable while validating more real DB states.
+2. Add explicit tests for envelope stability and producer-boundary discipline across more seeded scenarios.
+3. Decide whether the optional FastMCP stdio server should stay opt-in or become a separately supported transport tier.
 4. Reassess whether any mutable workflow tools are governable enough for a v2.

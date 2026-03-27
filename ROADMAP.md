@@ -133,6 +133,8 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
   operations-diary summary, and quote-guidance preview; do not expose mutable
   dispatch/admin tools until auth, audit, and operator-policy governance are
   stronger.
+- Keep the JSON bridge as the supported default MCP entrypoint until the
+  optional FastMCP server earns separate transport-level support.
 - Add unresolved supplier-exposure aging inside Corkysoft so managers can see
   received-but-unreconciled liabilities, billing latency, and top overdue jobs
   before the fuller SB time surface exists.

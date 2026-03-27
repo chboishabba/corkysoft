@@ -3,8 +3,10 @@ from __future__ import annotations
 import sqlite3
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pandas as pd
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -16,8 +18,10 @@ from analytics.operational_signals import upsert_job_operational_signal
 from analytics.operations_assignment import ensure_segment
 from analytics.operations_diary import upsert_customer_invoice_review, upsert_operations_diary_task
 from analytics.price_distribution import import_historical_jobs_from_dataframe
+from corkysoft.mcp import __main__ as mcp_main
 from corkysoft.mcp.bridge import _call_tool, _registry_envelope
 from corkysoft.mcp.registry import build_default_registry
+from corkysoft.mcp.server import build_fastmcp_server
 
 
 def _job(conn: sqlite3.Connection, client: str, origin: str, destination: str) -> int:
@@ -66,6 +70,56 @@ def test_registry_lists_four_read_only_tools() -> None:
     envelope = _registry_envelope()
     assert envelope["ok"] is True
     assert len(envelope["tools"]) == 4
+
+
+def test_mcp_main_defaults_to_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    def fake_bridge() -> int:
+        calls.append("bridge")
+        return 7
+
+    def fake_server() -> None:
+        calls.append("server")
+
+    monkeypatch.setattr(mcp_main, "run_bridge", fake_bridge)
+    monkeypatch.setattr(mcp_main, "run_fastmcp", fake_server)
+
+    result = mcp_main.main([])
+
+    assert result == 7
+    assert calls == ["bridge"]
+
+
+def test_mcp_main_rejects_conflicting_transport_flags(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(mcp_main, "run_bridge", lambda: 0)
+    monkeypatch.setattr(mcp_main, "run_fastmcp", lambda: None)
+
+    result = mcp_main.main(["--bridge", "--server"])
+
+    assert result == 2
+    captured = capsys.readouterr()
+    assert "Choose only one transport" in captured.err
+
+
+def test_build_fastmcp_server_raises_clear_error_when_sdk_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_modules = dict(sys.modules)
+    fake_mcp = ModuleType("mcp")
+    fake_server_module = ModuleType("mcp.server")
+    monkeypatch.setitem(sys.modules, "mcp", fake_mcp)
+    monkeypatch.setitem(sys.modules, "mcp.server", fake_server_module)
+    sys.modules.pop("mcp.server.fastmcp", None)
+
+    try:
+        with pytest.raises(RuntimeError, match="Optional MCP transport dependency missing"):
+            build_fastmcp_server()
+    finally:
+        sys.modules.clear()
+        sys.modules.update(original_modules)
 
 
 def test_quote_guidance_preview_tool_returns_benchmark_overlay(tmp_path: Path) -> None:
