@@ -1142,7 +1142,7 @@ def render_price_distribution_dashboard():
                     filtered_df=filtered_df,
                     mapping=filtered_mapping,
                     conn=conn,
-                    state=state,
+                    state=st.session_state,
                 )
         if "Calls" in tab_map:
             with tab_map["Calls"]:
