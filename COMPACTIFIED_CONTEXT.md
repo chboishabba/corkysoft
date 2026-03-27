@@ -1,3 +1,50 @@
+## 2026-03-27 (Auth Harness And Redirect Hardening Implemented)
+
+Promoted the next auth slice from plan to implementation.
+
+What landed:
+- `analytics/auth.py`
+  - added a development-only auth test harness controlled by
+    `CORKYSOFT_ENABLE_TEST_AUTH` and `CORKYSOFT_TEST_AUTH_MODE`
+  - supports deterministic browser-checkable states:
+    - anonymous
+    - misconfigured
+    - login_required
+    - unauthorized
+    - inactive
+    - authenticated
+- `dashboard/app.py`
+  - resolves the test-auth harness before normal Streamlit OIDC flow
+  - surfaces explicit remote-origin / `redirect_uri` mismatch errors via
+    `CORKYSOFT_PUBLIC_BASE_URL`
+- `tests/test_auth.py`
+  - added focused policy and test-harness coverage
+- `e2e/auth-harness.spec.ts`
+  - added Playwright coverage for:
+    - anonymous local-development banner
+    - auth-required misconfigured gate
+    - unauthorized denial
+    - inactive denial
+    - low-privilege hidden-tab/query-param denial
+- `e2e/support/streamlitHarness.ts`
+  - added per-scenario local Streamlit launcher for deterministic browser tests
+
+Validation:
+- `venv/bin/python -m pytest tests/test_auth.py tests/test_dashboard_app.py tests/test_dashboard_layouts.py -q`
+- `npm run test:e2e:auth`
+
+Docs updated:
+- docs/auth_red_team_plan.md
+- docs/authentication_and_users.md
+- docs/progress_status_board.md
+- ROADMAP.md
+- COMPACTIFIED_CONTEXT.md
+
+Remaining auth backlog:
+- real Google-backed browser login/logout automation
+- deployed/tunneled origin verification against real OIDC config
+- deeper audit attribution and admin governance follow-on
+
 ## 2026-03-27 (Corkysoft MCP v1 Implemented Scaffold)
 
 Implemented the first Corkysoft MCP slice using the ITIR-style adapter pattern.

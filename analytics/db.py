@@ -88,6 +88,7 @@ from .auth import (
     list_dashboard_users,
     normalize_user_email,
     record_dashboard_user_login,
+    resolve_test_auth_override,
     resolve_ui_auth_policy,
     upsert_dashboard_user,
 )
@@ -124,6 +125,7 @@ __all__ = [
     "list_dashboard_users",
     "normalize_user_email",
     "record_dashboard_user_login",
+    "resolve_test_auth_override",
     "resolve_ui_auth_policy",
     "upsert_dashboard_user",
     "upsert_inventory_item",

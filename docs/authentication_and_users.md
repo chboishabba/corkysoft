@@ -38,6 +38,7 @@ Shared/deployed environments:
 - should run with UI auth required
 - should not expose anonymous access
 - should rely on Streamlit OIDC secrets for Google login
+- should align the configured OIDC `redirect_uri` with the actual public origin used by operators
 
 Local development:
 
@@ -46,6 +47,12 @@ Local development:
   - `CORKYSOFT_ALLOW_ANONYMOUS_UI=1`
 - should use the normal Google sign-in path otherwise
 - should display an explicit in-app banner stating that Google sign-in is being bypassed for local development
+
+Tunneled or remote development:
+
+- localhost-only OIDC settings are not sufficient when the app is exposed through a tunnel or other remote origin
+- if the public origin does not match the configured `redirect_uri`, Streamlit/OIDC may fail with origin-mismatch behavior even though the app shell loads
+- this should be treated as configuration error, not as a valid partially authenticated mode
 
 Authenticated runs should also display:
 
@@ -88,5 +95,13 @@ The first auth red-team wave should focus on:
 - hidden-tab exposure via query params or stale session state
 - bootstrap-admin env misuse
 - low-privileged users reaching admin-only user-management behavior
+- remote-origin / `redirect_uri` mismatch clarity when the app is exposed through a tunnel or public URL
+
+Near-term execution order:
+
+1. keep the implemented local Playwright auth harness current as auth behavior changes
+2. extend coverage from the local harness into real Google-backed browser automation
+3. add deployed/tunneled origin verification against real OIDC settings when deployment posture matters
+4. follow with deeper audit attribution and broader admin-governance hardening
 
 See [Auth Red-Team Plan](auth_red_team_plan.md).

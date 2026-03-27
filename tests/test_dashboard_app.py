@@ -10,6 +10,8 @@ from pathlib import Path
 import pandas as pd
 from streamlit.testing.v1 import AppTest
 
+from dashboard.components.worker_time import _build_worker_time_shift_comparison
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -39,6 +41,7 @@ def test_streamlit_entrypoint_exposed() -> None:
     assert callable(render)
     assert hasattr(module, "_render_authenticated_user_banner")
     assert hasattr(module, "_render_anonymous_dev_banner")
+    assert hasattr(module, "_auth_redirect_config_issue")
 
 
 def test_planner_tab_is_rendered_in_dashboard_flow() -> None:
@@ -52,7 +55,7 @@ def test_planner_tab_is_rendered_in_dashboard_flow() -> None:
     assert 'with tab_map["Calls"]' in source
     assert "render_calls_tab(" in source
     assert 'with tab_map["Payroll / Labor analytics"]' in source
-    assert "render_payroll_labor_analytics_tab(conn)" in source
+    assert "render_payroll_labor_analytics_tab(conn, rerun_app=_rerun_app)" in source
     assert "Repair dispatcher layout" in source
 
     auth_banner_source = inspect.getsource(getattr(module, "_render_authenticated_user_banner"))
@@ -60,6 +63,12 @@ def test_planner_tab_is_rendered_in_dashboard_flow() -> None:
 
     anon_banner_source = inspect.getsource(getattr(module, "_render_anonymous_dev_banner"))
     assert "Anonymous development mode is active" in anon_banner_source
+
+    auth_gate_source = inspect.getsource(getattr(module, "_render_auth_gate"))
+    assert "OIDC is not configured correctly" in auth_gate_source
+
+    redirect_issue_source = inspect.getsource(getattr(module, "_auth_redirect_config_issue"))
+    assert "OIDC redirect URI does not match the configured public origin" in redirect_issue_source
 
     payroll_source = inspect.getsource(getattr(module, "render_payroll_labor_analytics_tab"))
     assert "Export-ready Labor Summary" in payroll_source
@@ -72,13 +81,10 @@ def test_planner_tab_is_rendered_in_dashboard_flow() -> None:
     assert "Worker-time events in selected range" in shifts_source
     assert "Imported shifts vs accepted call-derived worker time" in shifts_source
     assert "Mismatch / timing drift" in shifts_source
-    assert "_display_worker_time_shift_comparison" in inspect.getsource(module)
+    assert "_display_worker_time_shift_comparison" in shifts_source
 
 
 def test_worker_time_shift_comparison_flags_assignment_and_timing_mismatches() -> None:
-    module = importlib.import_module("dashboard.app")
-    build_comparison = getattr(module, "_build_worker_time_shift_comparison")
-
     imported = pd.DataFrame(
         [
             {
@@ -134,7 +140,7 @@ def test_worker_time_shift_comparison_flags_assignment_and_timing_mismatches() -
         ]
     )
 
-    comparison = build_comparison(
+    comparison = _build_worker_time_shift_comparison(
         imported_shifts=imported,
         worker_time_events=worker_time,
     )

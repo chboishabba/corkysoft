@@ -68,6 +68,7 @@ from analytics.db import (
     record_dashboard_user_login,
     record_inventory_execution_event,
     record_inventory_movement,
+    resolve_test_auth_override,
     resolve_ui_auth_policy,
     resolve_inventory_exception,
     upsert_dashboard_user,
@@ -360,6 +361,12 @@ def _resolve_dashboard_identity(
 ) -> dict[str, Any]:
     policy = resolve_ui_auth_policy()
     bootstrap_dashboard_admin(conn, allowed_role_keys=tuple(ROLE_LAYOUT_DEFAULTS.keys()))
+    test_override = resolve_test_auth_override(
+        conn,
+        allowed_role_keys=tuple(ROLE_LAYOUT_DEFAULTS.keys()),
+    )
+    if test_override is not None:
+        return test_override
 
     if not policy["requireAuth"]:
         return {
@@ -372,6 +379,16 @@ def _resolve_dashboard_identity(
 
     configured = _streamlit_auth_configured()
     claims = _streamlit_user_claims()
+    redirect_config_issue = _auth_redirect_config_issue(policy)
+    if redirect_config_issue is not None:
+        return {
+            "mode": "misconfigured",
+            "policy": policy,
+            "user": None,
+            "claims": claims,
+            "configured": configured,
+            "detail": redirect_config_issue,
+        }
     if not configured:
         return {
             "mode": "misconfigured",
@@ -430,9 +447,12 @@ def _render_auth_gate(auth_state: dict[str, Any]) -> None:
 
     mode = str(auth_state["mode"])
     if mode == "misconfigured":
+        detail = str(auth_state.get("detail") or "").strip()
         st.error(
-            "UI auth is required but Streamlit OIDC is not configured. Add `.streamlit/secrets.toml` auth settings before starting this deployment."
+            "UI auth is required but Streamlit OIDC is not configured correctly. Add `.streamlit/secrets.toml` auth settings before starting this deployment."
         )
+        if detail:
+            st.caption(detail)
         st.stop()
 
     if mode == "login_required":
@@ -487,6 +507,31 @@ def _render_anonymous_dev_banner(auth_state: dict[str, Any]) -> None:
     st.caption(
         f"Mode: anonymous local development · environment: {environment} · set `CORKYSOFT_REQUIRE_UI_AUTH=1` and unset `CORKYSOFT_ALLOW_ANONYMOUS_UI` to force login."
     )
+
+
+def _auth_redirect_config_issue(policy: dict[str, Any]) -> str | None:
+    public_base_url = str(policy.get("publicBaseUrl") or "").strip().rstrip("/")
+    if not public_base_url:
+        return None
+    auth_section = getattr(st, "secrets", {}).get("auth", {})
+    if not isinstance(auth_section, dict):
+        return (
+            "CORKYSOFT_PUBLIC_BASE_URL is set but Streamlit auth secrets are missing. "
+            "Configure the deployed or tunneled redirect URI explicitly."
+        )
+    redirect_uri = str(auth_section.get("redirect_uri") or "").strip()
+    if not redirect_uri:
+        return (
+            "CORKYSOFT_PUBLIC_BASE_URL is set but [auth].redirect_uri is missing from "
+            ".streamlit/secrets.toml."
+        )
+    expected_redirect = f"{public_base_url}/oauth2callback"
+    if redirect_uri.rstrip("/") != expected_redirect:
+        return (
+            "OIDC redirect URI does not match the configured public origin. "
+            f"Expected `{expected_redirect}` but found `{redirect_uri}`."
+        )
+    return None
 
 
 def _render_dashboard_user_admin(

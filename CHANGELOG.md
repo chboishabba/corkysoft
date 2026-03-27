@@ -72,3 +72,5 @@
 - added chronological holdout validation and trust labels for the corridor-aware model so operators can distinguish reviewable output from low-support or weak-fit cases
 - added a first Corkysoft MCP adapter scaffold with a local JSON bridge, stable result envelopes, and four read-only tools over profitability, dispatch recommendations, operations-diary summary, and quote-guidance preview
 - hardened the MCP entrypoint so `python -m corkysoft.mcp` now defaults to the supported JSON bridge, with explicit `--bridge` / `--server` selection and clearer optional-FastMCP failure behavior
+- added a development-only auth-state harness plus focused tests so browser automation can exercise anonymous, misconfigured, unauthorized, inactive, and low-privilege hidden-tab auth paths without live Google login
+- added Playwright auth harness coverage for the core denial/banner flows and hardened remote-origin / `redirect_uri` mismatch handling so tunneled deployments fail clearly instead of looking partially authenticated

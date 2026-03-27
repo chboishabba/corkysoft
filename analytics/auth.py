@@ -49,10 +49,106 @@ def resolve_ui_auth_policy() -> dict[str, Any]:
         "environment": environment,
         "allowAnonymous": allow_anonymous,
         "requireAuth": bool(require_auth),
+        "enableTestAuth": bool(
+            environment == "development"
+            and _parse_bool(os.environ.get("CORKYSOFT_ENABLE_TEST_AUTH"))
+        ),
+        "publicBaseUrl": (os.environ.get("CORKYSOFT_PUBLIC_BASE_URL") or "").strip() or None,
         "bootstrapAdminEmail": normalize_user_email(os.environ.get("CORKYSOFT_BOOTSTRAP_ADMIN_EMAIL")),
         "bootstrapAdminName": (os.environ.get("CORKYSOFT_BOOTSTRAP_ADMIN_NAME") or "").strip() or None,
         "bootstrapAdminRole": (os.environ.get("CORKYSOFT_BOOTSTRAP_ADMIN_ROLE") or "system_rollout_admin").strip() or "system_rollout_admin",
     }
+
+
+def resolve_test_auth_override(
+    conn: sqlite3.Connection,
+    *,
+    allowed_role_keys: Sequence[str],
+) -> Optional[dict[str, Any]]:
+    policy = resolve_ui_auth_policy()
+    if not policy["enableTestAuth"]:
+        return None
+
+    mode = (os.environ.get("CORKYSOFT_TEST_AUTH_MODE") or "").strip().lower()
+    if not mode:
+        return None
+
+    email = normalize_user_email(os.environ.get("CORKYSOFT_TEST_AUTH_EMAIL")) or "playwright@example.com"
+    display_name = (os.environ.get("CORKYSOFT_TEST_AUTH_NAME") or "Playwright User").strip() or "Playwright User"
+    role_key = (os.environ.get("CORKYSOFT_TEST_AUTH_ROLE") or "dispatcher").strip() or "dispatcher"
+    if role_key not in set(allowed_role_keys):
+        raise ValueError(f"Unknown test auth role: {role_key}")
+
+    base_claims = {
+        "email": email,
+        "name": display_name,
+        "sub": f"test-sub:{email}",
+        "is_logged_in": mode not in {"login_required", "misconfigured"},
+    }
+    base_state = {
+        "policy": policy,
+        "configured": mode != "misconfigured",
+        "claims": base_claims,
+    }
+
+    if mode == "anonymous":
+        return {
+            **base_state,
+            "mode": "anonymous",
+            "user": None,
+            "claims": {},
+        }
+    if mode == "misconfigured":
+        return {
+            **base_state,
+            "mode": "misconfigured",
+            "user": None,
+            "claims": {},
+            "detail": "Streamlit OIDC test mode: auth secrets are intentionally unavailable.",
+        }
+    if mode == "login_required":
+        return {
+            **base_state,
+            "mode": "login_required",
+            "user": None,
+        }
+    if mode == "unauthorized":
+        return {
+            **base_state,
+            "mode": "unauthorized",
+            "user": None,
+        }
+
+    active = mode != "inactive"
+    user = upsert_dashboard_user(
+        conn,
+        email=email,
+        display_name=display_name,
+        role_key=role_key,
+        active=active,
+        auth_provider="test",
+        google_sub=str(base_claims["sub"]),
+        allowed_role_keys=allowed_role_keys,
+    )
+    if not active:
+        return {
+            **base_state,
+            "mode": "inactive",
+            "user": user,
+        }
+    if mode == "authenticated":
+        refreshed_user = record_dashboard_user_login(
+            conn,
+            email=email,
+            google_sub=str(base_claims["sub"]),
+            display_name=display_name,
+        ) or user
+        return {
+            **base_state,
+            "mode": "authenticated",
+            "user": refreshed_user,
+        }
+    raise ValueError(f"Unknown test auth mode: {mode}")
 
 
 def get_dashboard_user_by_email(
@@ -256,6 +352,7 @@ __all__ = [
     "list_dashboard_users",
     "normalize_user_email",
     "record_dashboard_user_login",
+    "resolve_test_auth_override",
     "resolve_ui_auth_policy",
     "upsert_dashboard_user",
 ]

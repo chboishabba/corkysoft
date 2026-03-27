@@ -11,7 +11,7 @@ Use it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and [COMPACT
 - Streamlit dashboard baseline: **🟢 implemented**
 - Planner core interaction flow: **🟢 implemented** (hybrid planner scaffold and site-risk data model)
 - Operations diary surface: **🟢 implemented** (core day/week/task/invoice-bill views plus job-scoped labor reconciliation detail)
-- Auth and role-boundary hardening: **🟢 implemented** (Google OIDC + local allowlist + hidden-tab guards)
+- Auth and role-boundary hardening: **🟢 implemented** (Google OIDC + local allowlist + hidden-tab guards now include a browser-testable auth harness, Playwright coverage for the core denial/banner paths, and explicit remote-origin / `redirect_uri` mismatch handling; broader Google-backed browser automation remains later)
 - Historical job corridor/lane model: **🟢 implemented** (canonical clusters/lanes/groups, assignment status, promotion governance, and planner-safe consumption)
 - Inventory execution maturity beyond baseline: **🟡 in progress**
 - Adaptive policy: **🟡 bounded proposal/approval workflow implemented, broader operational rollout still pending**
@@ -47,6 +47,7 @@ Use it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and [COMPACT
 - Add and maintain explicit policy/override governance for hard-block categories.
 - Extend adaptive policy governance from proposal/approval into broader operational rollout and override controls.
 - Validate Kent operator/admin workflows against real payloads and repeated override patterns now that admin-only governance controls are enforced in the dashboard.
+- Extend auth browser coverage from the implemented local harness into real Google-backed login/logout and deployed tunnel-origin checks when deployment posture matters.
 
 ## Non-blocking documentation tasks
 

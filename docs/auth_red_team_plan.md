@@ -17,7 +17,7 @@ Out of scope for the first pass:
 
 - Google provider internals
 - broader operational or financial workflow abuse outside auth-bound surfaces
-- running full browser automation immediately
+- full Google-account automation in CI
 
 ## Threat Model
 
@@ -56,6 +56,7 @@ Session / UX:
 - UI clearly distinguishes authenticated Google mode from anonymous local-dev mode
 - logout path is visible and functional in authenticated mode
 - stale session/query state does not bypass current role restrictions
+- tunneled or remote origins do not silently break auth without an explicit operator-visible explanation
 
 ## Manual Test Matrix
 
@@ -77,19 +78,21 @@ Operator misconfiguration:
 - run local dev with anonymous mode and confirm warning banner is obvious
 - run public/shared mode and confirm anonymous mode cannot be enabled
 - leave bootstrap-admin env vars set after first-user creation and confirm they do not silently mutate existing users
+- run a tunneled/remote URL with a mismatched OIDC `redirect_uri` and confirm the app fails clearly rather than looking half-authenticated
 
 ## Automated Coverage
 
-Current/near-term automated coverage should include:
+Current automated coverage now includes:
 
 - env-policy tests around anonymous mode and fail-closed startup semantics
 - bootstrap-admin tests for valid first-user creation and no-op behavior once users exist
 - layout-resolution tests proving hidden tabs are not re-exposed by query params
 - source/unit tests confirming authenticated and anonymous auth-state banners remain present
+- a test-only auth-state harness for browser automation so Playwright can exercise allowlist, inactive-user, and hidden-tab-denial flows without depending on live Google login
+- Playwright checks for anonymous, misconfigured, unauthorized, inactive, and low-privilege role-hidden-tab scenarios
 
 Later browser-based round:
 
-- Playwright login/logout flows
-- unauthorized-account and inactive-account denial paths
-- low-privileged attempt to open hidden admin tabs
-- evidence capture for visible auth state, console output, and redirect behavior
+- real Google-backed login/logout flows
+- tunneled-origin / redirect mismatch verification against a deployed or tunnel-exposed run
+- evidence capture for visible auth state, console output, websocket/auth errors, and redirect behavior
