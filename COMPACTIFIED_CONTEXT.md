@@ -1,3 +1,39 @@
+## 2026-03-27 (Model Governance Direction)
+
+Aligned the next modeling phase around governance-first expansion of the current
+corridor-aware profitability model.
+
+Decisions captured:
+- The implemented model now includes:
+  - baseline distance/season regression
+  - corridor-aware adjustments
+  - baseline-vs-corridor fit reporting
+  - chronological holdout trust signals
+- Current product stance:
+  - model output is advisory only
+  - current trust labels are useful guidance, not a full promotion policy
+- Next modeling priority order:
+  1. stricter governance thresholds and suppression rules for weak or rare corridors
+  2. explicit promotion states for when corridor effects may be shown, guarded, or suppressed
+  3. rolling chronological backtesting windows over time
+  4. corridor-season and holiday/day-type interaction features
+  5. operator-facing uncertainty ranges, with prediction intervals preferred over raw statistical jargon
+- Deferred:
+  - customer/site class effects stay out of current committed scope until data quality is strong enough
+
+Disambiguations recorded:
+- "corridor-season interaction" means route-specific seasonal or holiday/day-type effects, not just one global seasonal coefficient
+- "proper backtesting" means repeated train/test windows over time, not one static holdout split
+- "uncertainty intervals" should be framed to operators as expected ranges/reliability, with prediction intervals more relevant than confidence intervals for future jobs
+
+Docs updated:
+- ROADMAP.md
+- docs/progress_status_board.md
+- COMPACTIFIED_CONTEXT.md
+
+Implementation changes:
+- None. Documentation/TODO-only alignment.
+
 ## 2026-03-04
 
 Source of truth update based on current repository state and roadmap review.

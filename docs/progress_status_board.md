@@ -25,7 +25,7 @@ Use it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and [COMPACT
 - Quote recommendation and benchmarking overlays: **🟢 implemented** (live quote workflow now shows benchmark guidance and recommendation overlays)
 - Backhaul-aware quote discount guidance: **🟢 implemented** (quote workflow now surfaces backhaul discount headroom and recommendation support)
 - Broader backhaul / container-sharing operational visibility: **🟡 in progress** (Dispatch now surfaces persisted spare-capacity signals, container pressure, share/reallocation recommendations, and explicit operator response actions; deeper execution handling still pending)
-- Regression / corridor modeling: **🟡 in progress** (profitability insights now include baseline and corridor-aware margin-per-m³ regression over distance and season, fit-improvement reporting, and holdout trust signals; fuller model governance still pending)
+- Regression / corridor modeling: **🟡 in progress** (profitability insights now include baseline and corridor-aware margin-per-m³ regression over distance and season, fit-improvement reporting, and holdout trust signals; the next work is governance-first, with suppression/promotion rules and rolling backtests before broader feature expansion)
 - App/API/pricing decomposition pass: **🟢 implemented** (major shell/router/pricing hotspots collapsed into bounded modules with compatibility facades preserved)
 
 ## Active TODO Alignment (Current Wave)
@@ -33,6 +33,10 @@ Use it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and [COMPACT
 - Continue operations-diary expansion toward fuller job/staff/invoice reconciliation workflow.
 - Extend dispatch/inventory handling from explicit response actions into fuller execution flows for backhaul/container-sharing and under-/over-utilisation response.
 - Extend the current corridor-aware model from basic holdout validation into stronger governance thresholds, low-support suppression, and explicit promotion rules for when operators may rely on corridor effects.
+- Add rolling chronological backtesting windows so model trust is measured over repeated real-time slices, not just one holdout split.
+- Add corridor-season and holiday/day-type interaction features only after governance and backtesting are stable.
+- Add operator-facing uncertainty ranges, with prediction intervals preferred over mean-only point estimates.
+- Keep customer/site class effects deferred until site-complexity and customer-type data are reliable enough to support them.
 - Add delivery receipt / watermark semantics to the observer outbox when deployment posture matters.
 - Extend operations inventory with barcode/QR and container-specific execution controls.
 - Add explicit evidence-backed site/media/CV ingestion before deeper constraint automation.
