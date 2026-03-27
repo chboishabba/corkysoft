@@ -15,5 +15,6 @@ pip install -r requirements.txt
 
 REM Run Streamlit app
 set CORKYSOFT_ENV=development
-set CORKYSOFT_ALLOW_ANONYMOUS_UI=1
+set CORKYSOFT_REQUIRE_UI_AUTH=1
+set CORKYSOFT_AUTO_PROVISION_GOOGLE_ADMIN=1
 streamlit run dashboard/app.py
