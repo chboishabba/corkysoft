@@ -1089,6 +1089,8 @@ def render_price_distribution_dashboard():
             label: tab for label, tab in zip(tab_order, streamlit_tabs)
         }
 
+        metro_distance_km = 100.0
+
         render_distribution_analytics_surface(
             tab_map=tab_map,
             filtered_df=filtered_df,
