@@ -139,8 +139,12 @@ def filter_jobs_by_distance(
     *,
     metro_only: bool = False,
     threshold_km: float = METRO_DISTANCE_THRESHOLD_KM,
+    max_distance_km: float | None = None,
 ) -> pd.DataFrame:
     """Filter jobs by distance when metro-only mode is requested."""
+
+    if max_distance_km is not None:
+        threshold_km = float(max_distance_km)
 
     if not metro_only or df.empty:
         return df.copy()
