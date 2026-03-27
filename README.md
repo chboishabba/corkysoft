@@ -28,6 +28,7 @@
 [Auth Red-Team Plan](docs/auth_red_team_plan.md)
 [Corkysoft / SB / ITIR Coverage Audit](docs/corkysoft_sb_itir_coverage_audit.md)
 [Corkysoft -> SB / ITIR Downstream Contract](docs/sb_itir_downstream_contract.md)
+[Corkysoft MCP v1 Contract](docs/corkysoft_mcp_v1.md)
 [Planner / Diary Patterns For SB / ITIR](docs/planner_diary_patterns_for_sb_itir.md)
 [Inventory Execution Workflow](docs/inventory_execution_workflow.md)
 [Worker Time Capture Workflow](docs/worker_time_capture_workflow.md)
@@ -53,6 +54,7 @@ Run `./start_app.sh` or `start_app.bat` to run the app.
 - Auth hardening and red-team coverage: [Auth Red-Team Plan](docs/auth_red_team_plan.md)
 - Cross-project coverage and boundary audit: [Corkysoft / SB / ITIR Coverage Audit](docs/corkysoft_sb_itir_coverage_audit.md)
 - Downstream contract for SB/ITIR consumers: [Corkysoft -> SB / ITIR Downstream Contract](docs/sb_itir_downstream_contract.md)
+- MCP adapter contract for read-only cross-project/tooling access: [Corkysoft MCP v1 Contract](docs/corkysoft_mcp_v1.md)
 - Planner now supports both job-first and map/corridor-first planning, confirms draft legs into `job_segments`, uses the shared provider-aware routing preview, keeps saved-route overlays aligned with the active provider, surfaces first-pass street-level and Google-first 360 site context, and can store accepted site-risk assessments plus advisory media/CV outputs against jobs; the existing `Operations` segment form remains advanced/manual fallback.
 - Inventory execution workflow: [Inventory Execution Workflow](docs/inventory_execution_workflow.md)
 - Dispatch / tender triage flow: [Kent AMS Integration Spec](docs/kent_ams_integration.md)
@@ -174,6 +176,7 @@ Explore the main dashboard workflows currently deployable locally.
   - [Adaptive learning loop](docs/adaptive_learning_loop.md)
   - [Corkysoft / SB / ITIR coverage audit](docs/corkysoft_sb_itir_coverage_audit.md)
   - [Corkysoft -> SB / ITIR downstream contract](docs/sb_itir_downstream_contract.md)
+  - [Corkysoft MCP v1 contract](docs/corkysoft_mcp_v1.md)
   - [Planner / diary patterns for SB / ITIR](docs/planner_diary_patterns_for_sb_itir.md)
 - [Roadmap](#roadmap)
 

@@ -1,3 +1,45 @@
+## 2026-03-27 (Corkysoft MCP v1 Direction)
+
+Checked `ITIR-suite` MCP integration as the reference pattern and locked the
+transferable architectural rule for Corkysoft.
+
+Decisions captured:
+- copy the architectural posture, not the exact package layout
+- Corkysoft MCP should be an adapter layer over existing producer-owned logic
+- v1 should be read-only and deterministic
+- v1 should use stable result envelopes:
+  - success: `{\"ok\": true, \"result\": ...}`
+  - failure: `{\"ok\": false, \"error\": {\"code\": ..., \"message\": ..., \"details\": ...}}`
+- the first tool family should stay bounded to:
+  - `corkysoft.profitability_summary`
+  - `corkysoft.dispatch_recommendations`
+  - `corkysoft.operations_diary_summary`
+  - `corkysoft.quote_guidance_preview`
+
+Boundary locked:
+- Corkysoft remains workflow and operational-truth owner
+- SB remains the downstream reviewed-state consumer
+- ITIR remains orchestration/context and contract hygiene
+- MCP must not become a second mutable workflow owner
+
+Deferred from MCP v1:
+- mutable dispatch actions
+- Kent admin/policy writes
+- rollout approval/control actions
+- other auth-sensitive governance mutations
+
+Docs updated:
+- README.md
+- ROADMAP.md
+- docs/progress_status_board.md
+- docs/architecture.md
+- docs/modules.md
+- docs/corkysoft_mcp_v1.md
+- COMPACTIFIED_CONTEXT.md
+
+Implementation changes:
+- None. Documentation/TODO-only alignment.
+
 ## 2026-03-27 (Model Governance Direction)
 
 Aligned the next modeling phase around governance-first expansion of the current

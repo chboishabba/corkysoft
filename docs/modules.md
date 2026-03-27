@@ -75,4 +75,5 @@ StatiBaker / ITIR.
 
 - Coverage audit: `docs/corkysoft_sb_itir_coverage_audit.md`
 - Downstream contract: `docs/sb_itir_downstream_contract.md`
+- MCP adapter contract: `docs/corkysoft_mcp_v1.md`
 - Pattern extraction: `docs/planner_diary_patterns_for_sb_itir.md`

@@ -26,6 +26,8 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
   explicit requirements/proposal/governance states rather than left implicit.
 - Maintain the Corkysoft/SB/ITIR boundary explicitly: Corkysoft is workflow
   truth, SB is downstream interpretible state, and ITIR is orchestration/context.
+- Maintain `docs/corkysoft_mcp_v1.md` as the canonical read-only-first MCP
+  adapter contract above Corkysoft-owned producer logic.
 - Maintain `docs/corridor_detection.md` alongside corridor model updates.
 - Keep `docs/corridor_schema_plan.md` aligned with corridor table changes.
 - Maintain `docs/corridor_defaults.md` and `docs/cluster_template_au.md` when thresholds or clusters change.
@@ -125,6 +127,10 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
   deployment posture matters.
 - Reuse Corkysoft planner/diary workflow patterns in SB/ITIR only as downstream
   summary/review lenses, not as a second operational cockpit.
+- Add a Corkysoft MCP adapter scaffold for bounded read-only tools such as
+  profitability summary, dispatch recommendations, operations-diary summary,
+  and quote-guidance preview; do not expose mutable dispatch/admin tools until
+  auth, audit, and operator-policy governance are stronger.
 - Add unresolved supplier-exposure aging inside Corkysoft so managers can see
   received-but-unreconciled liabilities, billing latency, and top overdue jobs
   before the fuller SB time surface exists.

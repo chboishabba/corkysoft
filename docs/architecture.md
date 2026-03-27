@@ -64,9 +64,12 @@ The main Streamlit entry point remains `dashboard/app.py`.
   database for these operations.
 - ITIR remains the orchestration/context layer that coordinates cross-project
   contracts without taking ownership of Corkysoft business semantics.
-- Today, only the call-intelligence slice has an analogous downstream outbox
-  pattern in Corkysoft; diary/planner/reconciliation export is design-stage
-  only.
+- Corkysoft's MCP posture should follow the same producer-ownership rule:
+  expose bounded read-only adapters over existing Corkysoft logic rather than
+  making MCP a second workflow owner.
+- Diary/planner/reconciliation export now exists as a native observer-outbox
+  surface, while a broader Corkysoft MCP adapter remains contract-defined and
+  not yet implemented.
 
 ## Routing providers and configuration
 
