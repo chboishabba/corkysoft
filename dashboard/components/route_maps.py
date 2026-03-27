@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import os
 import sqlite3
 import inspect
 from typing import Any, Dict, List, Optional
@@ -31,6 +32,7 @@ from analytics.routes_map import (
     build_job_route_map,
     fetch_job_route_rows,
 )
+from analytics.routing_provider import get_routing_provider
 from dashboard.components.lane_scope import apply_lane_status_scope
 from dashboard.components.maps import _hex_to_rgb, build_route_map
 from dashboard.map_provider import folium_map_configuration, plotly_map_layout
@@ -340,6 +342,9 @@ def _render_categorical_route_map(
     show_points: bool,
     use_route_geometry: bool,
 ) -> None:
+    if use_route_geometry:
+        geocoded = _enrich_route_geometry(geocoded)
+
     colour_dimensions = {
         "Job ID": "id",
         "Client": "client_display",
@@ -389,6 +394,9 @@ def _render_metric_route_map(
     show_points: bool,
     use_route_geometry: bool,
 ) -> None:
+    if use_route_geometry:
+        geocoded = _enrich_route_geometry(geocoded)
+
     metric_colour_options: Dict[str, Dict[str, object]] = {
         "Margin $/m³": {
             "column": "margin_per_m3",
@@ -661,6 +669,42 @@ def _render_isochrone_tab(map_df: pd.DataFrame) -> None:
         legend={"orientation": "h", "yanchor": "bottom", "y": 0.01},
     )
     st.plotly_chart(figure, width="stretch")
+
+
+def _enrich_route_geometry(df: pd.DataFrame) -> pd.DataFrame:
+    """Fill missing ``route_geojson`` values using the configured routing provider."""
+
+    if df.empty or "route_geojson" in df.columns and df["route_geojson"].apply(_has_geometry).all():
+        return df
+
+    working = df.copy()
+    provider_key = os.environ.get("ROUTING_PROVIDER", "ors").strip().lower()
+    route_provider = get_routing_provider(provider=provider_key, client=None)
+
+    def _coerce_float(value: Any) -> Optional[float]:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    missing_mask = ~working["route_geojson"].apply(_has_geometry) if "route_geojson" in working.columns else pd.Series(True, index=working.index)
+    for idx, row in working.loc[missing_mask].iterrows():
+        origin_lon = _coerce_float(row.get("origin_lon"))
+        origin_lat = _coerce_float(row.get("origin_lat"))
+        dest_lon = _coerce_float(row.get("dest_lon"))
+        dest_lat = _coerce_float(row.get("dest_lat"))
+        if None in (origin_lon, origin_lat, dest_lon, dest_lat):
+            continue
+        try:
+            geometry = route_provider.route_geometry(
+                origin=(origin_lon, origin_lat),
+                destination=(dest_lon, dest_lat),
+            )
+            working.loc[idx, "route_geojson"] = geometry.dumps()
+        except Exception:
+            continue
+
+    return working
 
 
 def _render_saved_job_routes(conn: Connection) -> None:
