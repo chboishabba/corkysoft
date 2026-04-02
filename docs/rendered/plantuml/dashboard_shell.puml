@@ -1,0 +1,45 @@
+@startuml
+title Corkysoft Dashboard Shell
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam wrapWidth 220
+skinparam maxMessageSize 180
+package "Dashboard Shell" {
+  [dashboard.app] as dashboard_app
+  [dashboard.auth_ui] as dashboard_auth_ui
+  [dashboard.data] as dashboard_data
+  [dashboard.data_controls] as dashboard_data_controls
+  [dashboard.layout_state] as dashboard_layout_state
+  [dashboard.map_provider] as dashboard_map_provider
+  [dashboard.query_params] as dashboard_query_params
+  [dashboard.shell] as dashboard_shell
+  [dashboard.state] as dashboard_state
+  [dashboard.tab_registry] as dashboard_tab_registry
+}
+dashboard_app --> dashboard_auth_ui
+dashboard_app --> dashboard_data
+dashboard_app --> dashboard_data_controls
+dashboard_app --> dashboard_layout_state
+dashboard_app --> dashboard_map_provider
+dashboard_app --> dashboard_query_params
+dashboard_app --> dashboard_shell
+dashboard_app --> dashboard_state
+dashboard_app --> dashboard_tab_registry
+dashboard_auth_ui --> dashboard_state
+dashboard_data_controls --> dashboard_data
+dashboard_data_controls --> dashboard_map_provider
+dashboard_state --> dashboard_query_params
+[Analytics + Persistence] as external_analytics_persistence
+dashboard_app ..> external_analytics_persistence : app -> price_distribution\napp -> db\napp -> dashboard_layouts
+dashboard_auth_ui ..> external_analytics_persistence : auth_ui -> db\nauth_ui -> dashboard_layouts
+dashboard_data_controls ..> external_analytics_persistence : data_controls -> price_distribution\ndata_controls -> db
+dashboard_data ..> external_analytics_persistence : data -> price_distribution\ndata -> db\ndata -> db_connection
+[Quote + Routing Core] as external_quote_routing_core
+dashboard_app ..> external_quote_routing_core : app -> quote_service\napp -> routing\napp -> repo
+dashboard_data_controls ..> external_quote_routing_core : data_controls -> quote_service\ndata_controls -> repo\ndata_controls -> schema
+dashboard_data ..> external_quote_routing_core : data -> repo\ndata -> schema
+dashboard_state ..> external_quote_routing_core : state -> quote_service
+[Workflow Surfaces] as external_workflow_surfaces
+dashboard_app ..> external_workflow_surfaces : app -> quote_builder\napp -> route_maps\napp -> operations_diary
+@enduml

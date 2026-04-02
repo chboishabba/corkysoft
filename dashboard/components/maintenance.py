@@ -55,16 +55,7 @@ from analytics.vehicle_workbook import (
     import_vehicle_details_from_google_sheet,
 )
 
-
-def _trigger_rerun() -> None:
-    rerun = getattr(st, "rerun", None)
-    if callable(rerun):
-        rerun()
-        return
-
-    experimental_rerun = getattr(st, "experimental_rerun", None)
-    if callable(experimental_rerun):
-        experimental_rerun()
+from dashboard.state import _rerun_app
 
 
 def _format_currency(value: Optional[float]) -> str:
@@ -436,7 +427,7 @@ def render_fleet_tab(conn) -> None:
                     f"{summary['staffUpdated']} staff updated, "
                     f"{summary['suppliersImported']} suppliers."
                 )
-                _trigger_rerun()
+                _rerun_app()
 
     with st.expander("Assignment readiness policy", expanded=False):
         policy = get_operations_policy(conn)
@@ -483,7 +474,7 @@ def render_fleet_tab(conn) -> None:
                 conflict_override_allowed=conflict_override_allowed,
             )
             st.success("Readiness policy updated.")
-            _trigger_rerun()
+            _rerun_app()
 
     with st.expander("Role layout defaults", expanded=False):
         available_tabs = [
@@ -547,7 +538,7 @@ def render_fleet_tab(conn) -> None:
                 st.error(f"Failed to save role layout defaults: {exc}")
             else:
                 st.success("Role layout defaults updated.")
-                _trigger_rerun()
+                _rerun_app()
 
     with st.expander("Spreadsheet cutover admin", expanded=False):
         cutover_rows = list_operations_cutover_rollout(conn)
@@ -696,7 +687,7 @@ def render_fleet_tab(conn) -> None:
                     notes=notes.strip() or None,
                 )
                 st.success("Cutover workflow updated.")
-                _trigger_rerun()
+                _rerun_app()
             promotion_actor = st.text_input(
                 "Promotion actor",
                 value="",
@@ -720,8 +711,8 @@ def render_fleet_tab(conn) -> None:
                 except ValueError as exc:
                     st.error(str(exc))
                 else:
-                    st.success("Promotion request recorded.")
-                    _trigger_rerun()
+                        st.success("Promotion request recorded.")
+                        _rerun_app()
             if promotion_cols[1].button("Approve promotion", key="operations_cutover_approve_promotion_button"):
                 try:
                     approve_operations_cutover_promotion(
@@ -733,8 +724,8 @@ def render_fleet_tab(conn) -> None:
                 except ValueError as exc:
                     st.error(str(exc))
                 else:
-                    st.success("Promotion approval recorded.")
-                    _trigger_rerun()
+                        st.success("Promotion approval recorded.")
+                        _rerun_app()
             if promotion_cols[2].button("Reject promotion", key="operations_cutover_reject_promotion_button"):
                 try:
                     reject_operations_cutover_promotion(
@@ -746,8 +737,8 @@ def render_fleet_tab(conn) -> None:
                 except ValueError as exc:
                     st.error(str(exc))
                 else:
-                    st.success("Promotion rejection recorded.")
-                    _trigger_rerun()
+                        st.success("Promotion rejection recorded.")
+                        _rerun_app()
             if recommendation.get("actionable"):
                 if promotion_cols[3].button(
                     "Apply recommended transition",
@@ -764,7 +755,7 @@ def render_fleet_tab(conn) -> None:
                         st.error(str(exc))
                     else:
                         st.success("Recommended transition applied.")
-                        _trigger_rerun()
+                        _rerun_app()
             st.markdown("##### Cutover actions")
             action_actor = st.text_input(
                 "Action actor",
@@ -792,7 +783,7 @@ def render_fleet_tab(conn) -> None:
                     note=action_note.strip() or None,
                 )
                 st.success("Review recorded.")
-                _trigger_rerun()
+                _rerun_app()
             if action_cols[1].button("Record fallback drill", key="operations_cutover_record_drill"):
                 record_operations_cutover_event(
                     conn,
@@ -802,7 +793,7 @@ def render_fleet_tab(conn) -> None:
                     note=action_note.strip() or None,
                 )
                 st.success("Fallback drill recorded.")
-                _trigger_rerun()
+                _rerun_app()
             if action_cols[2].button("Record fallback use", key="operations_cutover_record_fallback"):
                 record_operations_cutover_event(
                     conn,
@@ -812,7 +803,7 @@ def render_fleet_tab(conn) -> None:
                     note=action_note.strip() or None,
                 )
                 st.success("Fallback use recorded.")
-                _trigger_rerun()
+                _rerun_app()
             if action_cols[3].button("Record snapshot issued", key="operations_cutover_record_snapshot"):
                 record_operations_cutover_event(
                     conn,
@@ -823,7 +814,7 @@ def render_fleet_tab(conn) -> None:
                     event_value=snapshot_consumer.strip() or None,
                 )
                 st.success("Snapshot issuance recorded.")
-                _trigger_rerun()
+                _rerun_app()
             recent_events = list_operations_cutover_events(
                 conn,
                 workflow_key=selected["workflowKey"],
@@ -1047,7 +1038,7 @@ def render_fleet_tab(conn) -> None:
                         st.error(str(exc))
                     else:
                         st.success("Lane promotion proposal created.")
-                        _trigger_rerun()
+                        _rerun_app()
                 if st.button("Create grouped lane proposal", key="lane_promotion_create_grouped"):
                     candidate = candidate_options[selected_candidate_label]
                     try:
@@ -1063,7 +1054,7 @@ def render_fleet_tab(conn) -> None:
                         st.error(str(exc))
                     else:
                         st.success("Grouped lane promotion proposal created.")
-                        _trigger_rerun()
+                        _rerun_app()
 
             proposal_rows = list_lane_promotion_proposals(conn, limit=20)
             if proposal_rows:
@@ -1138,7 +1129,7 @@ def render_fleet_tab(conn) -> None:
                             st.error(str(exc))
                         else:
                             st.success("Lane promotion proposal approved.")
-                            _trigger_rerun()
+                            _rerun_app()
                     if action_cols[1].button("Reject lane proposal", key="lane_promotion_reject"):
                         try:
                             reject_lane_promotion_proposal(
@@ -1151,7 +1142,7 @@ def render_fleet_tab(conn) -> None:
                             st.error(str(exc))
                         else:
                             st.success("Lane promotion proposal rejected.")
-                            _trigger_rerun()
+                            _rerun_app()
                 if proposal["status"] == LANE_PROPOSAL_STATUS_APPROVED:
                     if action_cols[2].button("Apply lane proposal", key="lane_promotion_apply"):
                         try:
@@ -1165,7 +1156,7 @@ def render_fleet_tab(conn) -> None:
                             st.error(str(exc))
                         else:
                             st.success("Lane promotion proposal applied.")
-                            _trigger_rerun()
+                            _rerun_app()
 
     with st.expander("Adaptive policy governance", expanded=False):
         snapshot = load_adaptive_policy_snapshot(conn)
@@ -1215,7 +1206,7 @@ def render_fleet_tab(conn) -> None:
                 st.error(str(exc))
             else:
                 st.success("Adaptive-policy proposal created.")
-                _trigger_rerun()
+                _rerun_app()
 
         proposal_rows = list_adaptive_policy_proposals(conn, limit=20)
         if not proposal_rows:
@@ -1279,7 +1270,7 @@ def render_fleet_tab(conn) -> None:
                     st.error(str(exc))
                 else:
                     st.success("Adaptive-policy proposal approved.")
-                    _trigger_rerun()
+                    _rerun_app()
             if decision_cols[1].button("Reject proposal", key="adaptive_policy_reject"):
                 try:
                     reject_adaptive_policy_proposal(
@@ -1292,7 +1283,7 @@ def render_fleet_tab(conn) -> None:
                     st.error(str(exc))
                 else:
                     st.success("Adaptive-policy proposal rejected.")
-                    _trigger_rerun()
+                    _rerun_app()
             if decision_cols[2].button("Apply approved proposal", key="adaptive_policy_apply"):
                 try:
                     apply_adaptive_policy_proposal(
@@ -1305,7 +1296,7 @@ def render_fleet_tab(conn) -> None:
                     st.error(str(exc))
                 else:
                     st.success("Adaptive-policy proposal applied.")
-                    _trigger_rerun()
+                    _rerun_app()
 
     readiness_items = list_operational_readiness_items(conn)
     blocked_items = [item for item in readiness_items if item["status"] == "blocked"]
@@ -1367,7 +1358,7 @@ def render_fleet_tab(conn) -> None:
                 st.error(f"Failed to import VEHICLE_DETAILS: {exc}")
             else:
                 st.success(f"Imported {imported} vehicle{'s' if imported != 1 else ''} from Google Sheets.")
-                _trigger_rerun()
+                _rerun_app()
 
         if import_cols[1].button("Import uploaded workbook"):
             if not upload:
@@ -1386,7 +1377,7 @@ def render_fleet_tab(conn) -> None:
                     st.error(f"Failed to import uploaded workbook: {exc}")
                 else:
                     st.success(f"Imported {imported} vehicle{'s' if imported != 1 else ''} from the upload.")
-                    _trigger_rerun()
+                    _rerun_app()
 
         if not vehicle_df.empty:
             csv_data = vehicle_df.to_csv(index=False).encode("utf-8")
@@ -1534,7 +1525,7 @@ def render_fleet_tab(conn) -> None:
                 daily_check_complete=daily_check_value,
             )
             st.success("Vehicle saved.")
-            _trigger_rerun()
+            _rerun_app()
 
     if selected_vehicle != "New vehicle" and selected_vehicle in existing_ids:
         planned_segments = list_segments_for_truck(conn, truck_id=selected_vehicle)
@@ -1567,4 +1558,4 @@ def render_fleet_tab(conn) -> None:
             conn.execute("DELETE FROM trucks WHERE truck_id = ?", (selected_vehicle,))
             conn.commit()
             st.success(f"Deleted vehicle {selected_vehicle}.")
-            _trigger_rerun()
+            _rerun_app()

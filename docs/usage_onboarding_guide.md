@@ -25,13 +25,13 @@ happen inside Corkysoft.
 | Estimator | `Quote builder` | analytics tabs |
 | Dispatcher | `Dispatch`, `Kent tenders` | `Operations` |
 | Fleet / Operations Manager | `Operations`, `Dispatch`, `Fleet` | `Vehicle maintenance` |
-| Commercial Owner | `Quote builder`, `Kent tenders`, `Kent admin` | analytics tabs |
+| Commercial Owner | `Quote builder`, `Kent tenders` | analytics tabs, `Kent admin` review |
 | Labor Planner / Staff Coordinator | `Staff`, `Driver shifts`, `Operations` | `Dispatch` |
 | Maintenance / Compliance Coordinator | `Fleet`, `Vehicle maintenance` | `Operations`, `Dispatch` |
 | Warehouse / Crew | `Inventory` | `Dispatch` |
 | Inventory / Supplier Coordinator | `Inventory` | `Dispatch` |
 | Workforce Time Capture Coordinator | `Staff`, `Driver shifts` | future time-capture review surface |
-| System / Rollout Admin | `Fleet` | `Staff`, `Inventory`, `Driver shifts` |
+| System / Rollout Admin | `Fleet`, `Kent admin` | `Staff`, `Inventory`, `Driver shifts` |
 
 See [UI Role Coverage Matrix](ui_role_coverage_matrix.md) for the authoritative role-to-surface mapping.
 
@@ -113,24 +113,30 @@ Do not use them for:
 Primary tabs:
 - `Quote builder`
 - `Kent tenders`
+
+Secondary / governed-review tab:
 - `Kent admin`
 
 Use them to:
 - review quote quality and tender prioritization
 - inspect profitability policy behavior
-- review override and policy governance separately from the operator queue
+- review override and governance separately from the operator queue
 - approve or reject governed rollout promotions when required
 
 What to look for:
 - quote profitability outputs
 - tender prioritization order
-- policy defaults and override controls
+- policy behavior, override history, and governed approval state
 - promotion approval state and risk
 
 Do not use them for:
 - truck or worker assignment
 - daily dispatch execution
 - source-sheet syncing
+
+Current access note:
+- `Kent admin` is currently writable only for `System / Rollout Admin`. Treat it
+  as a review surface unless you are acting in that admin role.
 
 ### Labor Planner / Staff Coordinator
 

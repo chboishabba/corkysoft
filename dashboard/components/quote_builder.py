@@ -10,6 +10,7 @@ from typing import Any, Dict, List, MutableMapping, Optional, Sequence, Tuple, L
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
+import streamlit.components.v1 as components
 
 try:
     import folium
@@ -41,7 +42,21 @@ from corkysoft.repo import (
     persist_quote,
 )
 from corkysoft.routing import snap_coordinates_to_road
-from dashboard.map_provider import folium_map_configuration, pydeck_map_kwargs
+from dashboard.map_provider import (
+    folium_map_configuration,
+    google_street_view_360_url,
+    google_street_view_embed_url,
+    pydeck_map_kwargs,
+    street_view_available,
+)
+from dashboard.query_params import _set_query_params
+from dashboard.state import (
+    _apply_quote_suggestion,
+    _first_non_empty,
+    _format_route_label,
+    _initial_pin_state,
+    _rerun_app,
+)
 
 DEFAULT_TARGET_MARGIN_PERCENT = 20.0
 _AUS_LAT_LON = (-25.2744, 133.7751)
@@ -54,30 +69,6 @@ _NULL_CLIENT_DEFAULT_COMPANY = "Null (filler) client"
 _NULL_CLIENT_DEFAULT_NOTES = "Placeholder client captured via quote builder."
 _QUOTE_COUNTRY_STATE_KEY = "quote_builder_country"
 _SUGGESTION_PLACEHOLDER_OPTION = "Keep current input"
-
-
-def _initial_pin_state(result: QuoteResult) -> Dict[str, Any]:
-    return {
-        "origin": {
-            "lon": float(result.origin_lon),
-            "lat": float(result.origin_lat),
-        },
-        "destination": {
-            "lon": float(result.dest_lon),
-            "lat": float(result.dest_lat),
-        },
-        "enabled": False,
-        "defaults": {
-            "origin": {
-                "lon": float(result.origin_lon),
-                "lat": float(result.origin_lat),
-            },
-            "destination": {
-                "lon": float(result.dest_lon),
-                "lat": float(result.dest_lat),
-            },
-        },
-    }
 
 
 def _sync_pin_inputs(state: Dict[str, Any]) -> None:
@@ -299,29 +290,42 @@ def _render_pin_picker(
     return current_lon, current_lat
 
 
-def _set_query_params(**params: str) -> None:
-    """Set Streamlit query parameters using the stable API when available."""
-    query_params = getattr(st, "query_params", None)
-    if query_params is not None:
-        query_params.from_dict(params)
+def _render_street_view_panel(
+    *,
+    label: str,
+    lat: float,
+    lon: float,
+    heading: float | None = None,
+) -> None:
+    """Render an interactive Street View panel when Google Maps is configured."""
+
+    embed_url = google_street_view_embed_url(
+        lat=lat,
+        lon=lon,
+        heading=heading,
+    )
+    full_url = google_street_view_360_url(
+        lat=lat,
+        lon=lon,
+        heading=heading,
+    )
+    st.markdown(f"**{label} street view**")
+    if embed_url is None:
+        st.info(
+            "Interactive Street View is available when `ROUTING_PROVIDER=google` and `GOOGLE_MAPS_API_KEY` are configured."
+        )
         return
-    # Fallback for older Streamlit versions.
-    st.experimental_set_query_params(**params)
 
-
-def _rerun_app() -> None:
-    """Trigger a Streamlit rerun using the available API."""
-    rerun = getattr(st, "rerun", None)
-    if callable(rerun):
-        rerun()
-        return
-
-    experimental_rerun = getattr(st, "experimental_rerun", None)
-    if callable(experimental_rerun):
-        experimental_rerun()
-        return
-
-    raise RuntimeError("Streamlit rerun API is unavailable.")
+    components.iframe(embed_url, height=360, scrolling=False)
+    if full_url:
+        st.link_button(
+            f"Open full {label.lower()} Street View",
+            full_url,
+            use_container_width=True,
+        )
+    st.caption(
+        "The embedded pane supports pan and rotation. Historical imagery, when available for the location, is more likely to be exposed in the full Google Maps view."
+    )
 
 
 def apply_quote_suggestion(
@@ -329,41 +333,12 @@ def apply_quote_suggestion(
     field: Literal["origin", "destination"],
     suggestion: str,
 ) -> None:
-    """Update stored quote inputs with a selected suggestion and recalculate."""
+    """Update the current quote by delegating to shared state and resetting overrides."""
 
-    if not suggestion:
+    updated_result = _apply_quote_suggestion(conn, field, suggestion)
+    if updated_result is None:
         return
 
-    text_key = "Origin" if field == "origin" else "Destination"
-    st.session_state[text_key] = suggestion
-
-    existing_inputs = st.session_state.get("quote_inputs")
-    if not isinstance(existing_inputs, QuoteInput):
-        st.session_state["quote_suggestion_error"] = (
-            "Unable to apply suggestion without an existing quote input."
-        )
-        return
-
-    updated_inputs = (
-        replace(existing_inputs, origin=suggestion)
-        if field == "origin"
-        else replace(existing_inputs, destination=suggestion)
-    )
-    st.session_state["quote_inputs"] = updated_inputs
-
-    try:
-        updated_result = calculate_quote(conn, updated_inputs)
-    except (RuntimeError, ValueError) as exc:
-        st.session_state["quote_suggestion_error"] = str(exc)
-        st.session_state.pop("quote_result", None)
-        return
-
-    st.session_state.pop("quote_suggestion_error", None)
-    st.session_state["quote_result"] = updated_result
-    st.session_state["quote_manual_override_enabled"] = False
-    st.session_state["quote_manual_override_amount"] = float(
-        updated_result.final_quote
-    )
     st.session_state["quote_pin_override"] = _initial_pin_state(updated_result)
     st.session_state.pop(_HAVERSINE_MODAL_STATE_KEY, None)
     _set_query_params(view="Quote builder")
@@ -529,48 +504,6 @@ def _render_quote_guidance_panel(
     if st.button(button_label, key="quote_apply_recommended_quote", type="secondary"):
         apply_recommended_quote(overlay.recommended_quote_total)
         _rerun_app()
-
-
-def _first_non_empty(route: pd.Series, columns: Sequence[str]) -> Optional[str]:
-    for column in columns:
-        if column in route and isinstance(route[column], str):
-            value = route[column].strip()
-            if value:
-                return value
-    return None
-
-
-def _format_route_label(route: pd.Series) -> str:
-    origin = _first_non_empty(
-        route,
-        [
-            "corridor_display",
-            "origin",
-            "origin_city",
-            "origin_normalized",
-            "origin_raw",
-        ],
-    ) or "Origin"
-    destination = _first_non_empty(
-        route,
-        [
-            "destination",
-            "destination_city",
-            "destination_normalized",
-            "destination_raw",
-        ],
-    ) or "Destination"
-    distance_value: Optional[float] = None
-    for column in ("distance_km", "distance", "km", "kms"):
-        if column in route and pd.notna(route[column]):
-            try:
-                distance_value = float(route[column])
-            except (TypeError, ValueError):
-                continue
-            break
-    if distance_value is not None and not math.isnan(distance_value):
-        return f"{origin} → {destination} ({distance_value:.1f} km)"
-    return f"{origin} → {destination}"
 
 
 def _extract_route_date(route: pd.Series) -> Optional[date]:
@@ -1399,6 +1332,26 @@ def render_quote_builder(
         )
         pin_state["enabled"] = use_manual_pins
         st.session_state["quote_pin_override"] = pin_state
+
+        st.markdown("#### Street View")
+        if street_view_available():
+            street_view_cols = st.columns(2)
+            with street_view_cols[0]:
+                _render_street_view_panel(
+                    label="Origin",
+                    lat=origin_lat,
+                    lon=origin_lon,
+                )
+            with street_view_cols[1]:
+                _render_street_view_panel(
+                    label="Destination",
+                    lat=dest_lat,
+                    lon=dest_lon,
+                )
+        else:
+            st.caption(
+                "Street View embeds are available when Google Maps is the active routing provider and a Google Maps API key is configured."
+            )
 
         if st.button(
             "Recalculate with manual pins",

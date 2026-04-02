@@ -38,10 +38,22 @@ Analytics helpers, data preparation, and telemetry processing.
 Streamlit UI entry point and reusable components.
 
 - Main Streamlit app/composition shell: `dashboard/app.py`
-- Shared dashboard data preparation: `dashboard/data.py`
+- Auth gate, identity resolution, and dashboard-user admin bannering: `dashboard/auth_ui.py`
+- Shared query-param compatibility helpers: `dashboard/query_params.py`
+- Role-layout reset/hydration state: `dashboard/layout_state.py`
+- Role-aware shell copy and sidebar framing: `dashboard/shell.py`
+- Dataset/provider/import/filter sidebar controls: `dashboard/data_controls.py`
+- Visible tab composition and landing-tab handling: `dashboard/tab_registry.py`
+- Shared dashboard data preparation and older compatibility helpers: `dashboard/data.py`
 - UI tabs and widgets: `dashboard/components/`
+- Higher-level role/workflow view composites: `dashboard/views/`
 - Operations diary surface: `dashboard/components/operations_diary.py`
 - Map provider configuration: `dashboard/map_provider.py`
+
+Contributor note:
+- `dashboard/app.py` should remain a composition layer.
+- New auth, query-param, shell, layout-state, and sidebar-control logic should land in the extracted helper modules first.
+- New workflow behavior should land in the relevant file under `dashboard/components/` or in producer-owned modules under `analytics/` or `corkysoft/`.
 
 Note: `corkysoft/src/dashboard/` is a packaging stub and does not host the
 Streamlit entry point.

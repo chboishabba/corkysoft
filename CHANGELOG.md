@@ -1,5 +1,76 @@
 # Changelog
 
+## 2026-04-02
+
+- replaced the one-off dashboard architecture diagram with a generated UML suite driven by the internal Python import graph
+- added a supermega UML entrypoint plus child-view PlantUML and rendered SVG artifacts under `docs/rendered/`
+- added render/check ergonomics to `scripts/build_supermega_uml.py`, including `--render` and `--check --render`
+- corrected child UML diagrams so cross-domain dotted arrows attach to the real source modules instead of the alphabetically first module in each domain
+- added focused UML builder coverage to lock domain assignment, supermega cross-domain links, child-link anchoring, render target mapping, and missing-PlantUML failure behavior
+
+## 2026-03-31
+
+- expanded MCP bridge governance coverage to assert blank-tool-name and unknown-tool-name behavior
+- increased the focused integrated validation suite to 98 passing tests when including bridge-level MCP coverage
+- audited rerun handling and confirmed the shared dashboard state layer is now the sole rerun owner
+- added a Kent UI regression proving non-admin roles see admin write controls disabled, not just helper-level write gating
+- increased the focused integrated validation suite to 89 passing tests
+- completed the narrow cleanup wave with 88 focused tests passing
+- moved quote suggestion manual-override reset into the authoritative shared state helper
+- consolidated planner, maintenance, and operations rerun handling onto the shared dashboard state helper
+- expanded MCP scenario coverage to verify execution-error envelopes preserve code and details
+- corrected the rerun-wrapper backlog to the real remaining paths in planner, maintenance, and operations, then assigned the next narrow cleanup wave around quote helper boundaries, real rerun cleanup, and deeper governance scenarios
+- partially completed the next cleanup wave with 87 focused tests passing
+- moved quote suggestion application onto the shared dashboard state helper
+- expanded MCP tests to cover success and error envelope payload shapes
+- confirmed that the calls/maps rerun-wrapper backlog was partly stale: calls already reused shared rerun handling and maps does not currently rerun
+- assigned the next three non-blocking cleanup lanes after the 85-test integrated pass: quote decision-control cleanup, remaining rerun-wrapper consolidation, and broader governance scenario validation
+- completed the boundary-cleanup and live-control-validation wave with 85 focused tests passing
+- moved quote-builder route-label formatting onto the shared dashboard state helper
+- removed duplicate rerun helpers from planner and route maps in favor of the shared dashboard state helper
+- made the Kent admin write-role set explicit and added regression coverage for both the guard logic and allowed-role set
+- tightened MCP contract coverage so documented tool names and response-version invariants stay locked by tests
+- updated Kent and MCP docs to reflect the enforced governance and contract invariants
+- assigned the next three non-blocking worker lanes after the integrated 46-test validation pass: quote-builder boundary cleanup, shared rerun/state helper consolidation, and Kent/MCP live-control validation coverage
+- assigned the next three non-blocking worker lanes after the previous wave landed: operator reconciliation, outbound contract hardening, and quote-builder/shared-state consolidation
+- assessed the remaining roadmap and reordered the active wave into three
+  priority bands: operator execution completion, governance and contract
+  hardening, and decision-quality/planner-intelligence work
+- assigned one non-blocking worker lane per band so the next execution wave is
+  parallelized against disjoint ownership areas
+- split the dashboard sidebar control layer into smaller internal control
+  points for database initialization, dataset/provider selection, historical
+  ingest, dataset loading, filter-state resolution, and break-even updates
+- added focused regression coverage for the new data-control helper paths
+- removed remaining helper duplication between `dashboard/app.py` and the
+  shared dashboard state/shell layers
+- updated the README, module guide, architecture guide, progress board, plan,
+  and compactified context to reflect the extracted dashboard control layers
+- added a PlantUML dashboard-shell architecture view for contributor-facing C4
+  style documentation
+
+## 2026-03-30
+
+- aligned the role/onboarding docs to the current Kent governance boundary, so
+  `Commercial Owner` now treats `Kent admin` as a governed review surface while
+  `System / Rollout Admin` remains the current write owner
+- documented the next UI remediation wave around analytics-first shell chrome,
+  role-layout reset/deep-link hardening, rerun-compatibility cleanup, and mixed
+  surface sectioning before the next browser-led testing pass
+- recorded the next `dashboard/app.py` decomposition wave, splitting the work
+  into non-blocking lanes for auth/query-param flow, shell/layout-state logic,
+  and data-controls/tab-composition extraction
+
+## 2026-03-27
+
+- fixed the Kent admin tab crash caused by calling the injected
+  dashboard-user admin renderer positionally instead of by keyword
+- added a regression test covering the Kent admin renderer call shape
+- deduplicated duplicate DataFrame columns before passing map data into pydeck
+  layers, preventing repeated `DataFrame columns are not unique` warnings from
+  the network overlay map path
+- added a focused map helper regression test for pydeck column deduplication
+
 ## 2026-03-20
 
 - documented the adaptive learning loop as a bounded, reviewable policy-update

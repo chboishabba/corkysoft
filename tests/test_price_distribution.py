@@ -2046,3 +2046,148 @@ def test_build_isochrone_polygons_validates_centre():
 
     with pytest.raises(ValueError):
         build_isochrone_polygons(df, centre="truck")
+
+
+def test_build_isochrone_polygons_uses_ors_secondary_when_primary_lacks_isochrones(monkeypatch):
+    class PrimaryProvider:
+        def route_geometry(self, **_: Any) -> Any:  # pragma: no cover - unused stub
+            raise NotImplementedError
+
+        def isochrone(
+            self,
+            *,
+            centre: tuple[float, float],
+            profile: str,
+            range_seconds: list[int],
+        ) -> IsochroneResult | None:
+            return None
+
+    class SecondaryOrsProvider:
+        def __init__(self, client: Any = None) -> None:
+            self.client = client
+
+        def isochrone(
+            self,
+            *,
+            centre: tuple[float, float],
+            profile: str,
+            range_seconds: list[int],
+        ) -> IsochroneResult:
+            assert centre == (153.0260, -27.4705)
+            assert profile == "driving-hgv"
+            assert range_seconds == [7200]
+            return IsochroneResult(
+                feature_collection={
+                    "type": "FeatureCollection",
+                    "features": [
+                        {
+                            "type": "Feature",
+                            "properties": {"value": range_seconds[0]},
+                            "geometry": {
+                                "type": "Polygon",
+                                "coordinates": [
+                                    [
+                                        [153.0260, -27.4705],
+                                        [153.1260, -27.4705],
+                                        [153.1260, -27.5705],
+                                        [153.0260, -27.5705],
+                                        [153.0260, -27.4705],
+                                    ]
+                                ],
+                            },
+                        }
+                    ],
+                }
+            )
+
+    monkeypatch.setattr(
+        "analytics.route_map_prep.get_routing_provider",
+        lambda client=None: PrimaryProvider(),
+    )
+    monkeypatch.setattr(
+        "analytics.route_map_prep.OpenRouteServiceProvider",
+        SecondaryOrsProvider,
+    )
+
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705],
+            "origin_lon": [153.0260],
+            "distance_km": [920.0],
+            "duration_hr": [10.0],
+            "corridor_display": ["Brisbane → Sydney"],
+        }
+    )
+
+    iso_df = build_isochrone_polygons(df, horizon_hours=2.0)
+
+    assert len(iso_df) == 1
+    record = iso_df.iloc[0]
+    assert record["geometry_source"] == "network"
+    assert record["latitudes"] == [-27.4705, -27.4705, -27.5705, -27.5705, -27.4705]
+    assert record["longitudes"] == [153.026, 153.126, 153.126, 153.026, 153.026]
+
+
+def test_build_isochrone_polygons_skips_circular_fallback_by_default():
+    class EmptyProvider:
+        def route_geometry(self, **_: Any) -> Any:  # pragma: no cover - unused stub
+            raise NotImplementedError
+
+        def isochrone(
+            self,
+            *,
+            centre: tuple[float, float],
+            profile: str,
+            range_seconds: list[int],
+        ) -> IsochroneResult | None:
+            return None
+
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705],
+            "origin_lon": [153.0260],
+            "distance_km": [100.0],
+            "duration_hr": [2.0],
+            "corridor_display": ["Brisbane local"],
+        }
+    )
+
+    iso_df = build_isochrone_polygons(df, routing_provider=EmptyProvider())
+
+    assert iso_df.empty
+
+
+def test_build_isochrone_polygons_can_explicitly_use_approximate_fallback():
+    class EmptyProvider:
+        def route_geometry(self, **_: Any) -> Any:  # pragma: no cover - unused stub
+            raise NotImplementedError
+
+        def isochrone(
+            self,
+            *,
+            centre: tuple[float, float],
+            profile: str,
+            range_seconds: list[int],
+        ) -> IsochroneResult | None:
+            return None
+
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705],
+            "origin_lon": [153.0260],
+            "distance_km": [100.0],
+            "duration_hr": [2.0],
+            "corridor_display": ["Brisbane local"],
+        }
+    )
+
+    iso_df = build_isochrone_polygons(
+        df,
+        routing_provider=EmptyProvider(),
+        allow_approximate_fallback=True,
+    )
+
+    assert len(iso_df) == 1
+    record = iso_df.iloc[0]
+    assert record["geometry_source"] == "approximate_circle"
+    assert "approximate radius" in record["tooltip"]

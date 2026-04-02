@@ -1,0 +1,160 @@
+@startuml
+title Corkysoft Analytics + Persistence
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam wrapWidth 220
+skinparam maxMessageSize 180
+package "Analytics + Persistence" {
+  [analytics.adaptive_policy] as analytics_adaptive_policy
+  [analytics.auth] as analytics_auth
+  [analytics.corridor_performance] as analytics_corridor_performance
+  [analytics.dashboard_layouts] as analytics_dashboard_layouts
+  [analytics.db] as analytics_db
+  [analytics.db.absence] as analytics_db_absence
+  [analytics.db.connection] as analytics_db_connection
+  [analytics.db.fleet] as analytics_db_fleet
+  [analytics.db.inventory] as analytics_db_inventory
+  [analytics.db.legacy] as analytics_db_legacy
+  [analytics.db.parameters] as analytics_db_parameters
+  [analytics.db.schema] as analytics_db_schema
+  [analytics.db.shifts] as analytics_db_shifts
+  [analytics.db.shipments] as analytics_db_shipments
+  [analytics.db.site_media] as analytics_db_site_media
+  [analytics.db.workers] as analytics_db_workers
+  [analytics.db_connection] as analytics_db_connection
+  [analytics.db_parameters] as analytics_db_parameters
+  [analytics.driver_shifts] as analytics_driver_shifts
+  [analytics.google_sheets] as analytics_google_sheets
+  [analytics.historical_ingest] as analytics_historical_ingest
+  [analytics.ingest_live_data] as analytics_ingest_live_data
+  [analytics.ingest_real_gps] as analytics_ingest_real_gps
+  [analytics.job_loading] as analytics_job_loading
+  [analytics.kent_ams_import] as analytics_kent_ams_import
+  [analytics.labor_analytics] as analytics_labor_analytics
+  [analytics.lane_assignment] as analytics_lane_assignment
+  [analytics.live_data] as analytics_live_data
+  [analytics.margin_regression] as analytics_margin_regression
+  [analytics.moveware_import] as analytics_moveware_import
+  [analytics.operational_signals] as analytics_operational_signals
+  [analytics.operations_assignment] as analytics_operations_assignment
+  [analytics.operations_diary] as analytics_operations_diary
+  [analytics.operations_workbook] as analytics_operations_workbook
+  [analytics.optimizer] as analytics_optimizer
+  [analytics.planner] as analytics_planner
+  [analytics.price_distribution] as analytics_price_distribution
+  [analytics.price_history_analysis] as analytics_price_history_analysis
+  [analytics.profitability_analysis] as analytics_profitability_analysis
+  [analytics.profitability_charts] as analytics_profitability_charts
+  [analytics.profitability_map_prep] as analytics_profitability_map_prep
+  [analytics.quote_guidance] as analytics_quote_guidance
+  [analytics.route_map_prep] as analytics_route_map_prep
+  [analytics.routes_map] as analytics_routes_map
+  [analytics.routing_provider] as analytics_routing_provider
+  [analytics.seed_harness] as analytics_seed_harness
+  [analytics.situational_awareness] as analytics_situational_awareness
+  [analytics.vehicle_repairs] as analytics_vehicle_repairs
+  [analytics.vehicle_workbook] as analytics_vehicle_workbook
+}
+analytics_adaptive_policy --> analytics_db_parameters
+analytics_corridor_performance --> analytics_price_distribution
+analytics_dashboard_layouts --> analytics_db_parameters
+analytics_db --> analytics_adaptive_policy
+analytics_db --> analytics_auth
+analytics_db --> analytics_db_absence
+analytics_db --> analytics_db_connection
+analytics_db --> analytics_db_fleet
+analytics_db --> analytics_db_inventory
+analytics_db --> analytics_db_parameters
+analytics_db --> analytics_db_schema
+analytics_db --> analytics_db_shipments
+analytics_db --> analytics_db_site_media
+analytics_db_absence --> analytics_db_schema
+analytics_db_connection --> analytics_db_parameters
+analytics_db_connection --> analytics_db_schema
+analytics_db_fleet --> analytics_db_schema
+analytics_db_fleet --> analytics_google_sheets
+analytics_db_inventory --> analytics_db_schema
+analytics_db_inventory --> analytics_db_shipments
+analytics_db_inventory --> analytics_google_sheets
+analytics_db_legacy --> analytics_db_connection
+analytics_db_legacy --> analytics_db_parameters
+analytics_db_legacy --> analytics_lane_assignment
+analytics_db_legacy --> analytics_routes_map
+analytics_db_schema --> analytics_db_connection
+analytics_db_schema --> analytics_db_legacy
+analytics_db_shifts --> analytics_db_legacy
+analytics_db_shipments --> analytics_db_fleet
+analytics_db_shipments --> analytics_db_legacy
+analytics_db_shipments --> analytics_db_schema
+analytics_db_site_media --> analytics_db_schema
+analytics_db_workers --> analytics_db_legacy
+analytics_db_connection --> analytics_db_connection
+analytics_db_parameters --> analytics_db_parameters
+analytics_driver_shifts --> analytics_db
+analytics_driver_shifts --> analytics_google_sheets
+analytics_historical_ingest --> analytics_db
+analytics_historical_ingest --> analytics_lane_assignment
+analytics_historical_ingest --> analytics_routes_map
+analytics_ingest_live_data --> analytics_live_data
+analytics_ingest_real_gps --> analytics_db_connection
+analytics_ingest_real_gps --> analytics_live_data
+analytics_job_loading --> analytics_db
+analytics_job_loading --> analytics_lane_assignment
+analytics_job_loading --> analytics_live_data
+analytics_job_loading --> analytics_price_distribution
+analytics_job_loading --> analytics_routes_map
+analytics_kent_ams_import --> analytics_db
+analytics_kent_ams_import --> analytics_db_parameters
+analytics_kent_ams_import --> analytics_operational_signals
+analytics_labor_analytics --> analytics_db
+analytics_labor_analytics --> analytics_operations_assignment
+analytics_live_data --> analytics_db_connection
+analytics_moveware_import --> analytics_db
+analytics_moveware_import --> analytics_kent_ams_import
+analytics_moveware_import --> analytics_operational_signals
+analytics_operations_assignment --> analytics_db_inventory
+analytics_operations_assignment --> analytics_db_legacy
+analytics_operations_assignment --> analytics_db_parameters
+analytics_operations_assignment --> analytics_db_schema
+analytics_operations_diary --> analytics_db_schema
+analytics_operations_diary --> analytics_db_shipments
+analytics_operations_diary --> analytics_operations_assignment
+analytics_operations_workbook --> analytics_db_fleet
+analytics_operations_workbook --> analytics_db_inventory
+analytics_operations_workbook --> analytics_vehicle_workbook
+analytics_planner --> analytics_db_site_media
+analytics_planner --> analytics_lane_assignment
+analytics_planner --> analytics_operational_signals
+analytics_planner --> analytics_operations_assignment
+analytics_price_distribution --> analytics_corridor_performance
+analytics_price_distribution --> analytics_db
+analytics_price_distribution --> analytics_historical_ingest
+analytics_price_distribution --> analytics_job_loading
+analytics_price_distribution --> analytics_lane_assignment
+analytics_price_distribution --> analytics_price_history_analysis
+analytics_price_distribution --> analytics_profitability_analysis
+analytics_price_distribution --> analytics_profitability_charts
+analytics_price_distribution --> analytics_profitability_map_prep
+analytics_price_distribution --> analytics_route_map_prep
+analytics_price_distribution --> analytics_routes_map
+analytics_profitability_map_prep --> analytics_lane_assignment
+analytics_profitability_map_prep --> analytics_profitability_analysis
+analytics_route_map_prep --> analytics_profitability_map_prep
+analytics_route_map_prep --> analytics_routing_provider
+analytics_routes_map --> analytics_routing_provider
+analytics_seed_harness --> analytics_db_inventory
+analytics_seed_harness --> analytics_db_schema
+analytics_seed_harness --> analytics_operations_assignment
+analytics_situational_awareness --> analytics_adaptive_policy
+analytics_vehicle_repairs --> analytics_db
+analytics_vehicle_workbook --> analytics_db
+analytics_vehicle_workbook --> analytics_google_sheets
+[Integrations + Extensions] as external_integrations_extensions
+analytics_labor_analytics ..> external_integrations_extensions : labor_analytics -> call_ops
+[Quote + Routing Core] as external_quote_routing_core
+analytics_historical_ingest ..> external_quote_routing_core : historical_ingest -> routing
+analytics_kent_ams_import ..> external_quote_routing_core : kent_ams_import -> pricing
+analytics_live_data ..> external_quote_routing_core : live_data -> schema
+analytics_routing_provider ..> external_quote_routing_core : routing_provider -> routing
+@enduml

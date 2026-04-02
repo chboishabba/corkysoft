@@ -72,6 +72,22 @@ def test_registry_lists_four_read_only_tools() -> None:
     assert len(envelope["tools"]) == 4
 
 
+def test_call_tool_rejects_blank_name() -> None:
+    response = _call_tool("", {})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "input_error"
+    assert "tool name is required" in response["error"]["message"]
+
+
+def test_call_tool_reports_unknown_tool() -> None:
+    response = _call_tool("corkysoft.unknown_tool", {})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "tool_error"
+    assert "Unknown tool" in response["error"]["message"]
+
+
 def test_mcp_main_defaults_to_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 

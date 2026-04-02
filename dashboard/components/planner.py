@@ -35,6 +35,8 @@ from analytics.planner import (
     list_planner_corridor_candidates,
 )
 from dashboard.map_provider import plotly_map_layout
+from dashboard.query_params import _set_query_params
+from dashboard.state import _rerun_app
 from dashboard.map_provider import (
     google_street_view_360_url,
     google_street_view_static_url,
@@ -371,11 +373,7 @@ def render_planner_tab(filtered_df: pd.DataFrame, conn: sqlite3.Connection) -> N
                 st.success(
                     "Draft operational plan confirmed into job segments. Continue in Operations to assign resources."
                 )
-                rerun = getattr(st, "rerun", None)
-                if callable(rerun):
-                    rerun()
-                else:
-                    _rerun_app()
+                _rerun_app()
 
 
 def _load_jobs(conn: sqlite3.Connection) -> list[dict[str, Any]]:
@@ -411,14 +409,6 @@ def _format_job_label(job: dict[str, Any]) -> str:
         f"{job.get('origin_resolved') or job.get('origin') or '?'} → "
         f"{job.get('destination_resolved') or job.get('destination') or '?'}"
     )
-
-
-def _set_query_params(**params: str) -> None:
-    query_params = getattr(st, "query_params", None)
-    if query_params is not None:
-        query_params.from_dict(params)
-        return
-    st.experimental_set_query_params(**params)
 
 
 def _date_input_value(value: Any) -> date:
@@ -1028,17 +1018,3 @@ def _parse_optional_json(value: str) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         raise ValueError("Payload must be a JSON object.")
     return payload
-
-
-def _rerun_app() -> None:
-    rerun = getattr(st, "rerun", None)
-    if callable(rerun):
-        rerun()
-        return
-
-    experimental_rerun = getattr(st, "experimental_rerun", None)
-    if callable(experimental_rerun):
-        experimental_rerun()
-        return
-
-    raise RuntimeError("Streamlit rerun API is unavailable.")

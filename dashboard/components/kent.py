@@ -18,8 +18,11 @@ from analytics.kent_ams_import import (
 from corkysoft.quote_service import format_currency
 
 
+KENT_ADMIN_WRITE_ROLES: frozenset[str] = frozenset({"system_rollout_admin"})
+
+
 def _kent_admin_write_enabled(current_role_key: str | None) -> bool:
-    return current_role_key == "system_rollout_admin"
+    return current_role_key in KENT_ADMIN_WRITE_ROLES
 
 
 def render_kent_tenders_tab(
@@ -206,7 +209,7 @@ def render_kent_admin_tab(
     )
 
     if current_role_key and render_dashboard_user_admin is not None:
-        render_dashboard_user_admin(conn, current_role_key)
+        render_dashboard_user_admin(conn, current_role_key=current_role_key)
 
     write_enabled = _kent_admin_write_enabled(current_role_key)
 

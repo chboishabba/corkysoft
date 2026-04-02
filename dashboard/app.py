@@ -1,11 +1,9 @@
 """Streamlit dashboard for the price distribution analysis."""
 from __future__ import annotations
 
-import inspect
 import io
 import json
 import math
-import os
 import sqlite3
 import sys
 from datetime import date
@@ -31,7 +29,9 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency for pin UI
     st_folium = None  # type: ignore[assignment]
 
 from analytics.dashboard_layouts import (
+    PRIMARY_ONLY_ROLE_KEYS,
     ROLE_LAYOUT_DEFAULTS,
+    find_layout_by_tab,
     get_dashboard_role_layouts,
     missing_recommended_primary_tabs,
     resolve_dashboard_layout,
@@ -45,16 +45,12 @@ from analytics.db import (
     INVENTORY_SUBSTITUTION_APPROVER_ROLES,
     INVENTORY_SUBSTITUTION_STATUSES,
     allocate_inventory_to_segment,
-    auto_provision_google_admin_user,
-    bootstrap_dashboard_admin,
     decide_inventory_substitution,
     ensure_dashboard_tables,
     get_allowed_inventory_execution_stages,
-    get_dashboard_user_by_email,
     import_inventory_items_from_dataframe,
     import_inventory_movements_from_dataframe,
     import_suppliers_from_google_sheet,
-    list_dashboard_users,
     list_inventory,
     list_inventory_balances,
     list_inventory_execution_events,
@@ -64,15 +60,10 @@ from analytics.db import (
     list_inventory_substitution_reason_codes,
     list_inventory_substitutions,
     list_segment_inventory_coordination,
-    normalize_user_email,
     request_inventory_substitution,
-    record_dashboard_user_login,
     record_inventory_execution_event,
     record_inventory_movement,
-    resolve_test_auth_override,
-    resolve_ui_auth_policy,
     resolve_inventory_exception,
-    upsert_dashboard_user,
     upsert_inventory_requirement,
     upsert_inventory_substitution_reason_code,
 )
@@ -146,12 +137,38 @@ from dashboard.components.calls import render_calls_tab
 from dashboard.components.optimizer import render_optimizer
 from dashboard.components.quote_builder import render_quote_builder
 from dashboard.data import blank_column_mapping
+from dashboard.views.quote_view import render_quote_view
+from dashboard.views.pricing_intelligence_view import render_pricing_intelligence_view
+from dashboard.views.network_view import render_network_view
+from dashboard.views.operations_view import render_operations_view
+from dashboard.views.admin_view import render_admin_view
 from dashboard.map_provider import (
     folium_map_configuration,
     google_maps_api_key,
     plotly_map_layout,
     pydeck_map_kwargs,
 )
+from dashboard.auth_ui import (
+    _auth_redirect_config_issue,
+    _render_anonymous_dev_banner,
+    _render_authenticated_user_banner,
+    _render_auth_gate,
+    _render_dashboard_user_admin,
+    _resolve_dashboard_identity,
+)
+from dashboard.query_params import _get_query_params, _set_query_params
+from dashboard.state import _ensure_pin_state, _first_non_empty, _rerun_app
+from dashboard.data_controls import render_dataset_sidebar
+from dashboard.layout_state import (
+    LAYOUT_PENDING_KEY as _LAYOUT_PENDING_KEY,
+    hydrate_role_layout_session as _hydrate_role_layout_session,
+    layout_defaults_from_layout as _layout_defaults_from_layout,
+)
+from dashboard.shell import (
+    ANALYTICS_SHELL_TABS as _ANALYTICS_SHELL_TABS,
+    resolve_dashboard_shell as _resolve_dashboard_shell,
+)
+from dashboard.tab_registry import build_tab_map
 DEFAULT_TARGET_MARGIN_PERCENT = 20.0
 _AUS_LAT_LON = (-25.2744, 133.7751)
 _PIN_NOTE = "Manual pin override used for routing"
@@ -162,66 +179,13 @@ _NULL_CLIENT_NOTES_KEY = "quote_null_client_notes"
 _NULL_CLIENT_DEFAULT_COMPANY = "Null (filler) client"
 _NULL_CLIENT_DEFAULT_NOTES = "Placeholder client captured via quote builder."
 PRICE_DASHBOARD_TABS = [
-    "Histogram",
-    "Price history",
-    "Profitability insights",
-    "Live network overview",
-    "Route maps",
-    "Dispatch",
-    "Operations diary",
-    "Planner",
+    "Quote",
+    "Pricing Intelligence",
+    "Network",
     "Operations",
-    "Fleet",
-    "Vehicle maintenance",
-    "Quote builder",
-    "Calls",
-    "Kent tenders",
-    "Kent admin",
-    "Optimizer",
-    "Inventory",
-    "Staff",
-    "Driver shifts",
-    "Payroll / Labor analytics",
+    "Admin",
 ]
 _QUOTE_COUNTRY_STATE_KEY = "quote_builder_country"
-
-
-def _initial_pin_state(result: QuoteResult) -> Dict[str, Any]:
-    return {
-        "origin": {
-            "lon": float(result.origin_lon),
-            "lat": float(result.origin_lat),
-        },
-        "destination": {
-            "lon": float(result.dest_lon),
-            "lat": float(result.dest_lat),
-        },
-        "enabled": False,
-    }
-
-
-def _ensure_pin_state(result: QuoteResult) -> Dict[str, Any]:
-    state: Dict[str, Any] = st.session_state.get("quote_pin_override", {})
-    if not state or "origin" not in state or "destination" not in state:
-        state = _initial_pin_state(result)
-    else:
-        state.setdefault("enabled", False)
-        # When result coordinates change, refresh defaults so pins move with them
-        origin_state = state.get("origin") or {}
-        dest_state = state.get("destination") or {}
-        if not origin_state:
-            origin_state = {}
-        if not dest_state:
-            dest_state = {}
-        origin_state.setdefault("lon", float(result.origin_lon))
-        origin_state.setdefault("lat", float(result.origin_lat))
-        dest_state.setdefault("lon", float(result.dest_lon))
-        dest_state.setdefault("lat", float(result.dest_lat))
-        state["origin"] = origin_state
-        state["destination"] = dest_state
-    st.session_state["quote_pin_override"] = state
-    return state
-
 
 def _pin_coordinates(entry: Dict[str, Any]) -> tuple[float, float]:
     lon = entry.get("lon")
@@ -237,6 +201,17 @@ def _pin_lon_key(map_key: str) -> str:
 
 def _pin_lat_key(map_key: str) -> str:
     return f"{map_key}_lat_input"
+
+
+def _canonical_role_layout(role_key: str) -> dict[str, Any]:
+    base = ROLE_LAYOUT_DEFAULTS[role_key]
+    return {
+        "roleKey": role_key,
+        "label": str(base["label"]),
+        "defaultLandingTab": str(base["defaultLandingTab"]),
+        "primaryTabs": list(base["primaryTabs"]),
+        "hiddenTabs": list(base["hiddenTabs"]),
+    }
 
 
 def _render_pin_picker(
@@ -306,313 +281,6 @@ def _render_pin_picker(
     st.session_state["quote_pin_override"] = st.session_state.get("quote_pin_override", {})
     return current_lon, current_lat
 
-def _set_query_params(**params: str) -> None:
-    """Set Streamlit query parameters using the stable API when available."""
-    query_params = getattr(st, "query_params", None)
-    if query_params is not None:
-        query_params.from_dict(params)
-        return
-    # Fallback for older Streamlit versions.
-    st.experimental_set_query_params(**params)
-
-
-def _get_query_params() -> Dict[str, List[str]]:
-    """Return query parameters as a dictionary of lists."""
-    query_params = getattr(st, "query_params", None)
-    if query_params is not None:
-        return {key: query_params.get_all(key) for key in query_params.keys()}
-    return st.experimental_get_query_params()
-
-
-def _rerun_app() -> None:
-    """Trigger a Streamlit rerun using the available API."""
-    rerun = getattr(st, "rerun", None)
-    if callable(rerun):
-        rerun()
-        return
-
-    experimental_rerun = getattr(st, "experimental_rerun", None)
-    if callable(experimental_rerun):
-        experimental_rerun()
-        return
-
-    raise RuntimeError("Streamlit rerun API is unavailable.")
-
-
-def _streamlit_auth_configured() -> bool:
-    user_obj = getattr(st, "user", None)
-    return getattr(user_obj, "is_logged_in", None) is not None
-
-
-def _streamlit_user_claims() -> Dict[str, Any]:
-    user_obj = getattr(st, "user", None)
-    if user_obj is None:
-        return {}
-    claims: Dict[str, Any] = {}
-    for key in ("email", "name", "sub"):
-        value = getattr(user_obj, key, None)
-        if isinstance(value, str) and value.strip():
-            claims[key] = value.strip()
-    claims["is_logged_in"] = bool(getattr(user_obj, "is_logged_in", False))
-    return claims
-
-
-def _resolve_dashboard_identity(
-    conn: sqlite3.Connection,
-) -> dict[str, Any]:
-    policy = resolve_ui_auth_policy()
-    bootstrap_dashboard_admin(conn, allowed_role_keys=tuple(ROLE_LAYOUT_DEFAULTS.keys()))
-    test_override = resolve_test_auth_override(
-        conn,
-        allowed_role_keys=tuple(ROLE_LAYOUT_DEFAULTS.keys()),
-    )
-    if test_override is not None:
-        return test_override
-
-    if not policy["requireAuth"]:
-        return {
-            "mode": "anonymous",
-            "policy": policy,
-            "user": None,
-            "claims": {},
-            "configured": _streamlit_auth_configured(),
-        }
-
-    configured = _streamlit_auth_configured()
-    claims = _streamlit_user_claims()
-    redirect_config_issue = _auth_redirect_config_issue(policy)
-    if redirect_config_issue is not None:
-        return {
-            "mode": "misconfigured",
-            "policy": policy,
-            "user": None,
-            "claims": claims,
-            "configured": configured,
-            "detail": redirect_config_issue,
-        }
-    if not configured:
-        return {
-            "mode": "misconfigured",
-            "policy": policy,
-            "user": None,
-            "claims": claims,
-            "configured": False,
-        }
-
-    if not claims.get("is_logged_in"):
-        return {
-            "mode": "login_required",
-            "policy": policy,
-            "user": None,
-            "claims": claims,
-            "configured": True,
-        }
-
-    email = normalize_user_email(claims.get("email"))
-    local_user = get_dashboard_user_by_email(conn, email=email)
-    if local_user is None:
-        local_user = auto_provision_google_admin_user(
-            conn,
-            email=email,
-            google_sub=claims.get("sub"),
-            display_name=claims.get("name"),
-            allowed_role_keys=tuple(ROLE_LAYOUT_DEFAULTS.keys()),
-        )
-    if local_user is None:
-        return {
-            "mode": "unauthorized",
-            "policy": policy,
-            "user": None,
-            "claims": claims,
-            "configured": True,
-        }
-    if not local_user["active"]:
-        return {
-            "mode": "inactive",
-            "policy": policy,
-            "user": local_user,
-            "claims": claims,
-            "configured": True,
-        }
-
-    refreshed_user = record_dashboard_user_login(
-        conn,
-        email=email,
-        google_sub=claims.get("sub"),
-        display_name=claims.get("name"),
-    ) or local_user
-    return {
-        "mode": "authenticated",
-        "policy": policy,
-        "user": refreshed_user,
-        "claims": claims,
-        "configured": True,
-    }
-
-
-def _render_auth_gate(auth_state: dict[str, Any]) -> None:
-    st.title("Corkysoft")
-    st.caption("Private dashboard access is controlled by Google sign-in plus a local Corkysoft allowlist.")
-
-    mode = str(auth_state["mode"])
-    if mode == "misconfigured":
-        detail = str(auth_state.get("detail") or "").strip()
-        st.error(
-            "UI auth is required but Streamlit OIDC is not configured correctly. Add `.streamlit/secrets.toml` auth settings before starting this deployment."
-        )
-        if detail:
-            st.caption(detail)
-        st.stop()
-
-    if mode == "login_required":
-        st.info("Sign in with Google to continue.")
-        login = getattr(st, "login", None)
-        if not callable(login):
-            st.error("Streamlit login support is unavailable in this runtime.")
-        elif st.button("Sign in with Google", key="dashboard_auth_login_google"):
-            login("google")
-        st.stop()
-
-    claims = auth_state.get("claims", {})
-    email = claims.get("email") or "Unknown account"
-    if mode == "unauthorized":
-        st.error(f"`{email}` is not in the local Corkysoft allowlist.")
-    elif mode == "inactive":
-        st.error(f"`{email}` is currently inactive in Corkysoft.")
-    else:
-        st.error("Authentication failed.")
-
-    logout = getattr(st, "logout", None)
-    if callable(logout) and st.button("Sign out", key="dashboard_auth_logout_gate"):
-        logout()
-    st.stop()
-
-
-def _render_authenticated_user_banner(auth_state: dict[str, Any]) -> None:
-    user = auth_state.get("user") or {}
-    claims = auth_state.get("claims") or {}
-    policy = auth_state.get("policy") or {}
-    display_name = user.get("displayName") or claims.get("name") or user.get("email") or "Unknown user"
-    email = user.get("email") or claims.get("email") or ""
-    role_key = user.get("roleKey") or "dispatcher"
-    role_label = ROLE_LAYOUT_DEFAULTS.get(role_key, {}).get("label", role_key)
-
-    st.success(
-        f"Authenticated via Google as {display_name} ({email}) · role: {role_label}"
-    )
-    banner_cols = st.columns([3, 2, 1])
-    banner_cols[0].caption(f"Google account: **{display_name}**")
-    banner_cols[1].caption(f"{email} · {role_label}")
-    logout = getattr(st, "logout", None)
-    if callable(logout) and banner_cols[2].button("Log out", key="dashboard_auth_logout_button"):
-        logout()
-    if policy.get("autoProvisionGoogleAdmin"):
-        st.warning(
-            "Temporary auth mode is active: any successful Google login is auto-provisioned locally as System / Rollout Admin."
-        )
-
-
-def _render_anonymous_dev_banner(auth_state: dict[str, Any]) -> None:
-    policy = auth_state.get("policy") or {}
-    environment = str(policy.get("environment") or "development")
-    st.warning(
-        "Anonymous development mode is active. Google sign-in is bypassed for this local run."
-    )
-    st.caption(
-        f"Mode: anonymous local development · environment: {environment} · set `CORKYSOFT_REQUIRE_UI_AUTH=1` and unset `CORKYSOFT_ALLOW_ANONYMOUS_UI` to force login."
-    )
-
-
-def _auth_redirect_config_issue(policy: dict[str, Any]) -> str | None:
-    public_base_url = str(policy.get("publicBaseUrl") or "").strip().rstrip("/")
-    if not public_base_url:
-        return None
-    auth_section = getattr(st, "secrets", {}).get("auth", {})
-    if not isinstance(auth_section, dict):
-        return (
-            "CORKYSOFT_PUBLIC_BASE_URL is set but Streamlit auth secrets are missing. "
-            "Configure the deployed or tunneled redirect URI explicitly."
-        )
-    redirect_uri = str(auth_section.get("redirect_uri") or "").strip()
-    if not redirect_uri:
-        return (
-            "CORKYSOFT_PUBLIC_BASE_URL is set but [auth].redirect_uri is missing from "
-            ".streamlit/secrets.toml."
-        )
-    expected_redirect = f"{public_base_url}/oauth2callback"
-    if redirect_uri.rstrip("/") != expected_redirect:
-        return (
-            "OIDC redirect URI does not match the configured public origin. "
-            f"Expected `{expected_redirect}` but found `{redirect_uri}`."
-        )
-    return None
-
-
-def _render_dashboard_user_admin(
-    conn: sqlite3.Connection,
-    *,
-    current_role_key: str,
-) -> None:
-    if current_role_key != "system_rollout_admin":
-        return
-
-    st.markdown("#### Dashboard users")
-    users = list_dashboard_users(conn)
-    if users:
-        users_df = pd.DataFrame(
-            [
-                {
-                    "Email": item["email"],
-                    "Name": item["displayName"] or "",
-                    "Role": item["roleKey"],
-                    "Active": item["active"],
-                    "Provider": item["authProvider"],
-                    "Google sub": item["googleSub"] or "",
-                    "Last login": item["lastLoginAt"] or "",
-                }
-                for item in users
-            ]
-        )
-        st.dataframe(users_df, width="stretch", hide_index=True)
-    else:
-        st.caption("No local dashboard users have been created yet.")
-
-    with st.form("dashboard_user_admin_form"):
-        user_cols = st.columns(4)
-        email = user_cols[0].text_input("Email")
-        display_name = user_cols[1].text_input("Name")
-        role_key = user_cols[2].selectbox(
-            "Role",
-            options=list(ROLE_LAYOUT_DEFAULTS.keys()),
-            format_func=lambda key: str(ROLE_LAYOUT_DEFAULTS[key]["label"]),
-        )
-        active = user_cols[3].checkbox("Active", value=True)
-        if st.form_submit_button("Save dashboard user"):
-            try:
-                upsert_dashboard_user(
-                    conn,
-                    email=email,
-                    display_name=display_name or None,
-                    role_key=role_key,
-                    active=active,
-                    allowed_role_keys=tuple(ROLE_LAYOUT_DEFAULTS.keys()),
-                )
-            except ValueError as exc:
-                st.error(str(exc))
-            else:
-                st.success("Dashboard user saved.")
-                _rerun_app()
-
-
-def _first_non_empty(route: pd.Series, columns: Sequence[str]) -> Optional[str]:
-    for column in columns:
-        if column in route and isinstance(route[column], str):
-            value = route[column].strip()
-            if value:
-                return value
-    return None
-
-
 def _format_route_label(route: pd.Series) -> str:
     origin = _first_non_empty(
         route,
@@ -674,6 +342,7 @@ def _extract_route_volume(route: pd.Series, candidates: Sequence[str]) -> Option
     return None
 
 def render_price_distribution_dashboard():
+    # Analytics filters and pricing controls remain available on demand.
     tabs_placeholder = st.container()
 
     with connection_scope() as conn:
@@ -688,15 +357,40 @@ def render_price_distribution_dashboard():
             _render_auth_gate(auth_state)
             return
 
-        st.title("Price distribution (Airbnb-style)")
-        st.caption(
-            "Visualise $ per m³ by corridor and client, with break-even bands to spot loss-leaders."
+        tab_labels = PRICE_DASHBOARD_TABS
+        role_layouts = get_dashboard_role_layouts(conn, available_tabs=tab_labels)
+        params = _get_query_params()
+        view_param = params.get("view", [None])[0]
+        if view_param not in tab_labels:
+            view_param = None
+        view_layout = find_layout_by_tab(role_layouts, view_param)
+        role_labels = {item["label"]: item for item in role_layouts}
+        auth_user = auth_state.get("user")
+        auth_role_key = str(auth_user.get("roleKey")) if isinstance(auth_user, dict) and auth_user.get("roleKey") else "dispatcher"
+        default_role_label = next(
+            (
+                item["label"]
+                for item in role_layouts
+                if item["roleKey"] == auth_role_key
+            ),
+            next((item["label"] for item in role_layouts if item["roleKey"] == "dispatcher"), role_layouts[0]["label"]),
         )
+        shell_role_label = default_role_label
+        if auth_state["mode"] == "anonymous":
+            shell_role_label = str(st.session_state.get("dashboard_active_role") or default_role_label)
+            if view_layout is not None:
+                shell_role_label = str(view_layout["label"])
+        if shell_role_label not in role_labels:
+            shell_role_label = default_role_label
+        shell_role_layout = role_labels[shell_role_label]
+        shell_tab = view_param or str(
+            st.session_state.get("dashboard_session_landing_tab")
+            or shell_role_layout["defaultLandingTab"]
+        )
+        shell_copy = _resolve_dashboard_shell(shell_tab)
 
-        if auth_state["mode"] == "authenticated":
-            _render_authenticated_user_banner(auth_state)
-        elif auth_state["mode"] == "anonymous":
-            _render_anonymous_dev_banner(auth_state)
+        st.title(str(shell_copy["title"]))
+        st.caption(str(shell_copy["caption"]))
 
         break_even_value = ensure_break_even_parameter(conn)
         ensure_quote_schema(conn)
@@ -715,278 +409,38 @@ def render_price_distribution_dashboard():
         selected_clients: List[str] = []
         postcode_prefix: Optional[str] = None
 
-        with st.sidebar:
-            st.header("Filters")
-            if st.button(
-                "Initialise database tables",
-                help=(
-                    "Create empty historical and live job tables so the dashboard can run "
-                    "before data imports."
-                ),
-                key="dashboard_sidebar_init_db",
-            ):
-                ensure_core_schema(conn)
-                ensure_dashboard_tables(conn)
-                ensure_quote_schema(conn)
-                st.success(
-                    "Database tables initialised. Import data or start building quotes below."
-                )
+        dataset_context = render_dataset_sidebar(
+            conn,
+            sidebar_heading=str(shell_copy["sidebar_heading"]),
+            sidebar_caption=shell_copy.get("sidebar_caption"),
+            collapse_analytics_sidebar=bool(shell_copy.get("collapse_analytics_sidebar")),
+            dataset_loader=dataset_loader,
+            dataset_key=dataset_key,
+            dataset_label=dataset_label,
+            df_all=df_all,
+            mapping=mapping,
+            break_even_value=break_even_value,
+            rerun_app=_rerun_app,
+        )
+        dataset_loader = dataset_context.dataset_loader
+        dataset_key = dataset_context.dataset_key
+        dataset_label = dataset_context.dataset_label
+        df_all = dataset_context.df_all
+        mapping = dataset_context.mapping
+        dataset_error = dataset_context.dataset_error
+        data_available = dataset_context.data_available
+        start_date = dataset_context.start_date
+        end_date = dataset_context.end_date
+        selected_corridor = dataset_context.selected_corridor
+        selected_clients = dataset_context.selected_clients
+        postcode_prefix = dataset_context.postcode_prefix
+        break_even_value = dataset_context.break_even_value
+        empty_dataset_message = dataset_context.empty_dataset_message
 
-            dataset_options = {
-                "Historical quotes": ("historical", load_historical_jobs),
-                "Saved quick quotes": ("quotes", load_quotes),
-                "Live jobs": ("live", load_live_jobs),
-            }
-            dataset_label = st.radio(
-                "Dataset",
-                options=list(dataset_options.keys()),
-                format_func=lambda label: label,
-                key="dashboard_dataset_selector",
-            )
-            dataset_key, dataset_loader = dataset_options[dataset_label]
-
-            provider_options = {
-                "OpenRouteService": "ors",
-                "Google Maps": "google",
-            }
-            provider_labels = list(provider_options.keys())
-            current_provider_env = os.environ.get("ROUTING_PROVIDER", "ors").strip().lower()
-            default_provider_label = next(
-                (label for label, value in provider_options.items() if value == current_provider_env),
-                provider_labels[0],
-            )
-            provider_choice_label = st.radio(
-                "Routing provider",
-                options=provider_labels,
-                index=provider_labels.index(default_provider_label),
-                key="dashboard_routing_provider_selector",
-                help=(
-                    "Select which routing provider to use for map tiles and route geometry."
-                ),
-            )
-            resolved_provider = provider_options[provider_choice_label]
-            if resolved_provider != current_provider_env:
-                os.environ["ROUTING_PROVIDER"] = resolved_provider
-                _rerun_app()
-
-            if resolved_provider == "google" and not google_maps_api_key():
-                st.warning(
-                    "Google Maps selected but GOOGLE_MAPS_API_KEY is not configured."
-                )
-
-            import_feedback: Optional[tuple[str, str]] = None
-            if dataset_key == "historical":
-                with st.expander("Import historical jobs from CSV", expanded=False):
-                    ingest_summary = latest_historical_ingest_summary(conn)
-                    if ingest_summary is not None:
-                        ingest_cols = st.columns(4)
-                        ingest_cols[0].metric(
-                            "Readiness",
-                            str(ingest_summary.get("readiness_status") or "unknown"),
-                        )
-                        ingest_cols[1].metric(
-                            "Inserted",
-                            int(ingest_summary.get("inserted_rows") or 0),
-                        )
-                        ingest_cols[2].metric(
-                            "Skipped",
-                            int(ingest_summary.get("skipped_rows") or 0),
-                        )
-                        ingest_cols[3].metric(
-                            "Issues",
-                            int(ingest_summary.get("issue_count") or 0),
-                        )
-                        st.caption(
-                            "Latest ingest: "
-                            + str(ingest_summary.get("source_name") or "unknown source")
-                            + " at "
-                            + str(ingest_summary.get("completed_at") or "unknown time")
-                        )
-                        coverage = ingest_summary.get("coverage_summary") or {}
-                        top_issues = coverage.get("topIssueCodes") or []
-                        if top_issues:
-                            st.caption(
-                                "Top issues: "
-                                + ", ".join(
-                                    f"{item['issueCode']} ({item['count']})"
-                                    for item in top_issues
-                                )
-                            )
-                    import_form = st.form(key="dashboard_sidebar_historical_import_form")
-                    uploaded_file = import_form.file_uploader(
-                        "Select CSV file", type=["csv"], help="Requires headers such as date, origin, destination and m3."
-                    )
-                    submit_import = import_form.form_submit_button("Import jobs")
-                    if submit_import:
-                        if uploaded_file is None:
-                            import_feedback = (
-                                "warning",
-                                "Choose a CSV file before importing.",
-                            )
-                        else:
-                            try:
-                                imported_df = pd.read_csv(uploaded_file)
-                            except Exception as exc:
-                                import_feedback = (
-                                    "error",
-                                    f"Failed to read CSV: {exc}",
-                                )
-                            else:
-                                try:
-                                    inserted, skipped_rows = import_historical_jobs_from_dataframe(
-                                        conn, imported_df
-                                    )
-                                except ValueError as exc:
-                                    import_feedback = ("error", str(exc))
-                                except Exception as exc:
-                                    import_feedback = (
-                                        "error",
-                                        f"Failed to import historical jobs: {exc}",
-                                    )
-                                else:
-                                    if inserted:
-                                        message = (
-                                            f"Imported {inserted} historical job"
-                                            f"{'s' if inserted != 1 else ''}."
-                                        )
-                                        if skipped_rows:
-                                            message += (
-                                                f" Skipped {skipped_rows} row"
-                                                f"{'s' if skipped_rows != 1 else ''} with missing or duplicate data."
-                                            )
-                                        import_feedback = ("success", message)
-                                    else:
-                                        if skipped_rows:
-                                            message = (
-                                                "No new rows imported. Skipped "
-                                                f"{skipped_rows} row{'s' if skipped_rows != 1 else ''} due to validation or duplicates."
-                                            )
-                                        else:
-                                            message = "No rows imported from the provided file."
-                                        import_feedback = ("warning", message)
-
-            try:
-                df_all, mapping = dataset_loader(conn)
-            except RuntimeError as exc:
-                dataset_error = str(exc)
-            except Exception as exc:
-                dataset_error = f"Failed to load {dataset_label.lower()} data: {exc}"
-
-            if import_feedback:
-                level, message = import_feedback
-                if level == "success":
-                    st.success(message)
-                elif level == "warning":
-                    st.info(message)
-                else:
-                    st.error(message)
-
-            data_available = dataset_error is None and not df_all.empty
-
-            today_value = date.today()
-            date_column = "job_date" if "job_date" in df_all.columns else mapping.date
-            if data_available and date_column and date_column in df_all.columns:
-                df_all[date_column] = pd.to_datetime(df_all[date_column], errors="coerce")
-                min_date = df_all[date_column].min()
-                max_date = df_all[date_column].max()
-                default_start = (
-                    min_date.date() if isinstance(min_date, pd.Timestamp) else today_value
-                )
-                default_end = (
-                    max_date.date() if isinstance(max_date, pd.Timestamp) else today_value
-                )
-                date_range = st.date_input(
-                    "Date range",
-                    value=(default_start, default_end),
-                    min_value=default_start,
-                    max_value=default_end,
-                    key="date_range_active",
-                )
-                if isinstance(date_range, tuple) and len(date_range) == 2:
-                    start_date, end_date = date_range
-                else:
-                    start_date = default_start
-                    end_date = default_end
-            else:
-                st.date_input(
-                    "Date range",
-                    value=(today_value, today_value),
-                    disabled=True,
-                    key="date_range_disabled",
-                )
-                start_date = None
-                end_date = None
-
-            corridor_options: List[str] = []
-            if data_available:
-                corridor_series = df_all.get("corridor_display")
-                if corridor_series is not None:
-                    corridor_options = sorted(
-                        pd.Series(corridor_series).dropna().astype(str).unique().tolist()
-                    )
-            corridor_selection = st.selectbox(
-                "Corridor",
-                options=["All corridors"] + corridor_options,
-                index=0,
-                disabled=not data_available,
-            )
-            selected_corridor = None if corridor_selection == "All corridors" else corridor_selection
-
-            client_options: List[str] = []
-            if data_available:
-                client_series = df_all.get("client_display")
-                if client_series is not None:
-                    client_options = sorted(
-                        pd.Series(client_series).dropna().astype(str).unique().tolist()
-                    )
-            selected_clients = st.multiselect(
-                "Client",
-                options=client_options,
-                default=client_options if client_options else [],
-                disabled=not data_available,
-                key="client_filter_multiselect",
-            )
-
-            postcode_prefix = st.text_input(
-                "Corridor contains postcode prefix",
-                value=postcode_prefix or "",
-                disabled=not data_available,
-                help="Match origin or destination postcode prefixes (e.g. 40 to match 4000-4099).",
-                key="postcode_prefix_filter",
-            ) or None
-
-            if dataset_error:
-                st.error(dataset_error)
-            elif not data_available:
-                empty_messages = {
-                    "historical": (
-                        "historical_jobs table has no rows yet. Import historical jobs to populate the view."
-                    ),
-                    "quotes": (
-                        "quotes table has no rows yet. Save a quick quote to populate the view."
-                    ),
-                    "live": "jobs table has no rows yet. Add live jobs to populate the view.",
-                }
-                empty_dataset_message = empty_messages.get(
-                    dataset_key, "No rows available for the selected dataset."
-                )
-                st.info(empty_dataset_message)
-
-            st.subheader("Break-even model")
-            new_break_even = st.number_input(
-                "Break-even $/m³",
-                min_value=0.0,
-                value=float(break_even_value),
-                step=5.0,
-                help="Used to draw break-even bands on the histogram.",
-                key="break_even_input",
-            )
-            if st.button("Update break-even", key="break_even_update_button"):
-                update_break_even(conn, new_break_even)
-                st.success(f"Break-even updated to ${new_break_even:,.2f}")
-                break_even_value = new_break_even
-
-        data_available = dataset_error is None and not df_all.empty
+        if auth_state["mode"] == "authenticated":
+            _render_authenticated_user_banner(auth_state)
+        elif auth_state["mode"] == "anonymous":
+            _render_anonymous_dev_banner(auth_state)
 
         filtered_df = pd.DataFrame()
         filtered_mapping = mapping
@@ -1017,62 +471,87 @@ def render_price_distribution_dashboard():
         elif not has_filtered_data:
             st.warning("No jobs match the selected filters. Quote builder remains available below.")
 
-        tab_labels = PRICE_DASHBOARD_TABS
-        role_layouts = get_dashboard_role_layouts(conn, available_tabs=tab_labels)
-        role_labels = {item["label"]: item for item in role_layouts}
-        auth_user = auth_state.get("user")
-        auth_role_key = str(auth_user.get("roleKey")) if isinstance(auth_user, dict) and auth_user.get("roleKey") else "dispatcher"
-        default_role_label = next(
-            (
-                item["label"]
-                for item in role_layouts
-                if item["roleKey"] == auth_role_key
-            ),
-            next((item["label"] for item in role_layouts if item["roleKey"] == "dispatcher"), role_layouts[0]["label"]),
-        )
+        if auth_state["mode"] == "anonymous" and view_layout is not None:
+            default_role_label = view_layout["label"]
+            if st.session_state.get("dashboard_active_role") != default_role_label:
+                st.session_state["dashboard_active_role"] = default_role_label
         layout_cols = st.columns([2, 2, 2, 1])
-        if auth_state["mode"] == "authenticated":
+        deep_link_locked_role = auth_state["mode"] == "anonymous" and view_layout is not None
+        if auth_state["mode"] == "authenticated" or deep_link_locked_role:
+            selected_role_layout = (
+                view_layout
+                if deep_link_locked_role and view_layout is not None
+                else next(
+                    (item for item in role_layouts if item["roleKey"] == auth_role_key),
+                    role_layouts[0],
+                )
+            )
             selected_role_layout = next(
-                (item for item in role_layouts if item["roleKey"] == auth_role_key),
-                role_layouts[0],
+                (
+                    item
+                    for item in role_layouts
+                    if item["roleKey"] == str(selected_role_layout["roleKey"])
+                ),
+                selected_role_layout,
             )
             layout_cols[0].text_input(
                 "Role layout",
                 value=str(selected_role_layout["label"]),
                 disabled=True,
-                key="dashboard_active_role_locked",
+                key="dashboard_active_role_locked" if auth_state["mode"] == "authenticated" else "dashboard_active_role_deep_linked",
             )
         else:
+            active_role_kwargs: dict[str, Any] = {
+                "options": list(role_labels.keys()),
+                "key": "dashboard_active_role",
+            }
+            if "dashboard_active_role" not in st.session_state:
+                active_role_kwargs["index"] = (
+                    list(role_labels.keys()).index(default_role_label)
+                    if default_role_label in role_labels
+                    else 0
+                )
             selected_role_label = layout_cols[0].selectbox(
                 "Role layout",
-                options=list(role_labels.keys()),
-                index=list(role_labels.keys()).index(st.session_state.get("dashboard_active_role", default_role_label))
-                if st.session_state.get("dashboard_active_role", default_role_label) in role_labels
-                else 0,
-                key="dashboard_active_role",
+                **active_role_kwargs,
             )
             selected_role_layout = role_labels[selected_role_label]
+        if (
+            auth_state["mode"] == "anonymous"
+            and view_param is not None
+            and str(selected_role_layout["roleKey"]) in PRIMARY_ONLY_ROLE_KEYS
+        ):
+            selected_role_layout = _canonical_role_layout(str(selected_role_layout["roleKey"]))
+        _hydrate_role_layout_session(
+            selected_role_layout,
+            force_reset=auth_state["mode"] == "anonymous" and view_param is not None,
+        )
         stale_primary_tabs = missing_recommended_primary_tabs(
             role_key=str(selected_role_layout["roleKey"]),
             layout=selected_role_layout,
             available_tabs=tab_labels,
         )
+        session_primary_tabs_kwargs: dict[str, Any] = {
+            "options": tab_labels,
+            "key": "dashboard_session_primary_tabs",
+        }
+        if "dashboard_session_primary_tabs" not in st.session_state:
+            session_primary_tabs_kwargs["default"] = list(selected_role_layout["primaryTabs"])
         session_primary_tabs = layout_cols[1].multiselect(
             "Session focus tabs",
-            options=tab_labels,
-            default=st.session_state.get("dashboard_session_primary_tabs", selected_role_layout["primaryTabs"]),
-            key="dashboard_session_primary_tabs",
+            **session_primary_tabs_kwargs,
         )
+        session_show_all_kwargs: dict[str, Any] = {
+            "key": "dashboard_show_all_tabs",
+        }
+        if "dashboard_show_all_tabs" not in st.session_state:
+            session_show_all_kwargs["value"] = False
         session_show_all = layout_cols[2].checkbox(
             "Show all tabs this session",
-            value=bool(st.session_state.get("dashboard_show_all_tabs", False)),
-            key="dashboard_show_all_tabs",
+            **session_show_all_kwargs,
         )
         if layout_cols[3].button("Reset layout", key="dashboard_reset_role_layout"):
-            st.session_state["dashboard_session_primary_tabs"] = list(selected_role_layout["primaryTabs"])
-            st.session_state["dashboard_session_hidden_tabs"] = list(selected_role_layout["hiddenTabs"])
-            st.session_state["dashboard_session_landing_tab"] = selected_role_layout["defaultLandingTab"]
-            st.session_state["dashboard_show_all_tabs"] = False
+            st.session_state[_LAYOUT_PENDING_KEY] = _layout_defaults_from_layout(selected_role_layout)
             _rerun_app()
 
         if selected_role_layout["roleKey"] == "dispatcher" and stale_primary_tabs:
@@ -1090,16 +569,16 @@ def render_price_distribution_dashboard():
                     hidden_tabs=list(ROLE_LAYOUT_DEFAULTS["dispatcher"]["hiddenTabs"]),
                     available_tabs=tab_labels,
                 )
-                st.session_state["dashboard_session_primary_tabs"] = list(repaired["primaryTabs"])
-                st.session_state["dashboard_session_hidden_tabs"] = list(repaired["hiddenTabs"])
-                st.session_state["dashboard_session_landing_tab"] = repaired["defaultLandingTab"]
-                st.session_state["dashboard_show_all_tabs"] = False
+                st.session_state[_LAYOUT_PENDING_KEY] = _layout_defaults_from_layout(repaired)
                 _rerun_app()
 
         params = _get_query_params()
         requested_tab = params.get("view", [tab_labels[0]])[0]
         if requested_tab not in tab_labels:
             requested_tab = tab_labels[0]
+        resolved_show_all_tabs = bool(st.session_state.get("dashboard_show_all_tabs", False))
+        if auth_state["mode"] == "anonymous" and view_param is not None:
+            resolved_show_all_tabs = False
         resolved_layout = resolve_dashboard_layout(
             available_tabs=tab_labels,
             layout=selected_role_layout,
@@ -1107,228 +586,81 @@ def render_price_distribution_dashboard():
             session_primary_tabs=st.session_state.get("dashboard_session_primary_tabs", selected_role_layout["primaryTabs"]),
             session_hidden_tabs=st.session_state.get("dashboard_session_hidden_tabs", selected_role_layout["hiddenTabs"]),
             session_landing_tab=st.session_state.get("dashboard_session_landing_tab", selected_role_layout["defaultLandingTab"]),
-            show_all_tabs=bool(st.session_state.get("dashboard_show_all_tabs", False)),
+            show_all_tabs=resolved_show_all_tabs,
         )
         tab_labels = resolved_layout["tabOrder"]
         requested_tab = resolved_layout["landingTab"]
-        requested_tab_index = tab_labels.index(requested_tab)
 
-        can_assign_tab_key = False
-        try:
-            can_assign_tab_key = "key" in inspect.signature(st.tabs).parameters
-        except (TypeError, ValueError):
-            can_assign_tab_key = False
-
-        tab_order = tab_labels
-        if can_assign_tab_key:
-            tabs_key = "dashboard_active_tab"
-            view_param_requested = "view" in params
-            if tabs_key not in st.session_state or (
-                view_param_requested
-                and st.session_state.get(tabs_key) != requested_tab_index
-            ):
-                st.session_state[tabs_key] = requested_tab_index
-
-            with tabs_placeholder:
-                streamlit_tabs = st.tabs(tab_order, key=tabs_key)
-        else:
-            if requested_tab_index != 0:
-                tab_order = [
-                    requested_tab,
-                    *[
-                        label
-                        for idx, label in enumerate(tab_labels)
-                        if idx != requested_tab_index
-                    ],
-                ]
-            with tabs_placeholder:
-                streamlit_tabs = st.tabs(tab_order)
-
-        tab_map: Dict[str, Any] = {
-            label: tab for label, tab in zip(tab_order, streamlit_tabs)
-        }
-
-        metro_distance_km = 100.0
-
-        render_distribution_analytics_surface(
-            tab_map=tab_map,
-            filtered_df=filtered_df,
-            filtered_mapping=filtered_mapping,
-            break_even_value=break_even_value,
-            dataset_error=dataset_error,
-            conn=conn,
-            start_date=start_date,
-            end_date=end_date,
+        tab_result = build_tab_map(
+            tab_labels=tab_labels,
+            requested_tab=requested_tab,
+            params=params,
+            tabs_placeholder=tabs_placeholder,
         )
+        tab_map = tab_result.tab_map
+        requested_tab = tab_result.requested_tab
+        requested_tab_index = tab_result.requested_tab_index
+        tab_order = tab_result.tab_order
+        show_analytics_overview = requested_tab in _ANALYTICS_SHELL_TABS
 
-        if "Route maps" in tab_map:
-            with tab_map["Route maps"]:
-                render_route_maps_tab(
+
+
+        if "Quote" in tab_map:
+            with tab_map["Quote"]:
+                render_quote_view(
+                    conn=conn,
                     filtered_df=filtered_df,
                     mapping=filtered_mapping,
-                    conn=conn,
-                    dataset_key=dataset_key,
-                    metro_distance_km=metro_distance_km,
+                    state=st.session_state,
+                    rerun_app=_rerun_app
                 )
 
-        if "Dispatch" in tab_map:
-            with tab_map["Dispatch"]:
-                render_dispatch_tab(conn)
+        if "Pricing Intelligence" in tab_map:
+            with tab_map["Pricing Intelligence"]:
+                render_pricing_intelligence_view(
+                    conn=conn,
+                    filtered_df=filtered_df,
+                    mapping=filtered_mapping,
+                    break_even_value=break_even_value,
+                    start_date=start_date,
+                    end_date=end_date,
+                    dataset_error=dataset_error
+                )
 
-        if "Operations diary" in tab_map:
-            with tab_map["Operations diary"]:
-                render_operations_diary_tab(conn)
-
-        if "Planner" in tab_map:
-            with tab_map["Planner"]:
-                render_planner_tab(filtered_df=filtered_df, conn=conn)
+        if "Network" in tab_map:
+            with tab_map["Network"]:
+                render_network_view(
+                    conn=conn,
+                    filtered_df=filtered_df,
+                    mapping=filtered_mapping,
+                    break_even_value=break_even_value,
+                    dataset_key=dataset_key,
+                    dataset_error=dataset_error
+                )
 
         if "Operations" in tab_map:
             with tab_map["Operations"]:
-                render_operations_tab(conn)
-
-        if "Fleet" in tab_map:
-            with tab_map["Fleet"]:
-                render_fleet_tab(conn)
-
-        if "Vehicle maintenance" in tab_map:
-            with tab_map["Vehicle maintenance"]:
-                render_vehicle_maintenance_tab(conn)
-
-        if "Quote builder" in tab_map:
-            with tab_map["Quote builder"]:
-                render_quote_builder(
-                    filtered_df=filtered_df,
-                    mapping=filtered_mapping,
+                render_operations_view(
                     conn=conn,
-                    state=st.session_state,
+                    filtered_df=filtered_df,
+                    rerun_app=_rerun_app
                 )
-        if "Calls" in tab_map:
-            with tab_map["Calls"]:
-                render_calls_tab(conn)
 
-        if "Kent tenders" in tab_map:
-            with tab_map["Kent tenders"]:
-                render_kent_tenders_tab(conn, rerun_app=_rerun_app)
-
-        if "Kent admin" in tab_map:
-            with tab_map["Kent admin"]:
-                render_kent_admin_tab(
-                    conn,
-                    current_role_key=auth_role_key if auth_state["mode"] == "authenticated" else None,
+        if "Admin" in tab_map:
+            with tab_map["Admin"]:
+                render_admin_view(
+                    conn=conn,
+                    auth_role_key=auth_role_key if auth_state["mode"] == "authenticated" else None,
                     rerun_app=_rerun_app,
-                    render_dashboard_user_admin=_render_dashboard_user_admin,
+                    render_dashboard_user_admin=_render_dashboard_user_admin
                 )
-
-        if "Optimizer" in tab_map:
-            with tab_map["Optimizer"]:
-
-                with st.popover("❓ How to use the Optimiser", width='stretch'):
-                    st.markdown(
-                    """
-                    ### **How it works**
-    
-                    The optimizer reviews your **historical jobs** and tells you where pricing can be safely increased.
-    
-                    Here’s the workflow:
-    
-                    1. **Apply filters (left sidebar)**
-                    Choose the clients, corridors, job sizes, and date ranges you want the optimizer to analyse.
-                    Only jobs that match these filters are used in the calculation.
-    
-                    2. **Set your pricing rules**
-                    - **Margin buffer** → how much extra profit you want to build in
-                    - **Max uplift cap** → the highest % increase you’re comfortable recommending
-                    - **Minimum corridor volume** → ignore corridors with too few historic jobs
-                    These guardrails control how aggressive or conservative the recommendations will be.
-    
-                    3. **Run the optimizer**
-                    It evaluates each corridor by comparing its **historic median $/m³** to the **$/m³ needed to hit your target margin**.
-                    If a corridor is underpriced, it suggests a recommended uplift *within the limits you set*.
-    
-                    ---
-    
-                    ### **What the recommendations mean**
-    
-                    For each corridor, the optimizer tells you:
-    
-                    - **How far the historic pricing is below your target margin**
-                    - **A suggested uplift %** that brings it closer to your profitability goal
-                    - **Whether the uplift is capped** (because it hit your max allowance)
-                    - **Whether the corridor was skipped** (not enough data)
-    
-                    These suggestions are based entirely on **your real historic jobs**, so they reflect how you have actually priced and performed.
-    
-                    ---
-    
-                    ### **Exporting the results**
-    
-                    Use the **Download CSV** button to export a corridor-by-corridor report.
-                    This makes it easy to:
-    
-                    - Share uplift recommendations with sales or pricing teams
-                    - Review which corridors are consistently underperforming
-                    - Apply controlled, data-backed price adjustments
-    
-                    """,unsafe_allow_html=True,
-                    )
-    
-                render_optimizer(filtered_df)
-
-        if "Inventory" in tab_map:
-            with tab_map["Inventory"]:
-                render_inventory_tab(conn, rerun_app=_rerun_app)
-        if "Staff" in tab_map:
-            with tab_map["Staff"]:
-                render_staff_tab(conn, rerun_app=_rerun_app)
-
-        if "Driver shifts" in tab_map:
-            with tab_map["Driver shifts"]:
-                render_driver_shifts_tab(conn, rerun_app=_rerun_app)
-        if "Payroll / Labor analytics" in tab_map:
-            with tab_map["Payroll / Labor analytics"]:
-                render_payroll_labor_analytics_tab(conn, rerun_app=_rerun_app)
-
-        st.subheader("Filtered jobs")
-        display_columns = [
-            col
-            for col in [
-                "job_date",
-                "corridor_display",
-                "client_display",
-                "price_per_m3",
-            ]
-            if col in filtered_df.columns
-        ]
-        remaining_columns = [
-            col for col in filtered_df.columns if col not in display_columns
-        ]
-        filtered_display_df = filtered_df
-        if "job_date" in filtered_df.columns:
-            parsed_dates = pd.to_datetime(filtered_df["job_date"], errors="coerce")
-            filtered_display_df = (
-                filtered_df.assign(_job_sort_key=parsed_dates)
-                .sort_values("_job_sort_key", ascending=False, na_position="last")
-                .drop(columns="_job_sort_key")
-            )
-
-        st.dataframe(filtered_display_df[display_columns + remaining_columns], width='content')
-
-        csv_buffer = io.StringIO()
-        filtered_display_df.to_csv(csv_buffer, index=False)
-        st.download_button(
-            "Export filtered rows",
-            csv_buffer.getvalue(),
-            file_name="price_distribution_filtered.csv",
-            mime="text/csv",
-        )
 
 
 def main() -> None:
     """Configure Streamlit and render the price distribution dashboard."""
 
     st.set_page_config(
-        page_title="Price distribution by corridor",
+        page_title="corkysoft",
         layout="wide",
     )
     render_price_distribution_dashboard()

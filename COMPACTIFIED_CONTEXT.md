@@ -1,3 +1,285 @@
+## 2026-03-31 (Bridge Governance Regression Expansion)
+
+Deeper local governance pass after the 89-test state:
+
+- MCP bridge tests now assert blank tool names fail with `input_error`
+- MCP bridge tests now assert unknown tool names fail with `tool_error`
+- the focused integrated suite passed at 98 tests with the bridge test file
+  included
+
+State implication:
+- rerun cleanup is complete
+- governance validation is materially deeper across helper, UI, envelope, and
+  bridge behavior
+- the main remaining work is the quote helper boundary judgment rather than an
+  obvious defect backlog
+
+## 2026-03-31 (Rerun Audit And Kent UI Governance Regression)
+
+Follow-up local pass after the 88-test wave:
+
+- repo audit confirms `dashboard/state.py` is now the only rerun helper owner
+- there are no remaining direct rerun calls or local rerun wrappers outside the
+  shared state layer
+- Kent UI coverage now proves non-admin roles see admin write controls disabled,
+  not only helper-level write gating
+
+Validation:
+- focused integrated suite passed at 89 tests
+
+## 2026-03-31 (Narrow Cleanup Wave Landed)
+
+The narrow cleanup wave completed and the integrated focused suite passed at 88
+tests.
+
+What landed:
+- quote suggestion application now resets manual-override state inside the
+  authoritative shared helper in `dashboard/state.py`
+- planner, maintenance, and operations now route rerun behavior through the
+  shared helper instead of keeping local rerun logic
+- MCP tests now cover execution-error envelopes in addition to success and
+  input-error envelopes
+
+What remains:
+- the remaining quote helper split is now mostly about boundary judgment rather
+  than obvious duplication
+- rerun cleanup should be verified by audit before another implementation lane
+- deeper Kent and MCP scenario/payload validation is still the clearest open
+  governance task
+
+## 2026-03-31 (Narrow Cleanup Wave Assigned)
+
+The rerun-wrapper backlog was re-scoped from a stale assumption to the actual
+remaining local paths:
+
+- planner fallback rerun logic
+- maintenance local rerun helper
+- operations direct rerun calls
+
+The next narrow split is therefore:
+- Worker 1: quote UI versus shared-helper boundary decision
+- Worker 2: real rerun-wrapper backlog cleanup
+- Worker 3: deeper Kent and MCP scenario validation
+
+Why this split now:
+- ITIL: these are the last small workflow-consistency risks in the dashboard
+- ISO 9001: shared helper ownership now needs a final boundary decision, not
+  another broad extraction
+- Six Sigma: the remaining variation is localized and measurable
+
+## 2026-03-31 (Final Boundary And Validation Cleanup Wave Partially Landed)
+
+The next cleanup wave produced two real changes and one validated no-op, and
+the integrated focused suite passed at 87 tests.
+
+What landed:
+- quote suggestion application now reuses `_apply_quote_suggestion` from
+  `dashboard/state.py`
+- MCP tests now cover `success_payload` and `error_payload` envelope helpers
+- MCP docs now state that those envelope shapes are test-enforced
+
+What the no-op lane established:
+- `dashboard/components/calls.py` already reuses the shared rerun helper
+- `dashboard/components/maps.py` does not currently own rerun behavior
+- the rerun-wrapper backlog needs re-scoping to real remaining local wrappers
+
+What remains:
+- quote decision helpers still mix reusable logic with UI-local concerns
+- broader Kent and MCP scenario validation remains beyond the current envelope
+  and static contract checks
+
+## 2026-03-31 (Final Boundary And Validation Cleanup Wave Assigned)
+
+After the 85-test integrated pass, the remaining work is small enough to keep
+parallel but narrow:
+
+- Worker 1: quote decision-control cleanup
+- Worker 2: remaining rerun-wrapper consolidation
+- Worker 3: broader governance scenario validation
+
+Why this split now:
+- ITIL: the remaining service risk is mostly local workflow-control consistency
+- ISO 9001: the best next move is to finish consolidating authoritative helper
+  ownership and test the governed contract paths more deeply
+- Six Sigma: the remaining variation comes from a few last duplicate helpers and
+  under-specified governance scenarios rather than broad architectural issues
+
+## 2026-03-31 (Boundary Cleanup And Live-Control Validation Wave Landed)
+
+The three-lane cleanup wave completed and the integrated focused suite passed at
+85 tests.
+
+What landed:
+- quote builder now reuses the shared route-label helper from `dashboard/state.py`
+- planner and route maps now reuse the shared rerun helper from `dashboard/state.py`
+- Kent governance now exposes the explicit `KENT_ADMIN_WRITE_ROLES` set
+- MCP contract coverage now locks documented tool names and response version
+- Kent/MCP docs now describe those enforced invariants
+
+What remains:
+- quote decision-control helpers still live mostly inside
+  `dashboard/components/quote_builder.py`
+- other components still keep local rerun wrappers, especially calls/maps
+- live payload/scenario validation remains broader than the current static
+  contract tests
+
+## 2026-03-31 (Boundary Cleanup And Live-Control Validation Wave Assigned)
+
+After the integrated focused suite passed at 46 tests, the next wave is narrower
+and remains suitable for parallel non-blocking work:
+
+- Worker 1: quote-builder boundary cleanup
+- Worker 2: shared rerun/state helper consolidation
+- Worker 3: Kent and MCP live-control validation coverage
+
+Why this split now:
+- ITIL: the operator shell is stable enough that the next service risk is local
+  workflow-control drift rather than route landing or shell failures
+- ISO 9001: the remaining defects are mostly ownership and control-boundary
+  issues, so they should be split by authoritative module
+- Six Sigma: duplicated helper paths are still a variation source and can be
+  reduced independently from governance validation work
+
+## 2026-03-31 (Next Parallel Wave Assigned)
+
+After the prior three-lane wave landed, the next non-blocking split remains
+appropriate and is narrower:
+
+- Worker 1: operator reconciliation and execution completion
+- Worker 2: outbound contract and governance hardening
+- Worker 3: quote-builder and shared-state consolidation
+
+Why this split still holds:
+- ITIL: operator reconciliation remains the highest service-value unfinished path
+- ISO 9001: contract and governance controls remain separable from workflow UI
+- Six Sigma: quote-builder duplicate helper/state paths are a local variation source and can be reduced independently
+
+## 2026-03-31 (Prioritized Remaining Roadmap And Worker Lanes)
+
+Assessed the full remaining roadmap against the current status board and
+architecture docs, then collapsed the open work into three priority bands.
+
+Priority order:
+- Priority 1: operator execution completion
+- Priority 2: governance and contract hardening
+- Priority 3: decision-quality and planner intelligence upgrades
+
+Why this order:
+- ITIL: stabilize the service path used by operators before extending adjacent
+  governance and advisory layers
+- ISO 9001: tighten controlled evidence, approval, and ownership boundaries
+  before adding more scope
+- Six Sigma: attack the defect-heavy execution and governance paths before
+  model sophistication
+
+Assigned non-blocking worker lanes:
+- Worker 1: operator execution completion
+- Worker 2: governance and contract hardening
+- Worker 3: dashboard boundary and decision-quality polish
+
+Primary docs updated:
+- `plan.md`
+- `docs/progress_status_board.md`
+- `COMPACTIFIED_CONTEXT.md`
+- `CHANGELOG.md`
+
+## 2026-03-31 (Second-Pass Dashboard Boundary Polish)
+
+Read the local planning and contributor docs before continuing the dashboard
+decomposition wave, then aligned the next changes to explicit quality-control
+goals:
+
+- ITIL-style service objective:
+  keep the dashboard shell supportable as role-aware workflows expand
+- ISO 9001 style control objective:
+  make module ownership explicit and auditable
+- Six Sigma style defect objective:
+  reduce variation caused by one mixed-responsibility control layer
+
+What changed:
+- split `dashboard/data_controls.py` into smaller internal control points for:
+  - database initialization
+  - dataset selection
+  - routing-provider selection
+  - historical ingest feedback
+  - dataset loading
+  - filter-state resolution
+  - break-even updates
+- added focused helper coverage in `tests/test_data_controls.py`
+- updated `README.md`, `docs/modules.md`, and `docs/architecture.md` so the
+  extracted dashboard control layers are now documented as real ownership
+  boundaries
+- added `docs/architecture_dashboard_shell.puml` as the C4-style PlantUML
+  control view for the dashboard shell
+
+What remains:
+- `dashboard/data_controls.py` is cleaner but still large enough to justify a
+  future file split if more sidebar logic accumulates
+- `dashboard/components/quote_builder.py` still owns duplicate pin and
+  route-label helpers that should eventually consolidate on the shared state
+  path
+- `dashboard/app.py` is slimmer but still the main orchestration hotspot
+
+## 2026-03-30 (App Shell Decomposition Lanes)
+
+After the shell and deep-link fixes landed, the next bottleneck is structural:
+`dashboard/app.py` still owns too much orchestration even though the acute UI
+bugs are fixed.
+
+Current decomposition target:
+- auth flow
+- query-param routing
+- shell selection
+- dataset/filter setup
+- tab composition
+- cross-surface state hydration
+
+Parallel non-blocking dev lanes assigned:
+- Worker 1: extract auth flow + query-param routing
+- Worker 2: extract shell selection + cross-surface state hydration
+- Worker 3: extract dataset/filter setup + tab composition
+
+Governance note:
+- use `gpt-5.1-codex-mini` only for child lanes in this wave
+- keep lane ownership disjoint except for final `dashboard/app.py` integration
+  seams, which should stay minimal and explicit
+
+## 2026-03-30 (UI Assessment And Remediation Lanes)
+
+Docs-first alignment pass after a live UI/flow review of the dashboard shell and
+role-specific surfaces.
+
+Observed product truth:
+- the live shell still frames most workflows as analytics-first via the global
+  `Price distribution analytics` title/caption and left sidebar filters
+- role-layout reset/repair can currently throw `StreamlitAPIException` because
+  widget-backed session keys are mutated after instantiation
+- `Kent admin` is still writable only for `system_rollout_admin`, so commercial
+  owners should currently treat it as a governed review surface rather than a
+  primary write surface
+- remaining direct `st.experimental_rerun()` usage in live operator surfaces
+  should be cleaned up before the next browser-led testing wave
+
+Docs updated:
+- README.md
+- ROADMAP.md
+- plan.md
+- docs/operator_user_stories.md
+- docs/ui_role_coverage_matrix.md
+- docs/usage_onboarding_guide.md
+- docs/progress_status_board.md
+- CHANGELOG.md
+- COMPACTIFIED_CONTEXT.md
+
+Parallel non-blocking dev lanes assigned:
+- Worker 1: shell chrome + role landing/reset hardening
+- Worker 2: rerun-compatibility sweep for live operator surfaces
+- Worker 3: mixed-surface sectioning improvements focused on labor/admin flow
+
+Implementation changes:
+- None yet in this pass. This entry records the docs/TODO alignment before the
+  next implementation/testing wave.
+
 ## 2026-03-27 (Temporary Google Admin Auto-Provision Mode)
 
 Added the safer temporary shortcut for the current sharing/testing phase.

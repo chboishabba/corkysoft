@@ -1,0 +1,30 @@
+@startuml
+title Corkysoft Quote + Routing Core
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam wrapWidth 220
+skinparam maxMessageSize 180
+package "Quote + Routing Core" {
+  [corkysoft.au_address] as corkysoft_au_address
+  [corkysoft.pricing] as corkysoft_pricing
+  [corkysoft.quote_service] as corkysoft_quote_service
+  [corkysoft.repo] as corkysoft_repo
+  [corkysoft.routing] as corkysoft_routing
+  [corkysoft.routing.providers] as corkysoft_routing_providers
+  [corkysoft.schema] as corkysoft_schema
+}
+corkysoft_quote_service --> corkysoft_au_address
+corkysoft_quote_service --> corkysoft_pricing
+corkysoft_quote_service --> corkysoft_repo
+corkysoft_quote_service --> corkysoft_routing
+corkysoft_repo --> corkysoft_au_address
+corkysoft_repo --> corkysoft_quote_service
+corkysoft_repo --> corkysoft_routing
+corkysoft_routing --> corkysoft_au_address
+corkysoft_routing --> corkysoft_routing_providers
+corkysoft_routing_providers --> corkysoft_au_address
+[Analytics + Persistence] as external_analytics_persistence
+corkysoft_quote_service ..> external_analytics_persistence : quote_service -> kent_ams_import\nquote_service -> operational_signals
+corkysoft_repo ..> external_analytics_persistence : repo -> routes_map
+@enduml

@@ -95,89 +95,10 @@ def render_staff_tab(
 
     ensure_dashboard_tables(conn)
     assignment_summary = list_worker_assignment_summary(conn)
-
     import_feedback: Optional[tuple[str, str]] = None
-    with st.expander("Import/export STAFF worksheet", expanded=False):
-        google_col, import_col, export_col = st.columns(3)
-        with google_col:
-            staff_sheet_reference = st.text_input(
-                "Google Sheets ID or URL",
-                value=_default_operations_sheet_reference(),
-                help="Shared operations workbook containing the STAFF tab.",
-                key="staff_sheet_reference",
-            )
-            if st.button("Import STAFF from Google Sheet", key="staff_google_import_button"):
-                try:
-                    inserted, updated = import_workers_from_google_sheet(
-                        conn,
-                        sheet_id_or_url=staff_sheet_reference.strip() or None,
-                    )
-                except Exception as exc:  # pragma: no cover - surfaced in UI
-                    import_feedback = (
-                        "error",
-                        f"Failed to import staff from Google Sheets: {exc}",
-                    )
-                else:
-                    import_feedback = (
-                        "success",
-                        f"Imported {inserted} new staff and updated {updated} existing records from Google Sheets.",
-                    )
-        with import_col:
-            staff_upload = st.file_uploader(
-                "Upload STAFF workbook (.xlsx)",
-                type=["xlsx"],
-                help="Re-use the STAFF worksheet downloaded from Google Sheets.",
-                key="staff_upload_widget",
-            )
-            if st.button("Import STAFF", key="staff_import_button"):
-                if staff_upload is None:
-                    import_feedback = (
-                        "warning",
-                        "Choose a STAFF workbook before importing.",
-                    )
-                else:
-                    try:
-                        inserted, updated = import_workers_from_staff_sheet(
-                            conn, staff_upload
-                        )
-                    except Exception as exc:  # pragma: no cover - surfaced in UI
-                        import_feedback = (
-                            "error",
-                            f"Failed to import staff: {exc}",
-                        )
-                    else:
-                        import_feedback = (
-                            "success",
-                            f"Imported {inserted} new staff and updated {updated} existing records.",
-                        )
 
-        with export_col:
-            workers_for_export = pd.read_sql_query(
-                "SELECT name, role, rate, tickets, phone, active FROM workers ORDER BY name",
-                conn,
-            )
-            if workers_for_export.empty:
-                st.caption(
-                    "Add staff before exporting a workbook compatible with the STAFF sheet."
-                )
-            else:
-                export_bytes = _prepare_staff_export(workers_for_export)
-                st.download_button(
-                    "Download STAFF workbook",
-                    export_bytes,
-                    file_name="STAFF.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="staff_export_button",
-                )
-
-    if import_feedback:
-        level, message = import_feedback
-        if level == "success":
-            st.success(message)
-        elif level == "warning":
-            st.info(message)
-        else:
-            st.error(message)
+    st.markdown("### Operational overview")
+    st.caption("Review and manage the live roster before touching import/export or governance controls.")
 
     workers_df = pd.read_sql_query(
         """
@@ -251,6 +172,7 @@ def render_staff_tab(
         int((workers_df["planned_segment_count"] > 0).sum()) if not workers_df.empty else 0,
     )
 
+    st.markdown("#### Roster filters")
     filter_cols = st.columns(3)
     name_filter = filter_cols[0].text_input("Search by name", key="staff_name_filter")
     role_options = (
@@ -282,6 +204,7 @@ def render_staff_tab(
     elif status_filter == "Inactive":
         filtered_df = filtered_df[~filtered_df["active"]]
 
+    st.markdown("#### Live roster editor")
     display_columns = [
         "id",
         "name",
@@ -388,6 +311,8 @@ def render_staff_tab(
                 )
 
     st.divider()
+    st.markdown("### Worker review and linked shifts")
+    st.caption("Inspect a worker to see recent shifts, planned segments, and worker-time events.")
     st.subheader("Linked shifts and vehicle assignments")
     if workers_df.empty:
         st.info("No staff available to display shift links.")
@@ -676,3 +601,88 @@ def render_staff_tab(
             width="stretch",
             hide_index=True,
         )
+
+    st.divider()
+    st.markdown("### Import/export STAFF worksheet")
+    st.caption("Import STAFF data after verifying the roster above, or download the current sheet.")
+    with st.expander("Import/export STAFF worksheet", expanded=False):
+        google_col, import_col, export_col = st.columns(3)
+        with google_col:
+            staff_sheet_reference = st.text_input(
+                "Google Sheets ID or URL",
+                value=_default_operations_sheet_reference(),
+                help="Shared operations workbook containing the STAFF tab.",
+                key="staff_sheet_reference",
+            )
+            if st.button("Import STAFF from Google Sheet", key="staff_google_import_button"):
+                try:
+                    inserted, updated = import_workers_from_google_sheet(
+                        conn,
+                        sheet_id_or_url=staff_sheet_reference.strip() or None,
+                    )
+                except Exception as exc:  # pragma: no cover - surfaced in UI
+                    import_feedback = (
+                        "error",
+                        f"Failed to import staff from Google Sheets: {exc}",
+                    )
+                else:
+                    import_feedback = (
+                        "success",
+                        f"Imported {inserted} new staff and updated {updated} existing records from Google Sheets.",
+                    )
+        with import_col:
+            staff_upload = st.file_uploader(
+                "Upload STAFF workbook (.xlsx)",
+                type=["xlsx"],
+                help="Re-use the STAFF worksheet downloaded from Google Sheets.",
+                key="staff_upload_widget",
+            )
+            if st.button("Import STAFF", key="staff_import_button"):
+                if staff_upload is None:
+                    import_feedback = (
+                        "warning",
+                        "Choose a STAFF workbook before importing.",
+                    )
+                else:
+                    try:
+                        inserted, updated = import_workers_from_staff_sheet(
+                            conn, staff_upload
+                        )
+                    except Exception as exc:  # pragma: no cover - surfaced in UI
+                        import_feedback = (
+                            "error",
+                            f"Failed to import staff: {exc}",
+                        )
+                    else:
+                        import_feedback = (
+                            "success",
+                            f"Imported {inserted} new staff and updated {updated} existing records.",
+                        )
+
+        with export_col:
+            workers_for_export = pd.read_sql_query(
+                "SELECT name, role, rate, tickets, phone, active FROM workers ORDER BY name",
+                conn,
+            )
+            if workers_for_export.empty:
+                st.caption(
+                    "Add staff before exporting a workbook compatible with the STAFF sheet."
+                )
+            else:
+                export_bytes = _prepare_staff_export(workers_for_export)
+                st.download_button(
+                    "Download STAFF workbook",
+                    export_bytes,
+                    file_name="STAFF.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="staff_export_button",
+                )
+
+    if import_feedback:
+        level, message = import_feedback
+        if level == "success":
+            st.success(message)
+        elif level == "warning":
+            st.info(message)
+        else:
+            st.error(message)

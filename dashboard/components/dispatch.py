@@ -15,6 +15,7 @@ from analytics.operations_assignment import (
     record_dispatch_share_action,
     record_operations_cutover_event,
 )
+from dashboard.state import _rerun_app, _set_query_params
 
 
 def render_dispatch_tab(conn: sqlite3.Connection) -> None:
@@ -374,7 +375,7 @@ def render_dispatch_tab(conn: sqlite3.Connection) -> None:
             diary_date=diary_date or "",
             diary_job=str(selected["jobId"]),
         )
-        _rerun()
+        _rerun_app()
 
     st.markdown("#### Segment detail")
     segment_df = pd.DataFrame(
@@ -409,18 +410,3 @@ def render_dispatch_tab(conn: sqlite3.Connection) -> None:
     )
     st.dataframe(segment_df, width='stretch', hide_index=True)
 
-
-def _set_query_params(**params: str) -> None:
-    query_params = getattr(st, "query_params", None)
-    if query_params is not None:
-        query_params.from_dict(params)
-        return
-    st.experimental_set_query_params(**params)
-
-
-def _rerun() -> None:
-    rerun = getattr(st, "rerun", None)
-    if callable(rerun):
-        rerun()
-    else:
-        st.experimental_rerun()

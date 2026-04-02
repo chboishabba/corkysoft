@@ -37,6 +37,7 @@ from analytics.routing_provider import get_routing_provider
 from dashboard.components.lane_scope import apply_lane_status_scope
 from dashboard.components.maps import _hex_to_rgb, build_route_map
 from dashboard.map_provider import folium_map_configuration, plotly_map_layout
+from dashboard.state import _rerun_app
 
 __all__ = ["render_route_maps_tab"]
 
@@ -108,19 +109,6 @@ except Exception:  # pragma: no cover - fallbacks exercised in integration
         ) -> pd.DataFrame:
             return df
 
-
-def _rerun_app() -> None:
-    rerun = getattr(st, "rerun", None)
-    if callable(rerun):
-        rerun()
-        return
-
-    experimental_rerun = getattr(st, "experimental_rerun", None)
-    if callable(experimental_rerun):
-        experimental_rerun()
-        return
-
-    raise RuntimeError("Streamlit rerun API is unavailable.")
 
 
 def render_route_maps_tab(
@@ -608,7 +596,7 @@ def _render_isochrone_tab(map_df: pd.DataFrame) -> None:
         value=4.0,
         step=0.5,
         help=(
-            "Approximate reach based on the corridor's average speed multiplied by this time horizon."
+            "Network-aware reachability horizon used when the configured routing stack can produce true isochrone polygons."
         ),
     )
     max_iso_routes = st.slider(
@@ -629,7 +617,10 @@ def _render_isochrone_tab(map_df: pd.DataFrame) -> None:
 
     if iso_source.empty:
         st.info(
-            "No geocoded routes with distance data are available to build isochrones for the current filters."
+            "No network-aware isochrones are available for the current filters and routing configuration."
+        )
+        st.caption(
+            "This view now suppresses synthetic circular reach estimates. Configure an isochrone-capable provider such as ORS to render true travel-time polygons."
         )
         return
 

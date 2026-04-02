@@ -20,32 +20,12 @@ from analytics.operations_diary import (
     upsert_operations_diary_task,
     upsert_subcontractor_bill_review,
 )
-
-
-def _set_query_params(**params: str) -> None:
-    query_params = getattr(st, "query_params", None)
-    if query_params is not None:
-        query_params.from_dict(params)
-        return
-    st.experimental_set_query_params(**params)
+from dashboard.query_params import _get_query_params, _set_query_params
+from dashboard.state import _rerun_app
 
 
 def _get_query_param(key: str, default: str) -> str:
-    query_params = getattr(st, "query_params", None)
-    if query_params is not None:
-        values = query_params.get_all(key)
-        return values[0] if values else default
-    return st.experimental_get_query_params().get(key, [default])[0]
-
-
-def _rerun() -> None:
-    rerun = getattr(st, "rerun", None)
-    if callable(rerun):
-        rerun()
-        return
-    experimental_rerun = getattr(st, "experimental_rerun", None)
-    if callable(experimental_rerun):
-        experimental_rerun()
+    return _get_query_params().get(key, [default])[0]
 
 
 def _labor_reconciliation_table_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -497,7 +477,7 @@ def render_operations_diary_tab(conn: sqlite3.Connection) -> None:
                 notes=f"Invoice status: {details['invoiceReview']['invoice_status']}",
             )
             st.success("Invoice follow-up task created.")
-            _rerun()
+            _rerun_app()
     if any(
         row["bill_status"] in {"awaiting_bill", "bill_received", "bill_exception"}
         for row in details["billReviews"]
@@ -516,7 +496,7 @@ def render_operations_diary_tab(conn: sqlite3.Connection) -> None:
                 notes="Created from operations diary bill exception review.",
             )
             st.success("Bill follow-up task created.")
-            _rerun()
+            _rerun_app()
 
     exposure_rows = details["reconciliationExposure"]["activeSupplierRows"]
     if exposure_rows:
@@ -540,6 +520,11 @@ def render_operations_diary_tab(conn: sqlite3.Connection) -> None:
             width="stretch",
             hide_index=True,
         )
+        severity = details["reconciliationExposure"].get("exposureSeverity")
+        if severity and severity != "none":
+            st.caption(
+                f"Overall exposure severity: {severity.replace('_', ' ').capitalize()}."
+            )
 
     _render_observer_outbox_section(conn, selected_job_id=selected_job_id)
 
@@ -738,7 +723,7 @@ def _render_customer_invoice_form(
                 reviewed_by=reviewed_by or None,
             )
             st.success("Invoice review saved.")
-            _rerun()
+            _rerun_app()
 
 
 def _render_subcontractor_bill_form(
@@ -790,7 +775,7 @@ def _render_subcontractor_bill_form(
                 reviewed_by=reviewed_by or None,
             )
             st.success("Subcontractor bill review saved.")
-            _rerun()
+            _rerun_app()
 
 
 def _render_job_task_editor(
@@ -858,12 +843,12 @@ def _render_job_task_editor(
                 notes=notes or None,
             )
             st.success("Diary task saved.")
-            _rerun()
+            _rerun_app()
 
     if selected_row is not None and st.button("Delete selected task", key=f"operations_diary_task_delete_{job_id}"):
         delete_operations_diary_task(conn, task_id=int(selected_row["id"]))
         st.success("Diary task deleted.")
-        _rerun()
+        _rerun_app()
 
 
 def _render_global_task_form(conn: sqlite3.Connection, *, anchor_date: str) -> None:
@@ -878,12 +863,4 @@ def _render_global_task_form(conn: sqlite3.Connection, *, anchor_date: str) -> N
                 task_scope="day",
             )
             st.success("Day task added.")
-            _rerun()
-
-
-def _rerun() -> None:
-    rerun = getattr(st, "rerun", None)
-    if callable(rerun):
-        rerun()
-    else:
-        st.experimental_rerun()
+            _rerun_app()

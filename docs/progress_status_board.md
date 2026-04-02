@@ -1,6 +1,6 @@
 # Progress Status Board
 
-Last updated: **2026-03-27**
+Last updated: **2026-03-31**
 
 This page is the operational tracker for implementation-to-docs alignment.  
 Use it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and [COMPACTIFIED_CONTEXT.md](../COMPACTIFIED_CONTEXT.md).
@@ -28,26 +28,109 @@ Use it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and [COMPACT
 - Regression / corridor modeling: **🟡 in progress** (profitability insights now include baseline and corridor-aware margin-per-m³ regression over distance and season, fit-improvement reporting, and holdout trust signals; the next work is governance-first, with suppression/promotion rules and rolling backtests before broader feature expansion)
 - MCP adapter for cross-project/tooling access: **🟡 in progress** (read-only-first v1 contract, local registry, bridge-default CLI, JSON bridge, and four bounded read-only tools are implemented; FastMCP remains optional and broader rollout remains pending)
 - App/API/pricing decomposition pass: **🟢 implemented** (major shell/router/pricing hotspots collapsed into bounded modules with compatibility facades preserved)
+- Dashboard shell control-layer decomposition: **🟢 implemented** (auth, query-param, shell, layout-state, data-controls, and tab-registry helpers now exist; current follow-up is second-pass boundary polish)
 
 ## Active TODO Alignment (Current Wave)
 
-- Continue operations-diary expansion toward fuller job/staff/invoice reconciliation workflow.
-- Extend dispatch/inventory handling from explicit response actions into fuller execution flows for backhaul/container-sharing and under-/over-utilisation response.
-- Extend the current corridor-aware model from basic holdout validation into stronger governance thresholds, low-support suppression, and explicit promotion rules for when operators may rely on corridor effects.
-- Add rolling chronological backtesting windows so model trust is measured over repeated real-time slices, not just one holdout split.
-- Add corridor-season and holiday/day-type interaction features only after governance and backtesting are stable.
-- Add operator-facing uncertainty ranges, with prediction intervals preferred over mean-only point estimates.
-- Keep customer/site class effects deferred until site-complexity and customer-type data are reliable enough to support them.
-- Harden the implemented Corkysoft MCP v1 adapter with more seeded scenarios, transport validation, and stronger result-envelope tests over the existing profitability, dispatch, diary, and quote-guidance surfaces.
-- Decide whether the optional FastMCP stdio server should remain an opt-in path or graduate into a separately supported transport tier.
-- Keep mutable dispatch/admin/policy tools out of MCP v1 until auth, audit, and operator-policy governance are stronger.
-- Add delivery receipt / watermark semantics to the observer outbox when deployment posture matters.
-- Extend operations inventory with barcode/QR and container-specific execution controls.
-- Add explicit evidence-backed site/media/CV ingestion before deeper constraint automation.
-- Add and maintain explicit policy/override governance for hard-block categories.
-- Extend adaptive policy governance from proposal/approval into broader operational rollout and override controls.
-- Validate Kent operator/admin workflows against real payloads and repeated override patterns now that admin-only governance controls are enforced in the dashboard.
-- Extend auth browser coverage from the implemented local harness into real Google-backed login/logout and deployed tunnel-origin checks when deployment posture matters.
+- Priority 1: operator execution completion
+- finish the operations-diary path toward fuller job, staff, and invoice reconciliation workflow
+- extend dispatch and inventory handling from explicit response actions into fuller execution flows for backhaul, container-sharing, and under/over-utilisation response
+
+- Priority 2: governance and contract hardening
+- validate Kent operator/admin workflows against real payloads and repeated override patterns now that admin-only governance controls are enforced
+- harden the implemented Corkysoft MCP v1 adapter with stronger scenario, transport, and result-envelope coverage while keeping mutable tools out of scope
+- extend auth browser coverage from the implemented local harness into real Google-backed login/logout and deployed tunnel-origin checks when deployment posture matters
+- add delivery receipt and watermark semantics to the observer outbox when deployment posture matters
+
+- Priority 3: decision quality and planner intelligence
+- extend the corridor-aware model from basic holdout validation into suppression thresholds, promotion rules, and rolling backtests
+- add corridor-season and holiday/day-type interaction features only after governance and backtesting are stable
+- add operator-facing uncertainty ranges, with prediction intervals preferred over mean-only point estimates
+- add explicit evidence-backed site/media/CV ingestion before deeper constraint automation
+- continue second-pass dashboard decomposition polish, especially helper consolidation around `dashboard/components/quote_builder.py`
+
+## Active TODO Alignment (Next Parallel Wave)
+
+- Worker 1 lane: deepen operator reconciliation in the operations diary and adjacent inventory flow without broad workflow redesign
+- Worker 2 lane: harden outbound governance and contract surfaces, especially MCP and Kent-facing guarantees
+- Worker 3 lane: finish quote-builder and shared-state consolidation so dashboard control logic continues to move out of local duplicates
+
+## Active TODO Alignment (Current Wave)
+
+Status: completed on 2026-03-31 with focused integrated validation green.
+
+- Priority 1: quote-builder boundary cleanup
+- remove the remaining local helper ownership in the quote workflow where shared dashboard state or query-param behavior should be authoritative
+- keep quote decision-support behavior unchanged while reducing local control-surface duplication
+
+- Priority 2: shared rerun/state helper consolidation
+- remove remaining duplicated rerun/state helper definitions from planner and route-map surfaces
+- keep rerun semantics identical while collapsing ownership onto the shared dashboard state layer
+
+- Priority 3: Kent and MCP live-control validation coverage
+- add stronger regression coverage around Kent write-gate behavior and MCP tool result/control invariants
+- keep the posture read-only and governed, with docs reflecting the validated control boundary
+
+## Active TODO Alignment (Next Cleanup Wave)
+
+- Priority 1: finish quote decision-control boundary cleanup
+- move remaining quote-only decision helpers onto the right shared ownership layer where reuse or policy authority is warranted
+
+- Priority 2: continue rerun/state helper consolidation
+- remove the remaining local rerun wrappers from other dashboard components such as calls and maps without changing behavior
+
+- Priority 3: live governance validation beyond static contract tests
+- add broader payload and scenario validation for Kent and MCP result envelopes where deployment posture matters
+
+## Active TODO Alignment (Current Cleanup Wave)
+
+Status: partially completed on 2026-03-31 with focused integrated validation green.
+
+- Priority 1: quote decision-control cleanup
+- move quote-only decision helpers onto the shared quote-service or state layer only where ownership is truly reusable and policy-bearing
+
+- Priority 2: remaining rerun-wrapper consolidation
+- remove local rerun wrappers from the real remaining backlog while preserving behavior
+
+- Priority 3: broader governance scenario validation
+- extend Kent and MCP tests from static contract assertions into richer scenario and result-envelope validation without widening mutable scope
+
+## Active TODO Alignment (Next Cleanup Wave)
+
+- Priority 1: finish quote decision-control boundary decisions
+- decide which remaining quote UI concerns should stay local versus move into shared helpers, especially manual-override and modal/query-param coordination
+
+- Priority 2: verify and prune the rerun-wrapper backlog
+- remove stale cleanup assumptions from the roadmap where consolidation has already happened, and target only real remaining local wrappers
+
+- Priority 3: broaden governance validation further
+- extend Kent and MCP coverage from envelope invariants into richer scenario and payload-behavior checks where deployment posture matters
+
+## Active TODO Alignment (Current Narrow Cleanup Wave)
+
+Status: completed on 2026-03-31 with focused integrated validation green.
+
+- Priority 1: quote UI-versus-shared helper boundary decision
+- keep only genuinely reusable or policy-bearing quote logic in shared helpers, leaving UI-only reset and widget concerns local
+
+- Priority 2: real rerun-wrapper backlog cleanup
+- consolidate the actual remaining rerun duplication in planner, maintenance, and operations rather than the stale calls/maps assumption
+
+- Priority 3: deeper Kent and MCP scenario validation
+- extend governance coverage from envelope invariants into richer scenario and payload-behavior checks without widening mutable scope
+
+## Active TODO Alignment (Next Narrow Cleanup Wave)
+
+- Priority 1: finish quote helper boundary decisions
+- decide whether any remaining local quote helpers are truly shared-policy logic or should remain component-local UI orchestration
+
+- Priority 2: audit rerun cleanup completion
+- completed: repo audit confirms there are no other local rerun helpers or direct rerun calls outside the shared state layer
+
+- Priority 3: deepen governance scenario coverage
+- extend Kent and MCP validation from the current envelope and execution-error checks into richer payload and scenario behavior where deployment posture matters
+- completed in this pass: non-admin Kent admin rendering now has regression coverage proving write controls are disabled in the UI, not only gated by helper logic
+- completed in this pass: MCP bridge coverage now includes blank-tool-name and unknown-tool-name behavior, in addition to envelope and execution-error assertions
 
 ## Non-blocking documentation tasks
 

@@ -48,7 +48,7 @@ test('auth-required misconfigured gate', async ({ page }) => {
 
       await expect(page.getByText(/UI auth is required but Streamlit OIDC is not configured correctly/i)).toBeVisible();
       await expect(page.getByText(/auth secrets are intentionally unavailable/i)).toBeVisible();
-      await expect(page.getByText('Price distribution (Airbnb-style)')).toHaveCount(0);
+      await expect(page.getByText('Price distribution analytics')).toHaveCount(0);
     },
   );
 });
@@ -68,7 +68,7 @@ test('unauthorized account denial', async ({ page }) => {
 
       await expect(page.getByText(/unauthorized@example\.com/i)).toBeVisible();
       await expect(page.getByText(/is not in the local Corkysoft allowlist/i)).toBeVisible();
-      await expect(page.getByText('Price distribution (Airbnb-style)')).toHaveCount(0);
+      await expect(page.getByText('Price distribution analytics')).toHaveCount(0);
     },
   );
 });
@@ -89,7 +89,7 @@ test('inactive account denial', async ({ page }) => {
 
       await expect(page.getByText(/inactive@example\.com/i)).toBeVisible();
       await expect(page.getByText(/is currently inactive in Corkysoft/i)).toBeVisible();
-      await expect(page.getByText('Price distribution (Airbnb-style)')).toHaveCount(0);
+      await expect(page.getByText('Price distribution analytics')).toHaveCount(0);
     },
   );
 });

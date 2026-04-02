@@ -13,6 +13,8 @@ from analytics.operations_assignment import (
     list_segment_readiness,
 )
 
+from dashboard.state import _rerun_app
+
 
 def render_operations_tab(conn: sqlite3.Connection) -> None:
     st.subheader("Operations planning")
@@ -107,7 +109,7 @@ def render_operations_tab(conn: sqlite3.Connection) -> None:
                 st.error(f"Failed to save segment: {exc}")
             else:
                 st.success("Segment saved.")
-                st.rerun()
+                _rerun_app()
 
     st.divider()
     st.markdown("### Assign resources")
@@ -221,7 +223,7 @@ def render_operations_tab(conn: sqlite3.Connection) -> None:
             st.error(str(exc))
         else:
             st.success(f"Assignments saved. Segment status: {readiness['assignmentStatus']}.")
-            st.rerun()
+            _rerun_app()
 
     st.divider()
     st.markdown("### Operational conflicts")

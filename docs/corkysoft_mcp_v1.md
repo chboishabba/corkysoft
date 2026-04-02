@@ -52,6 +52,8 @@ business logic. MCP is an integration layer, not a second source of truth.
 
 All tools should return a stable envelope:
 
+`tests/test_mcp_tools.py` validates this contract by asserting the helper utilities return the documented success and error shapes as part of every wave.
+
 ### Success
 
 ```json
@@ -149,6 +151,9 @@ Promotion criteria for the first implementation:
 - read-only posture
 - tests for registry, parameter validation, and result-envelope behavior
 - one working local transport path
+- `tests/test_mcp_tools.py` now enforces the read-only posture by asserting every `ToolSpec` declares `read_only=True`
+- `tests/test_mcp_tools.py` also locks the documented tool names and response_version in place so automation clients can rely on the public contract
+- `tests/test_mcp_tools.py` now asserts error_payload preserves the execution_error code and details when tool execution fails, keeping the governance contract explicit
 
 Do not promote mutable tools until Corkysoft auth, audit, and operator-policy
 boundaries are strong enough to govern them.

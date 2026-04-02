@@ -114,3 +114,20 @@ def test_google_street_view_360_url_uses_google_provider(monkeypatch: pytest.Mon
     assert "map_action=pano" in url
     assert "viewpoint=-27.470000%2C153.020000" in url
     assert "heading=180.0" in url
+
+
+def test_google_street_view_embed_url_uses_google_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ROUTING_PROVIDER", "google")
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "abc123")
+
+    url = map_provider.google_street_view_embed_url(
+        lat=-27.47,
+        lon=153.02,
+        heading=135.0,
+    )
+
+    assert url is not None
+    assert "google.com/maps/embed/v1/streetview" in url
+    assert "location=-27.470000%2C153.020000" in url
+    assert "heading=135.0" in url
+    assert "key=abc123" in url

@@ -10,6 +10,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Decide whether `corkysoft/src/dashboard` remains a packaging stub or should be wired to the main Streamlit entry point.
 - Maintain `docs/contributor_docs_sync.md` as the contributor-facing rule for README/ROADMAP/progress-board/docs alignment after feature or refactor changes.
 - Keep `docs/modules.md` updated when module responsibilities or entry points change.
+- Maintain the generated UML control surface in `docs/UML_INDEX.md`, `docs/rendered/plantuml/`, and `docs/rendered/svg/`, with `scripts/build_supermega_uml.py` as the authoritative generation and validation path.
 - Add analytics documentation for historical ingest readiness, lane governance, and planner consumption defaults.
 - Add a system architecture diagram (truck ↔ server ↔ cloud).
 - Keep `docs/positioning.md` aligned with supported integrations and product focus.
@@ -149,6 +150,10 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Add approval-backed rollout promotions so ops requests, commercial approval, and final status transitions are all visible in one audit trail.
 - Suppress irrelevant `historical_jobs` warnings on operational tabs so Dispatch, Operations, Fleet, and Kent surfaces do not inherit analytics-only noise.
 - Review whether the default landing surface should remain analytics-first or become role-aware / operational-first for day-to-day users.
+- Fix the current role-layout reset/repair flow so session-backed layout widgets do not throw `StreamlitAPIException` when operators repair or reset a role layout.
+- Make role-aware deep-linking deterministic in development and authenticated runs so `view=` routes can land users in the owning role instead of silently inheriting a stale session layout.
+- Sweep remaining operator surfaces for direct `st.experimental_rerun()` usage before the next live testing wave.
+- Re-section mixed surfaces such as `Fleet`, `Inventory`, and `Staff` so execution, review, and admin/governance work are visually separated before further usability testing.
 - Clarify planner UX before implementing it: docs now need to say how roadway extents, corridor overlap, site context, traffic/routing considerations, and resource allocation should combine into a click-heavy planning flow.
 - Land the docs-only role coverage pass before changing UI copy or tab structure, so role ownership is explicit before any surface reshuffle.
 
@@ -218,7 +223,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 
 | Deliverable                            | Status | Description                                  |
 | -------------------------------------- | :----: | -------------------------------------------- |
-| **Airbnb-style $/m³ histogram**        |    ✅   | Jobs sorted left→right by $/m³; bar = count. |
+| **Price distribution $/m³ histogram**  |    ✅   | Jobs sorted left→right by $/m³; bar = count. |
 | **Break-even + margin bands**          |    ✅   | Visual overlay on histogram.                 |
 | **Loss-leader detection**              |    ✅   | Identify sub-margin jobs.                    |
 | **Regression / corridor model**        |   🧩   | Profitability insights now include baseline and corridor-aware margin-per-m³ regression over distance/season, fit-improvement reporting, and holdout trust signals; next steps are suppression/promotion rules and rolling backtests before holiday interactions, uncertainty ranges, or other broader model features. |

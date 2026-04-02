@@ -1,0 +1,58 @@
+@startuml
+title Corkysoft Integrated Supermega Map
+left to right direction
+skinparam componentStyle uml2
+skinparam shadowing false
+skinparam wrapWidth 240
+skinparam maxMessageSize 180
+actor "Operator / Planner / Admin" as Operator
+package "Entrypoints" {
+  [Entrypoints\nroutes_to_sqlite\nquick_quote\nprofit_optimizer\nmap_jobs] as entrypoints
+}
+package "Dashboard Shell" {
+  [Dashboard Shell\ndashboard.app\ndashboard.auth_ui\ndashboard.data_controls\ndashboard.tab_registry] as dashboard_shell
+}
+package "Workflow Surfaces" {
+  [Workflow Surfaces\ncomponents.quote_builder\ncomponents.route_maps\ncomponents.operations_diary\ncomponents.inventory] as workflow_surfaces
+}
+package "Analytics + Persistence" {
+  [Analytics + Persistence\nanalytics.price_distribution\nanalytics.route_map_prep\nanalytics.operations_diary\nanalytics.db] as analytics_persistence
+}
+package "Quote + Routing Core" {
+  [Quote + Routing Core\ncorkysoft.quote_service\ncorkysoft.routing\ncorkysoft.repo\ncorkysoft.pricing] as quote_routing_core
+}
+package "Integrations + Extensions" {
+  [Integrations + Extensions\ncorkysoft.api\ncorkysoft.call_ops\ncorkysoft.mcp\ncorkysoft.importers.jobs_api] as integrations_extensions
+}
+Operator --> dashboard_shell
+entrypoints --> analytics_persistence : routes_to_sqlite -> routing_provider\nquick_quote -> db\nmap_jobs -> routes_map
+entrypoints --> quote_routing_core : routes_to_sqlite -> au_address\nquick_quote -> quote_service\nquick_quote -> repo
+dashboard_shell --> workflow_surfaces : app -> quote_builder\napp -> route_maps\napp -> operations_diary
+dashboard_shell --> analytics_persistence : app -> price_distribution\nauth_ui -> db\ndata_controls -> price_distribution
+dashboard_shell --> quote_routing_core : app -> quote_service\ndata_controls -> quote_service\ndata -> repo
+workflow_surfaces --> dashboard_shell : quote_builder -> map_provider\nroute_maps -> map_provider\noperations_diary -> query_params
+workflow_surfaces --> analytics_persistence : quote_builder -> price_distribution\nroute_maps -> price_distribution\noperations_diary -> operations_diary
+workflow_surfaces --> quote_routing_core : quote_builder -> quote_service\nkent -> quote_service\nquote_builder -> routing
+workflow_surfaces --> integrations_extensions : calls -> call_ops\nworker_time -> call_ops
+analytics_persistence --> quote_routing_core : historical_ingest -> routing\nkent_ams_import -> pricing\nlive_data -> schema
+analytics_persistence --> integrations_extensions : labor_analytics -> call_ops
+quote_routing_core --> analytics_persistence : quote_service -> kent_ams_import\nrepo -> routes_map\nquote_service -> operational_signals
+integrations_extensions --> analytics_persistence : api -> operations_diary\ncall_ops -> schema\ntools -> price_distribution
+integrations_extensions --> quote_routing_core : call_ops -> repo\ncost_model -> schema
+note bottom of dashboard_shell
+Shell owns composition, auth gate, sidebar controls,
+query-param hydration, and stable tab selection.
+end note
+note bottom of workflow_surfaces
+Child workflows stay inside dashboard/components/*,
+but their feeds into analytics and quote/routing remain explicit here.
+end note
+note bottom of analytics_persistence
+Analytics owns prep, diary logic, map shaping,
+and database-facing operational truth helpers.
+end note
+note bottom of quote_routing_core
+Quote calculation and routing remain producer-owned
+inside corkysoft rather than inside Streamlit surfaces.
+end note
+@enduml

@@ -616,6 +616,12 @@ def _initial_view_state(df: pd.DataFrame) -> pdk.ViewState:
     return pdk.ViewState(latitude=float(lat.mean()), longitude=float(lon.mean()), zoom=4.5)
 
 
+def _pydeck_frame(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or df.columns.is_unique:
+        return df
+    return df.loc[:, ~df.columns.duplicated()].copy()
+
+
 def _clean_value(value: object) -> str | None:
     if value is None:
         return None
@@ -730,7 +736,7 @@ def render_network_map(
             attribution="© OpenStreetMap contributors",
         )
 
-    truck_data = trucks.copy()
+    truck_data = _pydeck_frame(trucks.copy())
     if not truck_data.empty:
         truck_data["truck_label"] = truck_data.apply(_truck_label, axis=1)
         truck_data["colour"] = truck_data["status"].map(TRUCK_STATUS_COLOURS)
@@ -739,7 +745,7 @@ def render_network_map(
         )
         truck_data["tooltip"] = truck_data.apply(_format_truck_tooltip, axis=1)
 
-    historical_overlay = historical_routes.copy()
+    historical_overlay = _pydeck_frame(historical_routes.copy())
     if not historical_overlay.empty and "route_geojson" in historical_overlay.columns:
         historical_overlay["route_path"] = historical_overlay["route_geojson"].apply(
             _geojson_to_path
@@ -748,7 +754,7 @@ def render_network_map(
         historical_overlay["route_path"] = None
 
     if not historical_overlay.empty and "lane_key" in historical_overlay.columns:
-        lane_overlay = historical_overlay.copy()
+        lane_overlay = _pydeck_frame(historical_overlay.copy())
         lane_overlay["_has_geojson"] = (
             lane_overlay["route_path"].notna() if "route_path" in lane_overlay.columns else False
         )
@@ -817,10 +823,11 @@ def render_network_map(
 
         if show_live_overlay and not active_routes.empty:
             if "job_id" in active_routes.columns and not historical_routes.empty:
-                enriched = active_routes.merge(
-                    historical_routes[
-                        [
-                            "id",
+                enriched = _pydeck_frame(
+                    active_routes.merge(
+                        historical_routes[
+                            [
+                                "id",
                             "colour",
                             "fill_colour",
                             "line_width",
@@ -833,7 +840,8 @@ def render_network_map(
                     left_on="job_id",
                     right_on="id",
                     how="left",
-                    suffixes=("", "_hist"),
+                        suffixes=("", "_hist"),
+                    )
                 )
                 if "colour" not in enriched.columns and "colour_hist" in enriched.columns:
                     enriched["colour"] = enriched["colour_hist"]
@@ -853,7 +861,7 @@ def render_network_map(
                 if "route_polygon" not in enriched.columns and "route_polygon_hist" in enriched.columns:
                     enriched["route_polygon"] = enriched["route_polygon_hist"]
             else:
-                enriched = active_routes.copy()
+                enriched = _pydeck_frame(active_routes.copy())
                 enriched["colour"] = [PROFITABILITY_COLOURS["Unknown"]] * len(enriched)
                 enriched["profit_band"] = "Unknown"
                 enriched["profitability_status"] = "Unknown"
@@ -915,7 +923,7 @@ def render_network_map(
 
             if show_live_overlay and not lane_overlay.empty:
                 if show_actual_routes and historical_has_paths:
-                    history_paths = lane_overlay.dropna(subset=["route_path"])
+                    history_paths = _pydeck_frame(lane_overlay.dropna(subset=["route_path"]))
                     if not history_paths.empty:
                         history_layer = pdk.Layer(
                             "PathLayer",
@@ -952,12 +960,14 @@ def render_network_map(
                 ]
                 if "route_path" in historical_overlay.columns:
                     merge_columns.append("route_path")
-                enriched = active_routes.merge(
-                    historical_overlay[merge_columns],
-                    left_on="job_id",
-                    right_on="id",
-                    how="left",
-                    suffixes=("", "_hist"),
+                enriched = _pydeck_frame(
+                    active_routes.merge(
+                        historical_overlay[merge_columns],
+                        left_on="job_id",
+                        right_on="id",
+                        how="left",
+                        suffixes=("", "_hist"),
+                    )
                 )
                 if "colour" not in enriched.columns and "colour_hist" in enriched.columns:
                     enriched["colour"] = enriched["colour_hist"]
@@ -976,7 +986,7 @@ def render_network_map(
                 if "route_path" not in enriched.columns and "route_path_hist" in enriched.columns:
                     enriched["route_path"] = enriched["route_path_hist"]
             else:
-                enriched = active_routes.copy()
+                enriched = _pydeck_frame(active_routes.copy())
                 enriched["colour"] = [PROFITABILITY_COLOURS["Unknown"]] * len(enriched)
                 enriched["profit_band"] = "Unknown"
                 enriched["profitability_status"] = "Unknown"
@@ -1005,7 +1015,7 @@ def render_network_map(
 
             if show_actual_routes:
                 if "route_path" in enriched.columns:
-                    active_path_data = enriched.dropna(subset=["route_path"])
+                    active_path_data = _pydeck_frame(enriched.dropna(subset=["route_path"]))
                 else:
                     active_path_data = pd.DataFrame()
                 if not active_path_data.empty:
@@ -1122,7 +1132,7 @@ def render_network_map(
             help="Increase to emphasise clusters of live activity.",
         )
 
-        heatmap_source = build_live_heatmap_source(historical_routes, active_routes, truck_data)
+        heatmap_source = _pydeck_frame(build_live_heatmap_source(historical_routes, active_routes, truck_data))
 
         if heatmap_source.empty:
             st.info(

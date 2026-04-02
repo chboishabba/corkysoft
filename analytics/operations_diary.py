@@ -1025,16 +1025,31 @@ def build_reconciliation_exposure_summary(
     active_supplier.sort(key=lambda row: (-abs(float(row["amount"])), -(row["unresolvedAgeDays"] or -1), str(row["jobId"])))
     active_customer.sort(key=lambda row: (-abs(float(row["amount"])), str(row["jobId"])))
     return {
-        "asOfDate": as_of_date,
-        "supplierRows": supplier_rows,
-        "customerRows": customer_rows,
-        "activeSupplierRows": active_supplier,
-        "activeCustomerRows": active_customer,
-        "supplierUnresolvedTotal": round(sum(float(row["amount"]) for row in active_supplier), 2),
-        "customerOpenTotal": round(sum(float(row["amount"]) for row in active_customer), 2),
-        "oldestSupplierAgeDays": max(oldest_supplier_age) if oldest_supplier_age else None,
-        "longestSupplierLatencyDays": max(supplier_latency) if supplier_latency else None,
-    }
+            "asOfDate": as_of_date,
+            "supplierRows": supplier_rows,
+            "customerRows": customer_rows,
+            "activeSupplierRows": active_supplier,
+            "activeCustomerRows": active_customer,
+            "supplierUnresolvedTotal": round(sum(float(row["amount"]) for row in active_supplier), 2),
+            "customerOpenTotal": round(sum(float(row["amount"]) for row in active_customer), 2),
+            "oldestSupplierAgeDays": max(oldest_supplier_age) if oldest_supplier_age else None,
+            "longestSupplierLatencyDays": max(supplier_latency) if supplier_latency else None,
+            "exposureSeverity": _exposure_severity(active_supplier, active_customer),
+        }
+
+
+def _exposure_severity(
+    supplier_rows: list[dict[str, Any]],
+    customer_rows: list[dict[str, Any]],
+) -> str:
+    total = sum(float(row.get("amount") or 0.0) for row in supplier_rows + customer_rows)
+    if total >= 50000:
+        return "high"
+    if total >= 20000:
+        return "medium"
+    if total > 0:
+        return "low"
+    return "none"
 
 
 def build_operations_diary(
@@ -1130,6 +1145,7 @@ def build_operations_diary(
             "plannedLaborCount": len(planned_labor),
             "supplierUnresolvedTotal": exposure_summary["supplierUnresolvedTotal"],
             "customerOpenTotal": exposure_summary["customerOpenTotal"],
+            "exposureSeverity": exposure_summary["exposureSeverity"],
         },
     }
 

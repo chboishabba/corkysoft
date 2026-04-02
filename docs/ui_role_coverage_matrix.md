@@ -3,18 +3,22 @@
 This matrix maps current Corkysoft roles to the main dashboard surfaces.
 Use it as the canonical reference for who should start where.
 
+Current access-boundary note:
+- `Kent admin` is visible as a governed review surface for `Commercial Owner`,
+  but write access is currently restricted to `System / Rollout Admin`.
+
 | Role | Quote builder | Dispatch | Operations | Fleet | Vehicle maintenance | Staff | Driver shifts | Inventory | Kent tenders | Kent admin | Payroll / Labor analytics |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Estimator | primary | not used | not used | not used | not used | not used | not used | not used | secondary | not used | not used |
 | Dispatcher | not used | primary | secondary | secondary | not used | not used | not used | secondary | primary | not used | not used |
 | Fleet / Operations Manager | not used | primary | primary | primary | secondary | secondary | secondary | secondary | secondary | not used | secondary |
-| Commercial Owner | primary | not used | not used | not used | not used | not used | secondary | not used | primary | primary | primary |
+| Commercial Owner | primary | not used | not used | not used | not used | not used | secondary | not used | primary | secondary | primary |
 | Labor Planner / Staff Coordinator | not used | secondary | primary | secondary | not used | primary | primary | not used | not used | not used | secondary |
 | Maintenance / Compliance Coordinator | not used | secondary | secondary | primary | primary | secondary | not used | not used | not used | not used | not used |
 | Warehouse / Crew | not used | secondary | not used | not used | not used | not used | not used | primary | not used | not used | not used |
 | Inventory / Supplier Coordinator | not used | secondary | secondary | not used | not used | not used | not used | primary | not used | not used | not used |
 | Workforce Time Capture Coordinator | not used | secondary | not used | not used | not used | primary | primary | not used | not used | not used | secondary |
-| System / Rollout Admin | not used | not used | secondary | primary | secondary | admin-only | admin-only | admin-only | not used | admin-only | admin-only |
+| System / Rollout Admin | not used | not used | secondary | primary | secondary | admin-only | admin-only | admin-only | not used | primary | admin-only |
 
 ## Interpretation
 

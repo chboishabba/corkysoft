@@ -15,6 +15,10 @@
 - `tests/test_price_distribution.py` asserts weight handling, metro filtering, and input validation for the historical heatmap builder, including fallbacks when a weight column is missing or invalid.
 - `tests/test_live_data.py` checks that the live heatmap emphasises active and truck points, preserves source labels, and drops empty/invalid coordinates.
 
+### Isochrone reachability
+- `analytics/route_map_prep.py` builds route-map isochrone polygons from provider-backed travel-time boundaries rather than silently substituting circular radius estimates in the isochrone view.
+- When the active routing provider does not expose isochrones, the route-map surface now attempts an ORS-backed secondary provider if available; otherwise the UI suppresses the layer instead of presenting circles as network reachability.
+
 ## Observed strengths
 - Separation of concerns: data shaping lives in `analytics/*`, while visualisation stays in `dashboard/components`, keeping the Streamlit views thin.
 - Defensive handling of missing data: both builders tolerate absent columns or empty frames, returning empty dataframes rather than raising.

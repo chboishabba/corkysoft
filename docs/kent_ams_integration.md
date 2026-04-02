@@ -181,6 +181,11 @@ Admin/operator split target:
   override governance review
 - the current implementation is still transitioning toward that split
 
+Kent admin write behavior is guarded by the `KENT_ADMIN_WRITE_ROLES` set so
+only `system_rollout_admin` may mutate policy defaults or override pairings.
+The regression test `tests/test_kent_admin.py` concretely keeps that write gate
+explicit as the surface evolves, preventing unintended admin drift.
+
 Pipeline integration note:
 
 - The same route spare-capacity signal is now written into:

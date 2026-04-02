@@ -4,6 +4,30 @@ This project blends a routing and costing CLI with a Streamlit dashboard. Core
 business logic lives under `corkysoft/`, analytics and data prep live under
 `analytics/`, and the UI is under `dashboard/`.
 
+Quality-control framing for the current dashboard refactor:
+
+- Service management objective:
+  keep the dashboard shell operable and reviewable as role-aware workflows expand.
+- ISO 9001 style control objective:
+  make module ownership explicit so contributors can change one control layer without destabilizing unrelated surfaces.
+- Six Sigma style defect focus:
+  reduce variation caused by one large composition file owning auth, query params, shell copy, layout hydration, dataset controls, and tab order together.
+
+## C4 and PlantUML
+
+The generated UML suite is documented in:
+
+- [architecture_dashboard_shell.puml](architecture_dashboard_shell.puml)
+- [UML_INDEX.md](UML_INDEX.md)
+
+The UML sources are generated from the internal Python import graph by:
+
+- `python scripts/build_supermega_uml.py`
+
+The integrated whole-system entrypoint is:
+
+- [rendered/plantuml/supermega_01.puml](rendered/plantuml/supermega_01.puml)
+
 ## Entry points
 
 - `routes_to_sqlite.py`: Primary CLI for geocoding, routing, and persisting jobs.
@@ -33,7 +57,15 @@ business logic lives under `corkysoft/`, analytics and data prep live under
   - `analytics/price_distribution.py`: Aggregations and chart helpers for the dashboard.
   - `analytics/live_data.py`: Live map helpers for trucks and routes.
 - `dashboard/`: Streamlit UI and reusable widgets.
+  - `dashboard/app.py`: Composition layer for auth, shell selection, sidebar controls, and tab rendering.
+  - `dashboard/auth_ui.py`: Auth gate, identity resolution, and local dashboard-user admin controls.
+  - `dashboard/query_params.py`: Shared query-param compatibility helpers used across the shell and workflow surfaces.
+  - `dashboard/layout_state.py`: Role-layout hydration and pending-reset handling.
+  - `dashboard/shell.py`: Role-aware title, caption, and sidebar framing selection.
+  - `dashboard/data_controls.py`: Dataset, provider, ingest, filter, and break-even sidebar controls.
+  - `dashboard/tab_registry.py`: Landing-tab and visible-tab composition.
   - `dashboard/components/`: Tab renderers and shared UI pieces.
+  - `dashboard/views/`: Higher-level role/workflow view composites that group component surfaces.
   - `dashboard/components/operations_diary.py`: Manager-facing diary screen for
     job usage, tasks, and invoice/bill follow-through.
   - `dashboard/map_provider.py`: Mapbox, PyDeck, and Folium configuration.
@@ -46,14 +78,17 @@ The main Streamlit entry point remains `dashboard/app.py`.
 1. CLI workflows write to `routes.db` via `routes_to_sqlite.py`.
 2. Schema creation and migrations are handled by `corkysoft/schema.py` and
    `analytics/db/schema.py`.
-3. The dashboard reads from SQLite through `analytics/db_connection.py` and
+3. The dashboard composition layer resolves auth, query params, role layout,
+   shell chrome, dataset controls, and tab order before handing work to leaf
+   surfaces.
+4. The dashboard reads from SQLite through `analytics/db_connection.py` and
    uses aggregation helpers in `analytics/price_distribution.py`.
-4. Telemetry ingestors populate `truck_positions` and `active_routes`, which
+5. Telemetry ingestors populate `truck_positions` and `active_routes`, which
    `analytics/live_data.py` loads for the live map.
-5. Adaptive-policy helpers store small learned pricing/ETA/risk parameters in
+6. Adaptive-policy helpers store small learned pricing/ETA/risk parameters in
    `global_parameters` so later ingestion and review workflows can update them
    without hidden spreadsheet drift.
-6. Operations diary helpers combine jobs, segments, tasks, labor actuals, and
+7. Operations diary helpers combine jobs, segments, tasks, labor actuals, and
    invoice/bill review state into a manager-facing day/week workflow.
 
 ## Cross-project boundary

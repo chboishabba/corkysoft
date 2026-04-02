@@ -52,6 +52,7 @@ Run `./start_app.sh` or `start_app.bat` to run the app.
 - Job cost and invoicing review: [Job Cost and Invoice Reconciliation](docs/job_cost_and_invoice_reconciliation.md)
 - Adaptive pricing/ETA/risk policy intent: [Adaptive Learning Loop](docs/adaptive_learning_loop.md)
 - Auth hardening and red-team coverage: [Auth Red-Team Plan](docs/auth_red_team_plan.md)
+- Architecture and generated UML suite: [UML Index](docs/UML_INDEX.md)
 - Cross-project coverage and boundary audit: [Corkysoft / SB / ITIR Coverage Audit](docs/corkysoft_sb_itir_coverage_audit.md)
 - Downstream contract for SB/ITIR consumers: [Corkysoft -> SB / ITIR Downstream Contract](docs/sb_itir_downstream_contract.md)
 - MCP adapter contract for read-only cross-project/tooling access: [Corkysoft MCP v1 Contract](docs/corkysoft_mcp_v1.md)
@@ -76,8 +77,8 @@ Run `./start_app.sh` or `start_app.bat` to run the app.
 - `Warehouse / Crew`: starts in `Inventory`, with `Dispatch` as execution context.
 - `Workforce Time Capture Coordinator`: starts in `Staff` and `Driver shifts`.
 - `Owner / Commercial / Finance-facing Manager`: starts in `Payroll / Labor analytics`, with `Staff` and `Driver shifts` as supporting surfaces.
-- `Commercial Owner`: starts in `Quote builder`, `Kent tenders`, and `Kent admin`.
-- `System / Rollout Admin`: starts in `Fleet` for cutover and source-sync governance.
+- `Commercial Owner`: starts in `Quote builder` and `Kent tenders`, with analytics tabs for review and `Kent admin` currently treated as a secondary/read-only governance surface unless acting in the admin role.
+- `System / Rollout Admin`: starts in `Fleet` for cutover and source-sync governance, and owns write access to `Kent admin`.
 
 See [UI Role Coverage Matrix](docs/ui_role_coverage_matrix.md) for the authoritative tab ownership map.
 
@@ -109,9 +110,14 @@ usable, but some workflows remain provisional or governance-light:
 - the major app/api/pricing refactor wave is complete enough that the main
   dashboard shell, API root, and pricing entry surface are now composition
   layers rather than the previous main hotspots
+- the architecture/UML layer is now generated from the internal import graph,
+  with source and rendered supermega entrypoints under `docs/UML_INDEX.md`
 
 Main blockers to reach the next phase:
 - operator workflow and governance completion
+- dashboard shell remediation so operational roles do not inherit analytics-first framing
+- role-layout reset/deep-link hardening so role-aware landing works predictably in local and authenticated runs
+- remaining rerun-compatibility cleanup in live operator surfaces before the next testing wave
 - manager-facing day/week diary workflow above Planner, Dispatch, and reconciliation
 - Kent contract validation against real payloads and real operator usage
 
@@ -130,6 +136,8 @@ High-leverage next features:
 - dual-marker reconciliation aging so delayed supplier bills can be reviewed by
   job execution date, bill receipt date, latency, and unresolved age
 - Kent admin/operator workflow split
+- deterministic role-aware landing plus safer session-layout reset/repair behavior
+- stronger visual separation between execution and admin sections in mixed surfaces (`Fleet`, `Inventory`, `Staff`)
 - multi-truck transfer and split policy definition before solver work
 
 Note: `Crusader.xlsx` remains a local fallback/fixture, but the intended source of truth for fleet/staff/supplier operational data is Google Sheets.
@@ -221,8 +229,14 @@ tree highlights the directories you will touch most often:
 │   ├── ingest_live_data.py # Mock truck/route streamer backing the dashboard map
 │   └── price_distribution.py # Corridor rollups, exports, and optimiser prep
 ├── corkysoft/              # Core routing, pricing, quote helpers, and MCP adapter
-├── dashboard/              # Streamlit entry point and reusable widgets
-│   ├── app.py              # Main Streamlit application
+├── dashboard/              # Streamlit composition shell, control layers, and UI widgets
+│   ├── app.py              # Main Streamlit composition entry point
+│   ├── auth_ui.py          # Auth gate and authenticated user banner helpers
+│   ├── data_controls.py    # Dataset, provider, ingest, and filter sidebar controls
+│   ├── layout_state.py     # Role-layout hydration and reset helpers
+│   ├── query_params.py     # Shared query-param compatibility helpers
+│   ├── shell.py            # Role-aware shell copy and sidebar framing
+│   ├── tab_registry.py     # Tab-order and landing-tab composition helpers
 │   └── components/         # Leafy widgets shared across tabs
 ├── docs/                   # Feature specs, workflow guides, imagery used in the README
 ├── tests/                  # Pytest suites mirroring analytics and UI helpers
@@ -241,7 +255,8 @@ dashboard screenshots and `MIGRATE_AWAY_FROM_streamlit_price_distribution.py` fo
 
 ## Key Components
 
-- `dashboard/app.py`: Streamlit entry point and UI layout.
+- `dashboard/app.py`: Streamlit composition layer that wires auth, shell, tabs, and tab renderers.
+- `dashboard/auth_ui.py`, `dashboard/query_params.py`, `dashboard/layout_state.py`, `dashboard/shell.py`, `dashboard/data_controls.py`, `dashboard/tab_registry.py`: extracted dashboard control layers around auth, routing, shell selection, sidebar controls, and tab composition.
 - `dashboard/components/`: Reusable Streamlit widgets.
 - `analytics/`: Data access, pricing insights, export helpers, and live data processing.
 - `analytics/db.py`: Connection helpers and schema bootstrap.

@@ -58,12 +58,13 @@ def render_distribution_analytics_surface(
     conn: sqlite3.Connection,
     start_date: Optional[date],
     end_date: Optional[date],
+    show_overview: bool = True,
 ) -> None:
     has_filtered_data = not filtered_df.empty
     metro_distance_km = 100.0
     summary_scope_df = filtered_df
 
-    if has_filtered_data:
+    if show_overview and has_filtered_data:
         filtered_df = filtered_df.copy()
         filtered_df["cost_vs_price_pct"] = compute_cost_vs_price_percentage(filtered_df)
         summary_scope_df = apply_lane_status_scope(

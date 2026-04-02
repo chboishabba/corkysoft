@@ -6,10 +6,15 @@ import inspect
 import os
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pandas as pd
 from streamlit.testing.v1 import AppTest
+from typing import Any
 
+import dashboard.app as dashboard_app
+import dashboard.auth_ui as dashboard_auth_ui
+from dashboard.tab_registry import build_tab_map
 from dashboard.components.worker_time import _build_worker_time_shift_comparison
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -57,10 +62,24 @@ def test_planner_tab_is_rendered_in_dashboard_flow() -> None:
     assert 'with tab_map["Payroll / Labor analytics"]' in source
     assert "render_payroll_labor_analytics_tab(conn, rerun_app=_rerun_app)" in source
     assert "Repair dispatcher layout" in source
+    assert "find_layout_by_tab(role_layouts, view_param)" in source
+    assert '_resolve_dashboard_shell(shell_tab)' in source
+    assert '_canonical_role_layout(str(selected_role_layout["roleKey"]))' in source
+    assert "show_analytics_overview = requested_tab in _ANALYTICS_SHELL_TABS" in source
+    assert "show_overview=show_analytics_overview" in source
+    assert 'Analytics filters and pricing controls' in source
+    assert 'st.session_state[_LAYOUT_PENDING_KEY] = _layout_defaults_from_layout(selected_role_layout)' in source
+    assert 'if "dashboard_active_role" not in st.session_state:' in source
 
     auth_banner_source = inspect.getsource(getattr(module, "_render_authenticated_user_banner"))
-    assert "Authenticated via Google" in auth_banner_source
-    assert "Temporary auth mode is active" in auth_banner_source
+    assert "_render_authenticated_user_sidebar_card(auth_state)" in auth_banner_source
+    auth_sidebar_source = inspect.getsource(
+        getattr(dashboard_auth_ui, "_render_authenticated_user_sidebar_card")
+    )
+    assert "Authenticated via Google" in auth_sidebar_source
+    assert "Temporary auth mode is active" in auth_sidebar_source
+    assert "with st.sidebar" in auth_sidebar_source
+    assert '"Settings"' in auth_sidebar_source
 
     anon_banner_source = inspect.getsource(getattr(module, "_render_anonymous_dev_banner"))
     assert "Anonymous development mode is active" in anon_banner_source
@@ -193,3 +212,127 @@ def test_streamlit_app_runs_cleanly(capsys) -> None:
     finally:
         if hasattr(app, "_tree") and getattr(app._tree, "_runner", None) is not None:
             app._tree._runner = None
+
+
+def _fake_layout(label: str) -> dict[str, Any]:
+    return {
+        "label": label,
+        "roleKey": label.lower().replace(" ", "_"),
+        "primaryTabs": ["Quote builder"],
+        "hiddenTabs": ["Kent admin"],
+        "defaultLandingTab": "Quote builder",
+    }
+
+
+def test_hydrate_role_layout_session_applies_pending_choice() -> None:
+    dashboard_app.st.session_state.clear()
+    layout = _fake_layout("Estimator")
+    pending = {
+        "primaryTabs": ["Dispatch"],
+        "hiddenTabs": ["Fleet"],
+        "landingTab": "Dispatch",
+        "showAll": True,
+    }
+    dashboard_app.st.session_state[dashboard_app._LAYOUT_PENDING_KEY] = pending
+    dashboard_app._hydrate_role_layout_session(layout)
+    assert dashboard_app._LAYOUT_PENDING_KEY not in dashboard_app.st.session_state
+    assert dashboard_app.st.session_state["dashboard_session_primary_tabs"] == ["Dispatch"]
+    assert dashboard_app.st.session_state["dashboard_session_hidden_tabs"] == ["Fleet"]
+    assert dashboard_app.st.session_state["dashboard_session_landing_tab"] == "Dispatch"
+    assert dashboard_app.st.session_state["dashboard_show_all_tabs"]
+    assert dashboard_app.st.session_state["dashboard_active_role_last"] == "Estimator"
+
+
+def test_hydrate_role_layout_session_resets_on_role_change() -> None:
+    dashboard_app.st.session_state.clear()
+    layout_a = _fake_layout("Estimator")
+    layout_b = _fake_layout("Dispatcher")
+    dashboard_app._hydrate_role_layout_session(layout_a)
+    assert dashboard_app.st.session_state["dashboard_session_primary_tabs"] == ["Quote builder"]
+    dashboard_app._hydrate_role_layout_session(layout_b)
+    assert dashboard_app.st.session_state["dashboard_session_primary_tabs"] == ["Quote builder"]
+    assert dashboard_app.st.session_state["dashboard_active_role_last"] == "Dispatcher"
+
+
+def test_hydrate_role_layout_session_force_resets_same_role() -> None:
+    dashboard_app.st.session_state.clear()
+    layout = _fake_layout("Dispatcher")
+    dashboard_app.st.session_state["dashboard_session_primary_tabs"] = ["Dispatch"]
+    dashboard_app.st.session_state["dashboard_session_hidden_tabs"] = []
+    dashboard_app.st.session_state["dashboard_session_landing_tab"] = "Dispatch"
+    dashboard_app.st.session_state["dashboard_show_all_tabs"] = True
+    dashboard_app.st.session_state["dashboard_active_role_last"] = "Dispatcher"
+
+    dashboard_app._hydrate_role_layout_session(layout, force_reset=True)
+
+    assert dashboard_app.st.session_state["dashboard_session_primary_tabs"] == ["Quote builder"]
+    assert dashboard_app.st.session_state["dashboard_session_hidden_tabs"] == ["Kent admin"]
+    assert dashboard_app.st.session_state["dashboard_session_landing_tab"] == "Quote builder"
+    assert dashboard_app.st.session_state["dashboard_show_all_tabs"] is False
+
+
+def test_anonymous_view_layout_primes_active_role_for_deep_link() -> None:
+    dashboard_app.st.session_state.clear()
+    dashboard_app.st.session_state["dashboard_active_role"] = "Estimator"
+    role_label = "Dispatcher"
+
+    if dashboard_app.st.session_state.get("dashboard_active_role") != role_label:
+        dashboard_app.st.session_state["dashboard_active_role"] = role_label
+
+    assert dashboard_app.st.session_state["dashboard_active_role"] == "Dispatcher"
+
+
+def test_resolve_dashboard_shell_distinguishes_operator_and_analytics_tabs() -> None:
+    analytics_shell = dashboard_app._resolve_dashboard_shell("Histogram")
+    assert analytics_shell["title"] == "Price distribution analytics"
+    assert analytics_shell["sidebar_heading"] == "Filters"
+    assert not analytics_shell["collapse_analytics_sidebar"]
+
+    operator_shell = dashboard_app._resolve_dashboard_shell("Dispatch")
+    assert operator_shell["title"] == "Operations control tower"
+    assert operator_shell["sidebar_heading"] == "Workflow support"
+    assert operator_shell["collapse_analytics_sidebar"]
+
+    commercial_shell = dashboard_app._resolve_dashboard_shell("Quote builder")
+    assert commercial_shell["title"] == "Commercial workflow workspace"
+    assert commercial_shell["collapse_analytics_sidebar"]
+
+
+def test_canonical_role_layout_uses_role_defaults() -> None:
+    dispatcher_layout = dashboard_app._canonical_role_layout("dispatcher")
+    assert dispatcher_layout["defaultLandingTab"] == "Dispatch"
+    assert "Operations diary" in dispatcher_layout["primaryTabs"]
+    assert dispatcher_layout["hiddenTabs"] == ["Kent admin"]
+
+
+def test_main_sets_static_corkysoft_page_title() -> None:
+    source = inspect.getsource(dashboard_app.main)
+    assert 'page_title="corkysoft"' in source
+
+
+def test_distribution_overview_has_optional_non_tab_summary_gate() -> None:
+    source = inspect.getsource(dashboard_app.render_distribution_analytics_surface)
+    assert "show_overview: bool = True" in source
+    assert "if show_overview and has_filtered_data:" in source
+
+
+def test_build_tab_map_keeps_order_stable_without_keyed_tabs(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "dashboard.tab_registry.inspect.signature",
+        lambda _: (_ for _ in ()).throw(ValueError("signature unavailable")),
+    )
+    fake_tabs = [MagicMock(), MagicMock(), MagicMock()]
+    tabs_placeholder = MagicMock()
+    tabs_placeholder.__enter__ = MagicMock(return_value=tabs_placeholder)
+    tabs_placeholder.__exit__ = MagicMock(return_value=None)
+    monkeypatch.setattr("dashboard.tab_registry.st.tabs", lambda labels: fake_tabs)
+
+    result = build_tab_map(
+        tab_labels=["Histogram", "Fleet", "Quote builder"],
+        requested_tab="Quote builder",
+        params={"view": ["Quote builder"]},
+        tabs_placeholder=tabs_placeholder,
+    )
+
+    assert result.tab_order == ["Histogram", "Fleet", "Quote builder"]
+    assert list(result.tab_map.keys()) == ["Histogram", "Fleet", "Quote builder"]

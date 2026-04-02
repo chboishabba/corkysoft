@@ -1,0 +1,98 @@
+@startuml
+title Corkysoft Workflow Surfaces
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam wrapWidth 220
+skinparam maxMessageSize 180
+package "Workflow Surfaces" {
+  [dashboard.components] as dashboard_components
+  [dashboard.components.calls] as dashboard_components_calls
+  [dashboard.components.dispatch] as dashboard_components_dispatch
+  [dashboard.components.distribution_overview] as dashboard_components_distribution_overview
+  [dashboard.components.inventory] as dashboard_components_inventory
+  [dashboard.components.kent] as dashboard_components_kent
+  [dashboard.components.lane_scope] as dashboard_components_lane_scope
+  [dashboard.components.maintenance] as dashboard_components_maintenance
+  [dashboard.components.maps] as dashboard_components_maps
+  [dashboard.components.observer_outbox] as dashboard_components_observer_outbox
+  [dashboard.components.operations] as dashboard_components_operations
+  [dashboard.components.operations_diary] as dashboard_components_operations_diary
+  [dashboard.components.optimizer] as dashboard_components_optimizer
+  [dashboard.components.payroll_labor_analytics] as dashboard_components_payroll_labor_analytics
+  [dashboard.components.planner] as dashboard_components_planner
+  [dashboard.components.price_history] as dashboard_components_price_history
+  [dashboard.components.quote_builder] as dashboard_components_quote_builder
+  [dashboard.components.route_maps] as dashboard_components_route_maps
+  [dashboard.components.staff] as dashboard_components_staff
+  [dashboard.components.summary] as dashboard_components_summary
+  [dashboard.components.worker_time] as dashboard_components_worker_time
+  [dashboard.views.admin_view] as dashboard_views_admin_view
+  [dashboard.views.network_view] as dashboard_views_network_view
+  [dashboard.views.operations_view] as dashboard_views_operations_view
+  [dashboard.views.pricing_intelligence_view] as dashboard_views_pricing_intelligence_view
+  [dashboard.views.quote_view] as dashboard_views_quote_view
+}
+dashboard_components_distribution_overview --> dashboard_components_lane_scope
+dashboard_components_distribution_overview --> dashboard_components_maps
+dashboard_components_distribution_overview --> dashboard_components_price_history
+dashboard_components_distribution_overview --> dashboard_components_summary
+dashboard_components_optimizer --> dashboard_components_lane_scope
+dashboard_components_planner --> dashboard_components_lane_scope
+dashboard_components_price_history --> dashboard_components_lane_scope
+dashboard_components_route_maps --> dashboard_components_lane_scope
+dashboard_components_route_maps --> dashboard_components_maps
+dashboard_components_staff --> dashboard_components_worker_time
+dashboard_views_admin_view --> dashboard_components_kent
+dashboard_views_network_view --> dashboard_components_distribution_overview
+dashboard_views_network_view --> dashboard_components_route_maps
+dashboard_views_operations_view --> dashboard_components_dispatch
+dashboard_views_operations_view --> dashboard_components_inventory
+dashboard_views_operations_view --> dashboard_components_maintenance
+dashboard_views_operations_view --> dashboard_components_operations
+dashboard_views_operations_view --> dashboard_components_operations_diary
+dashboard_views_operations_view --> dashboard_components_payroll_labor_analytics
+dashboard_views_operations_view --> dashboard_components_planner
+dashboard_views_operations_view --> dashboard_components_staff
+dashboard_views_operations_view --> dashboard_components_worker_time
+dashboard_views_pricing_intelligence_view --> dashboard_components_distribution_overview
+dashboard_views_pricing_intelligence_view --> dashboard_components_optimizer
+dashboard_views_pricing_intelligence_view --> dashboard_components_price_history
+dashboard_views_quote_view --> dashboard_components_calls
+dashboard_views_quote_view --> dashboard_components_kent
+dashboard_views_quote_view --> dashboard_components_quote_builder
+[Analytics + Persistence] as external_analytics_persistence
+dashboard_components_quote_builder ..> external_analytics_persistence : quote_builder -> price_distribution\nquote_builder -> operational_signals\nquote_builder -> quote_guidance
+dashboard_components_route_maps ..> external_analytics_persistence : route_maps -> price_distribution\nroute_maps -> live_data\nroute_maps -> routes_map
+dashboard_components_operations_diary ..> external_analytics_persistence : operations_diary -> operations_diary
+dashboard_components_inventory ..> external_analytics_persistence : inventory -> db
+dashboard_components_dispatch ..> external_analytics_persistence : dispatch -> operations_assignment
+dashboard_components_distribution_overview ..> external_analytics_persistence : distribution_overview -> price_distribution\ndistribution_overview -> live_data\ndistribution_overview -> margin_regression
+dashboard_components_kent ..> external_analytics_persistence : kent -> kent_ams_import
+dashboard_components_maintenance ..> external_analytics_persistence : maintenance -> price_distribution\nmaintenance -> db\nmaintenance -> adaptive_policy
+dashboard_components_maps ..> external_analytics_persistence : maps -> price_distribution\nmaps -> live_data
+dashboard_components_operations ..> external_analytics_persistence : operations -> operations_assignment
+dashboard_components_optimizer ..> external_analytics_persistence : optimizer -> optimizer
+dashboard_components_payroll_labor_analytics ..> external_analytics_persistence : payroll_labor_analytics -> db\npayroll_labor_analytics -> labor_analytics
+dashboard_components_planner ..> external_analytics_persistence : planner -> db\nplanner -> site_media\nplanner -> live_data
+dashboard_components_price_history ..> external_analytics_persistence : price_history -> price_distribution
+dashboard_components_staff ..> external_analytics_persistence : staff -> db\nstaff -> driver_shifts\nstaff -> operations_assignment
+dashboard_components_summary ..> external_analytics_persistence : summary -> price_distribution
+dashboard_components_worker_time ..> external_analytics_persistence : worker_time -> driver_shifts\nworker_time -> operations_assignment
+[Dashboard Shell] as external_dashboard_shell
+dashboard_components_quote_builder ..> external_dashboard_shell : quote_builder -> map_provider\nquote_builder -> query_params\nquote_builder -> state
+dashboard_components_route_maps ..> external_dashboard_shell : route_maps -> map_provider\nroute_maps -> state
+dashboard_components_operations_diary ..> external_dashboard_shell : operations_diary -> query_params\noperations_diary -> state
+dashboard_components_calls ..> external_dashboard_shell : calls -> state
+dashboard_components_dispatch ..> external_dashboard_shell : dispatch -> state
+dashboard_components_maintenance ..> external_dashboard_shell : maintenance -> state
+dashboard_components_maps ..> external_dashboard_shell : maps -> map_provider
+dashboard_components_operations ..> external_dashboard_shell : operations -> state
+dashboard_components_planner ..> external_dashboard_shell : planner -> map_provider\nplanner -> query_params\nplanner -> state
+[Integrations + Extensions] as external_integrations_extensions
+dashboard_components_calls ..> external_integrations_extensions : calls -> call_ops
+dashboard_components_worker_time ..> external_integrations_extensions : worker_time -> call_ops
+[Quote + Routing Core] as external_quote_routing_core
+dashboard_components_quote_builder ..> external_quote_routing_core : quote_builder -> quote_service\nquote_builder -> routing\nquote_builder -> repo
+dashboard_components_kent ..> external_quote_routing_core : kent -> quote_service
+@enduml

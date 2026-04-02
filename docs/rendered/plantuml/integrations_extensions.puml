@@ -1,0 +1,75 @@
+@startuml
+title Corkysoft Integrations + Extensions
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam wrapWidth 220
+skinparam maxMessageSize 180
+package "Integrations + Extensions" {
+  [corkysoft.api] as corkysoft_api
+  [corkysoft.api_calls] as corkysoft_api_calls
+  [corkysoft.api_kent] as corkysoft_api_kent
+  [corkysoft.api_labor] as corkysoft_api_labor
+  [corkysoft.api_operations] as corkysoft_api_operations
+  [corkysoft.api_shared] as corkysoft_api_shared
+  [corkysoft.call_ops] as corkysoft_call_ops
+  [corkysoft.call_ops_actions] as corkysoft_call_ops_actions
+  [corkysoft.call_ops_core] as corkysoft_call_ops_core
+  [corkysoft.call_ops_transcripts] as corkysoft_call_ops_transcripts
+  [corkysoft.call_ops_worker_time] as corkysoft_call_ops_worker_time
+  [corkysoft.cost_model] as corkysoft_cost_model
+  [corkysoft.importers] as corkysoft_importers
+  [corkysoft.importers.jobs_api] as corkysoft_importers_jobs_api
+  [corkysoft.mcp] as corkysoft_mcp
+  [corkysoft.mcp.__main__] as corkysoft_mcp___main__
+  [corkysoft.mcp.bridge] as corkysoft_mcp_bridge
+  [corkysoft.mcp.contracts] as corkysoft_mcp_contracts
+  [corkysoft.mcp.registry] as corkysoft_mcp_registry
+  [corkysoft.mcp.server] as corkysoft_mcp_server
+  [corkysoft.mcp.tools] as corkysoft_mcp_tools
+  [corkysoft.src.dashboard] as corkysoft_src_dashboard
+  [corkysoft.src.dashboard.app] as corkysoft_src_dashboard_app
+  [corkysoft.src.dashboard.components] as corkysoft_src_dashboard_components
+  [corkysoft.src.dashboard.data] as corkysoft_src_dashboard_data
+  [corkysoft.src.dashboard.state] as corkysoft_src_dashboard_state
+  [corkysoft.whisperx_adapter] as corkysoft_whisperx_adapter
+}
+corkysoft_api --> corkysoft_api_calls
+corkysoft_api --> corkysoft_api_kent
+corkysoft_api --> corkysoft_api_labor
+corkysoft_api --> corkysoft_api_operations
+corkysoft_api --> corkysoft_api_shared
+corkysoft_api --> corkysoft_call_ops
+corkysoft_api_calls --> corkysoft_api_shared
+corkysoft_api_calls --> corkysoft_call_ops
+corkysoft_api_calls --> corkysoft_whisperx_adapter
+corkysoft_api_operations --> corkysoft_api_shared
+corkysoft_call_ops --> corkysoft_call_ops_actions
+corkysoft_call_ops --> corkysoft_call_ops_core
+corkysoft_call_ops --> corkysoft_call_ops_transcripts
+corkysoft_call_ops --> corkysoft_call_ops_worker_time
+corkysoft_call_ops --> corkysoft_whisperx_adapter
+corkysoft_call_ops_actions --> corkysoft_call_ops
+corkysoft_call_ops_core --> corkysoft_call_ops
+corkysoft_call_ops_transcripts --> corkysoft_call_ops
+corkysoft_call_ops_worker_time --> corkysoft_call_ops
+corkysoft_mcp___main__ --> corkysoft_mcp_bridge
+corkysoft_mcp___main__ --> corkysoft_mcp_server
+corkysoft_mcp_bridge --> corkysoft_mcp
+corkysoft_mcp_registry --> corkysoft_mcp_contracts
+corkysoft_mcp_registry --> corkysoft_mcp_tools
+corkysoft_mcp_server --> corkysoft_mcp_contracts
+corkysoft_mcp_server --> corkysoft_mcp_registry
+corkysoft_mcp_tools --> corkysoft_mcp_contracts
+[Analytics + Persistence] as external_analytics_persistence
+corkysoft_api ..> external_analytics_persistence : api -> operations_diary\napi -> db\napi -> db_connection
+corkysoft_call_ops ..> external_analytics_persistence : call_ops -> schema
+corkysoft_mcp_tools ..> external_analytics_persistence : tools -> price_distribution\ntools -> operations_diary\ntools -> connection
+corkysoft_api_calls ..> external_analytics_persistence : api_calls -> operations_diary\napi_calls -> db_connection
+corkysoft_api_kent ..> external_analytics_persistence : api_kent -> db_connection\napi_kent -> kent_ams_import
+corkysoft_api_labor ..> external_analytics_persistence : api_labor -> db\napi_labor -> db_connection\napi_labor -> labor_analytics
+corkysoft_api_operations ..> external_analytics_persistence : api_operations -> inventory\napi_operations -> db_connection\napi_operations -> operations_assignment
+[Quote + Routing Core] as external_quote_routing_core
+corkysoft_call_ops ..> external_quote_routing_core : call_ops -> repo
+corkysoft_cost_model ..> external_quote_routing_core : cost_model -> schema
+@enduml

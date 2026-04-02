@@ -174,8 +174,10 @@ Operator actions:
 Primary surfaces:
 - `Quote builder`
 - `Kent tenders`
-- `Kent admin`
 - analytics tabs
+
+Secondary / governed-review surface:
+- `Kent admin`
 
 Trigger:
 - Periodic review of pricing performance, tender conversion, and margin quality.
@@ -203,12 +205,16 @@ Expected system outputs:
   insurance, tender, customs, or audit-state modeling
 
 Operator actions:
-- approve policy changes
 - approve or reject rollout promotions
 - request calibration/tuning work
 - decide where to invest operational attention
 - prioritize requirement/proposal/governance formalization where external
   paperwork quality is currently driving margin or risk
+
+Current governance note:
+- `Kent admin` is currently writable only for the `System / Rollout Admin`
+  role. Commercial owners can still use it as a review surface, but policy and
+  reason-code writes remain admin-gated in the live dashboard.
 
 ## Compliance-Heavy / International Workflow Owner
 

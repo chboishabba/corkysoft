@@ -58,6 +58,8 @@ from corkysoft.repo import (
     persist_quote,
 )
 from corkysoft.routing import route_distance, snap_coordinates_to_road
+from dashboard import state as dashboard_state
+from dashboard.components import quote_builder
 from corkysoft.routing.providers import IncompleteRouteError, NoRoutablePointError
 
 
@@ -1154,8 +1156,6 @@ def test_load_quotes_returns_saved_quote() -> None:
 
 
 def test_apply_quote_suggestion_updates_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
-    from dashboard.components import quote_builder
-
     st.session_state.clear()
 
     conn = object()
@@ -1194,7 +1194,7 @@ def test_apply_quote_suggestion_updates_inputs(monkeypatch: pytest.MonkeyPatch) 
             )
         return current
 
-    monkeypatch.setattr(quote_builder, "calculate_quote", _fake_calculate)
+    monkeypatch.setattr(dashboard_state, "calculate_quote", _fake_calculate)
 
     quote_builder.apply_quote_suggestion(conn, "origin", "Suggested Origin")
 

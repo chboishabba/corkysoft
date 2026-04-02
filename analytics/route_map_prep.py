@@ -9,7 +9,11 @@ import numpy as np
 import pandas as pd
 
 from .profitability_map_prep import _coerce_float, _route_display_name
-from .routing_provider import RoutingProvider, get_routing_provider
+from .routing_provider import (
+    OpenRouteServiceProvider,
+    RoutingProvider,
+    get_routing_provider,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from openrouteservice import Client as ORSClient
@@ -277,8 +281,9 @@ def build_isochrone_polygons(
     routing_provider: Optional[RoutingProvider] = None,
     ors_client: Optional[ORSClient] = None,
     ors_profile: str = "driving-hgv",
+    allow_approximate_fallback: bool = False,
 ) -> pd.DataFrame:
-    """Return approximate isochrone polygons for each route in ``df``."""
+    """Return network-aware isochrone polygons for each route in ``df``."""
 
     empty = pd.DataFrame(
         columns=[
@@ -289,6 +294,7 @@ def build_isochrone_polygons(
             "speed_kmh",
             "latitudes",
             "longitudes",
+            "geometry_source",
             "tooltip",
         ]
     )
@@ -320,15 +326,23 @@ def build_isochrone_polygons(
         None,
     )
 
-    provider: Optional[RoutingProvider]
+    providers: list[RoutingProvider] = []
     if routing_provider is not None:
-        provider = routing_provider
+        providers.append(routing_provider)
     else:
         try:
-            provider = get_routing_provider(client=ors_client)
+            providers.append(get_routing_provider(client=None))
         except Exception as exc:  # pragma: no cover
-            logger.debug("Unable to initialise routing provider for isochrones: %s", exc)
-            provider = None
+            logger.debug("Unable to initialise primary routing provider for isochrones: %s", exc)
+        try:
+            ors_provider = OpenRouteServiceProvider(ors_client)
+        except Exception as exc:  # pragma: no cover
+            logger.debug("Unable to initialise ORS fallback provider for isochrones: %s", exc)
+            ors_provider = None
+        if ors_provider is not None and not any(
+            isinstance(provider, OpenRouteServiceProvider) for provider in providers
+        ):
+            providers.append(ors_provider)
 
     range_seconds: list[int] = []
     if horizon_hours > 0 and math.isfinite(horizon_hours):
@@ -364,36 +378,38 @@ def build_isochrone_polygons(
 
         latitudes: list[float]
         longitudes: list[float]
-        if provider is not None and range_seconds:
-            try:
-                result = provider.isochrone(
-                    centre=(float(lon_value), float(lat_value)),
-                    profile=ors_profile,
-                    range_seconds=range_seconds,
-                )
-            except NotImplementedError:
-                result = None
-            except Exception as exc:  # pragma: no cover
-                logger.debug("Routing provider isochrone request failed for %s: %s", label, exc)
-                result = None
-            if result:
-                latitudes, longitudes = result.to_lat_lon_lists()
-            else:
-                latitudes, longitudes = [], []
-            if not latitudes or not longitudes:
-                latitudes, longitudes = _circle_coordinates(
-                    lat_value,
-                    lon_value,
-                    radius_km,
-                    points=points,
-                )
-        else:
+        geometry_source = "network"
+        latitudes, longitudes = [], []
+        if range_seconds:
+            for provider in providers:
+                try:
+                    result = provider.isochrone(
+                        centre=(float(lon_value), float(lat_value)),
+                        profile=ors_profile,
+                        range_seconds=range_seconds,
+                    )
+                except NotImplementedError:
+                    result = None
+                except Exception as exc:  # pragma: no cover
+                    logger.debug(
+                        "Routing provider isochrone request failed for %s via %s: %s",
+                        label,
+                        provider.__class__.__name__,
+                        exc,
+                    )
+                    result = None
+                if result:
+                    latitudes, longitudes = result.to_lat_lon_lists()
+                if latitudes and longitudes:
+                    break
+        if (not latitudes or not longitudes) and allow_approximate_fallback:
             latitudes, longitudes = _circle_coordinates(
                 lat_value,
                 lon_value,
                 radius_km,
                 points=points,
             )
+            geometry_source = "approximate_circle"
         if not latitudes or not longitudes:
             continue
 
@@ -401,6 +417,8 @@ def build_isochrone_polygons(
             f"{label} — {horizon_hours:.1f} hr reach ≈ {radius_km:.0f} km "
             f"(avg {speed_kmh:.0f} km/h)"
         )
+        if geometry_source != "network":
+            tooltip += " • approximate radius"
 
         records.append(
             {
@@ -411,6 +429,7 @@ def build_isochrone_polygons(
                 "speed_kmh": speed_kmh,
                 "latitudes": latitudes,
                 "longitudes": longitudes,
+                "geometry_source": geometry_source,
                 "tooltip": tooltip,
             }
         )

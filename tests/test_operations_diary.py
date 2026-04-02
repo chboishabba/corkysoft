@@ -184,6 +184,7 @@ def test_build_operations_diary_surfaces_invoice_and_bill_status() -> None:
     assert row["invoiceStatus"] == "ready_to_invoice"
     assert row["billStatus"] == "bill_received"
     assert row["isFocusJob"] is True
+    assert diary["summary"]["exposureSeverity"] == "low"
 
 
 def test_build_job_usage_details_includes_vehicle_and_staff_usage() -> None:
