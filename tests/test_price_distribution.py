@@ -21,6 +21,7 @@ from analytics.price_distribution import (
     OVERHEAD_COST_KEY,
     aggregate_corridor_performance,
     build_isochrone_polygons,
+    explain_isochrone_unavailability,
     build_heatmap_source,
     build_price_history_series,
     compute_cost_vs_price_percentage,
@@ -2191,3 +2192,53 @@ def test_build_isochrone_polygons_can_explicitly_use_approximate_fallback():
     record = iso_df.iloc[0]
     assert record["geometry_source"] == "approximate_circle"
     assert "approximate radius" in record["tooltip"]
+
+
+def test_explain_isochrone_unavailability_reports_missing_distance_column():
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705],
+            "origin_lon": [153.0260],
+        }
+    )
+
+    diagnostics = explain_isochrone_unavailability(df)
+
+    assert diagnostics["input_rows"] == 1
+    assert diagnostics["candidate_rows"] == 0
+    assert "distance_km" in diagnostics["missing_columns"]
+    assert any("required columns are missing" in reason for reason in diagnostics["reasons"])
+
+
+def test_explain_isochrone_unavailability_google_without_ors(monkeypatch):
+    monkeypatch.setenv("ROUTING_PROVIDER", "google")
+    monkeypatch.delenv("ORS_API_KEY", raising=False)
+
+    class StubProvider:
+        def route_geometry(self, **_: Any) -> Any:  # pragma: no cover - protocol only
+            raise NotImplementedError
+
+        def isochrone(
+            self,
+            *,
+            centre: tuple[float, float],
+            profile: str,
+            range_seconds: list[int],
+        ) -> IsochroneResult | None:
+            return None
+
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705],
+            "origin_lon": [153.0260],
+            "distance_km": [120.0],
+            "duration_hr": [2.0],
+        }
+    )
+
+    diagnostics = explain_isochrone_unavailability(df, routing_provider=StubProvider())
+
+    assert diagnostics["input_rows"] == 1
+    assert diagnostics["candidate_rows"] == 1
+    assert any("Google routing is active" in reason for reason in diagnostics["reasons"])
+    assert any("ORS_API_KEY" in action for action in diagnostics["next_actions"])

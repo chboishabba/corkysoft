@@ -25,6 +25,7 @@ from analytics.price_distribution import (
     available_heatmap_weightings,
     build_heatmap_source,
     build_isochrone_polygons,
+    explain_isochrone_unavailability,
     prepare_metric_route_map_data,
     prepare_route_map_data,
 )
@@ -616,11 +617,31 @@ def _render_isochrone_tab(map_df: pd.DataFrame) -> None:
     )
 
     if iso_source.empty:
+        diagnostics = explain_isochrone_unavailability(
+            map_df,
+            centre="origin" if centre_label == "Origin" else "destination",
+            horizon_hours=float(iso_hours),
+        )
         st.info(
             "No network-aware isochrones are available for the current filters and routing configuration."
         )
+        if diagnostics["reasons"]:
+            st.caption("Why this can happen:")
+            for reason in diagnostics["reasons"]:
+                st.caption(f"- {reason}")
         st.caption(
-            "This view now suppresses synthetic circular reach estimates. Configure an isochrone-capable provider such as ORS to render true travel-time polygons."
+            "This view suppresses synthetic circular reach estimates. It only renders provider-backed isochrone polygons."
+        )
+        if diagnostics["next_actions"]:
+            st.caption("Next steps:")
+            for action in diagnostics["next_actions"]:
+                st.caption(f"- {action}")
+        if diagnostics["provider_names"]:
+            st.caption(
+                "Attempted providers: " + ", ".join(str(name) for name in diagnostics["provider_names"])
+            )
+        st.caption(
+            f"Candidate routes with valid centre/distance: {diagnostics['candidate_rows']} / {diagnostics['input_rows']}"
         )
         return
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from typing import Any, Literal, Optional, Sequence, TYPE_CHECKING
 
 import numpy as np
@@ -326,23 +327,10 @@ def build_isochrone_polygons(
         None,
     )
 
-    providers: list[RoutingProvider] = []
-    if routing_provider is not None:
-        providers.append(routing_provider)
-    else:
-        try:
-            providers.append(get_routing_provider(client=None))
-        except Exception as exc:  # pragma: no cover
-            logger.debug("Unable to initialise primary routing provider for isochrones: %s", exc)
-        try:
-            ors_provider = OpenRouteServiceProvider(ors_client)
-        except Exception as exc:  # pragma: no cover
-            logger.debug("Unable to initialise ORS fallback provider for isochrones: %s", exc)
-            ors_provider = None
-        if ors_provider is not None and not any(
-            isinstance(provider, OpenRouteServiceProvider) for provider in providers
-        ):
-            providers.append(ors_provider)
+    providers, _provider_init_errors = _resolve_isochrone_providers(
+        routing_provider=routing_provider,
+        ors_client=ors_client,
+    )
 
     range_seconds: list[int] = []
     if horizon_hours > 0 and math.isfinite(horizon_hours):
@@ -437,3 +425,129 @@ def build_isochrone_polygons(
             break
 
     return pd.DataFrame.from_records(records)
+
+
+def explain_isochrone_unavailability(
+    df: pd.DataFrame,
+    *,
+    centre: Literal["origin", "destination"] = "origin",
+    horizon_hours: float = 4.0,
+    routing_provider: Optional[RoutingProvider] = None,
+    ors_client: Optional[ORSClient] = None,
+) -> dict[str, Any]:
+    """Return deterministic diagnostics for empty network-isochrone results."""
+
+    centre_key = centre.lower()
+    lat_column = "origin_lat" if centre_key == "origin" else "dest_lat"
+    lon_column = "origin_lon" if centre_key == "origin" else "dest_lon"
+    candidate_distance_columns = ("distance_km", "distance", "km", "kms")
+    distance_column = next(
+        (column for column in candidate_distance_columns if column in df.columns),
+        None,
+    )
+    missing_columns = [
+        column
+        for column in (lat_column, lon_column)
+        if column not in df.columns
+    ]
+    if distance_column is None:
+        missing_columns.append("distance_km")
+
+    candidates = 0
+    if not df.empty and not missing_columns:
+        latitudes = pd.to_numeric(df[lat_column], errors="coerce")
+        longitudes = pd.to_numeric(df[lon_column], errors="coerce")
+        distances = pd.to_numeric(df[distance_column], errors="coerce")
+        candidates = int(((latitudes.notna()) & (longitudes.notna()) & (distances > 0)).sum())
+
+    providers, provider_init_errors = _resolve_isochrone_providers(
+        routing_provider=routing_provider,
+        ors_client=ors_client,
+    )
+    provider_names = [provider.__class__.__name__ for provider in providers]
+    routing_provider_env = os.environ.get("ROUTING_PROVIDER", "ors").strip().lower()
+    ors_api_key_configured = bool(str(os.environ.get("ORS_API_KEY", "")).strip())
+    google_api_key_configured = bool(str(os.environ.get("GOOGLE_MAPS_API_KEY", "")).strip())
+
+    reasons: list[str] = []
+    next_actions: list[str] = []
+
+    if df.empty:
+        reasons.append("No routes are available after the current date/lane/metro filters.")
+        next_actions.append("Relax filters or switch lane scope to include assigned and ambiguous rows.")
+    if missing_columns:
+        reasons.append(
+            "Isochrones require centre coordinates and route distance, but required columns are missing."
+        )
+        next_actions.append(
+            f"Include geocoded `{lat_column}`/`{lon_column}` and a positive distance column (for example `distance_km`)."
+        )
+    elif candidates == 0:
+        reasons.append("Filtered rows do not contain both centre coordinates and positive distance.")
+        next_actions.append(
+            "Ensure selected rows have geocoded origin/destination values and distance > 0."
+        )
+
+    if horizon_hours <= 0 or not math.isfinite(horizon_hours):
+        reasons.append("Isochrone horizon must be a positive finite number of hours.")
+        next_actions.append("Set a positive travel time horizon.")
+
+    if not provider_names:
+        reasons.append("No routing provider could be initialised for network-aware isochrones.")
+    if provider_init_errors:
+        reasons.extend(provider_init_errors)
+
+    if routing_provider_env == "google" and not ors_api_key_configured:
+        reasons.append(
+            "Google routing is active and ORS fallback is not configured; Google clients may not expose an isochrone endpoint."
+        )
+        next_actions.append(
+            "Set `ORS_API_KEY` for ORS-backed isochrones, or switch `ROUTING_PROVIDER=ors`."
+        )
+    elif not ors_api_key_configured and "OpenRouteServiceProvider" not in provider_names:
+        next_actions.append("Configure `ORS_API_KEY` to enable ORS-backed isochrone polygons.")
+
+    return {
+        "centre": centre_key,
+        "horizon_hours": float(horizon_hours),
+        "input_rows": int(len(df)),
+        "candidate_rows": int(candidates),
+        "missing_columns": missing_columns,
+        "provider_names": provider_names,
+        "routing_provider_env": routing_provider_env,
+        "ors_api_key_configured": ors_api_key_configured,
+        "google_api_key_configured": google_api_key_configured,
+        "reasons": reasons,
+        "next_actions": next_actions,
+    }
+
+
+def _resolve_isochrone_providers(
+    *,
+    routing_provider: Optional[RoutingProvider],
+    ors_client: Optional[ORSClient],
+) -> tuple[list[RoutingProvider], list[str]]:
+    providers: list[RoutingProvider] = []
+    init_errors: list[str] = []
+    if routing_provider is not None:
+        providers.append(routing_provider)
+        return providers, init_errors
+
+    try:
+        providers.append(get_routing_provider(client=None))
+    except Exception as exc:  # pragma: no cover
+        logger.debug("Unable to initialise primary routing provider for isochrones: %s", exc)
+        init_errors.append(f"Primary provider init failed: {exc}")
+
+    try:
+        ors_provider = OpenRouteServiceProvider(ors_client)
+    except Exception as exc:  # pragma: no cover
+        logger.debug("Unable to initialise ORS fallback provider for isochrones: %s", exc)
+        init_errors.append(f"ORS fallback init failed: {exc}")
+        ors_provider = None
+
+    if ors_provider is not None and not any(
+        isinstance(provider, OpenRouteServiceProvider) for provider in providers
+    ):
+        providers.append(ors_provider)
+    return providers, init_errors

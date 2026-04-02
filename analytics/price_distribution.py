@@ -79,6 +79,7 @@ from .route_map_prep import (
     METRO_DISTANCE_THRESHOLD_KM,
     build_heatmap_source,
     build_isochrone_polygons,
+    explain_isochrone_unavailability,
     compute_cost_vs_price_percentage,
     filter_jobs_by_distance,
     prepare_metric_route_map_data,
