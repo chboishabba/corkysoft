@@ -478,24 +478,11 @@ def render_fleet_tab(conn) -> None:
 
     with st.expander("Role layout defaults", expanded=False):
         available_tabs = [
-            "Histogram",
-            "Price history",
-            "Profitability insights",
-            "Live network overview",
-            "Route maps",
-            "Dispatch",
-            "Planner",
+            "Quote",
+            "Pricing Intelligence",
+            "Network",
             "Operations",
-            "Fleet",
-            "Vehicle maintenance",
-            "Quote builder",
-            "Calls",
-            "Kent tenders",
-            "Kent admin",
-            "Optimizer",
-            "Inventory",
-            "Staff",
-            "Driver shifts",
+            "Admin",
         ]
         role_layouts = get_dashboard_role_layouts(conn, available_tabs=available_tabs)
         role_options = {row["label"]: row for row in role_layouts}

@@ -43,6 +43,11 @@ Route profitability tooling for removals operators. The project couples a comman
 
 Run `./start_app.sh` or `start_app.bat` to run the app.
 
+Environment rule:
+- use the repo virtualenv exclusively for Python, Streamlit, and pytest once
+  it exists; prefer `venv/bin/python`, `venv/bin/streamlit`, and
+  `venv/bin/pytest` over system executables
+
 ## Start Here
 
 - Estimator / quoting flow: [Quote to Award Lifecycle](docs/commercial_workflow_lifecycle.md)
@@ -68,26 +73,48 @@ Run `./start_app.sh` or `start_app.bat` to run the app.
 
 ## Operational Roles
 
-- `Estimator`: starts in `Quote builder`.
-- `Dispatcher`: starts in `Dispatch` and `Kent tenders`.
-- `Fleet / Operations Manager`: starts in `Operations diary`, with `Operations` and `Fleet` for readiness/policy detail.
-- `Labor Planner / Staff Coordinator`: starts in `Staff` and `Driver shifts`.
-- `Maintenance / Compliance Coordinator`: starts in `Fleet` and `Vehicle maintenance`.
-- `Inventory / Supplier Coordinator`: starts in `Inventory`, with `Dispatch` as execution context.
-- `Warehouse / Crew`: starts in `Inventory`, with `Dispatch` as execution context.
-- `Workforce Time Capture Coordinator`: starts in `Staff` and `Driver shifts`.
-- `Owner / Commercial / Finance-facing Manager`: starts in `Payroll / Labor analytics`, with `Staff` and `Driver shifts` as supporting surfaces.
-- `Commercial Owner`: starts in `Quote builder` and `Kent tenders`, with analytics tabs for review and `Kent admin` currently treated as a secondary/read-only governance surface unless acting in the admin role.
-- `System / Rollout Admin`: starts in `Fleet` for cutover and source-sync governance, and owns write access to `Kent admin`.
+The current top-level shell is:
+
+- `Quote`
+- `Pricing Intelligence`
+- `Network`
+- `Operations`
+- `Admin`
+
+Nested workflows such as `Quote builder`, `Calls`, `Kent tenders`, `Dispatch`,
+`Planner`, `Operations diary`, `Fleet`, `Inventory`, and `Kent admin` now live
+inside those five entry views rather than acting as the top-level shell.
+
+- `Estimator`: starts in `Quote`.
+- `Dispatcher`: starts in `Operations`, with `Quote` for tender/quote follow-through.
+- `Fleet / Operations Manager`: starts in `Operations`, with `Network` for live context.
+- `Labor Planner / Staff Coordinator`: starts in `Operations`.
+- `Maintenance / Compliance Coordinator`: starts in `Operations`, with `Network` for live context.
+- `Inventory / Supplier Coordinator`: starts in `Operations`.
+- `Warehouse / Crew`: starts in `Operations`.
+- `Workforce Time Capture Coordinator`: starts in `Operations`.
+- `Owner / Commercial / Finance-facing Manager`: starts in `Pricing Intelligence`, with `Operations` for follow-through.
+- `Commercial Owner`: starts in `Quote` and `Pricing Intelligence`, with `Admin` treated as a secondary/read-only governance surface unless acting in the admin role.
+- `System / Rollout Admin`: starts in `Admin`.
 
 See [UI Role Coverage Matrix](docs/ui_role_coverage_matrix.md) for the authoritative tab ownership map.
 
-## Current Status (2026-03-26)
+## Current Status (2026-04-02)
 
 Latest tracking page: [Progress status board](docs/progress_status_board.md)
 
 Core routing + costing are stable. The Streamlit dashboard is implemented and
 usable, but some workflows remain provisional or governance-light:
+
+- the major shell revision is now landed: the dashboard is organized around
+  `Quote`, `Pricing Intelligence`, `Network`, `Operations`, and `Admin`
+- legacy leaf surfaces still exist, but they now sit inside those workflow
+  views rather than defining the top-level navigation
+- docs and onboarding are being collapsed onto the new shell so operator entry
+  guidance matches the implemented UI
+- the new KPI and alert treatment in the workflow views is currently
+  scaffolding-level; treat it as presentation structure, not yet as sourced
+  operational truth
 
 - quote builder is implemented and persists quotes
 - quote builder now includes benchmark overlays, recommendation guidance, and
@@ -112,18 +139,26 @@ usable, but some workflows remain provisional or governance-light:
   layers rather than the previous main hotspots
 - the architecture/UML layer is now generated from the internal import graph,
   with source and rendered supermega entrypoints under `docs/UML_INDEX.md`
+- the canonical shell docs now treat `Quote`, `Pricing Intelligence`,
+  `Network`, `Operations`, and `Admin` as the only top-level entrypoints;
+  `Planner`, `Dispatch`, `Operations diary`, `Kent tenders`, and `Kent admin`
+  are nested workflows inside those owning views
 
 Main blockers to reach the next phase:
 - operator workflow and governance completion
 - dashboard shell remediation so operational roles do not inherit analytics-first framing
-- role-layout reset/deep-link hardening so role-aware landing works predictably in local and authenticated runs
+- role-layout reset and workspace-state hardening so role-aware landing,
+  support-safe shared links, and reproducible shell/workflow state work
+  predictably in local and authenticated runs
 - remaining rerun-compatibility cleanup in live operator surfaces before the next testing wave
-- manager-facing day/week diary workflow above Planner, Dispatch, and reconciliation
+- deeper sourcing and operationalization of the implemented manager-facing
+  day/week diary workflow above Planner, Dispatch, and reconciliation
 - Kent contract validation against real payloads and real operator usage
 
 High-leverage next features:
 - route and tender calibration against live operator feedback
-- operations diary day/week cockpit linking planning, assignments, usage, and invoicing
+- deepen the implemented operations diary cockpit with sourced metrics,
+  richer review state, and stronger reconciliation follow-through
 - customer invoice and subcontractor-bill reconciliation against job usage truth
 - requirements/proposal/governance formalization for international and
   compliance-heavy jobs
@@ -136,7 +171,8 @@ High-leverage next features:
 - dual-marker reconciliation aging so delayed supplier bills can be reviewed by
   job execution date, bill receipt date, latency, and unresolved age
 - Kent admin/operator workflow split
-- deterministic role-aware landing plus safer session-layout reset/repair behavior
+- deterministic role-aware landing plus support-safe, reproducible
+  workspace-state sharing and safer session-layout reset/repair behavior
 - stronger visual separation between execution and admin sections in mixed surfaces (`Fleet`, `Inventory`, `Staff`)
 - multi-truck transfer and split policy definition before solver work
 
@@ -327,7 +363,7 @@ The routing stack can call either [OpenRouteService](https://openrouteservice.or
 export ROUTING_PROVIDER="ors"  # or "google"
 ```
 
-Isochrones are requested from the active provider when available. Google connectors that expose an `isochrones`/`isochrone` method feed travel-boundary polygons directly into the dashboard, producing detailed shapes instead of the circular fallbacks. The OpenRouteService provider continues to use its native isochrone endpoint (returning GeoJSON polygons when accessible), and the UI falls back to evenly spaced circles only when neither provider returns geometry.
+Isochrones are requested only from the active provider. Google connectors that expose an `isochrones`/`isochrone` method feed travel-boundary polygons directly into the dashboard, producing detailed shapes instead of the circular fallbacks. The OpenRouteService provider continues to use its native isochrone endpoint when `ROUTING_PROVIDER=ors`. The UI falls back to evenly spaced circles only when the selected provider returns no geometry and approximate fallback is explicitly enabled.
 
 #### OpenRouteService setup
 

@@ -61,8 +61,9 @@ System behavior:
 - persist job/tender state
 - carry profitability and operational signals into downstream job context
 - preserve the audit trail that explains why work was accepted
-- expose the accepted work to the `Operations diary` so managers can review the
-  day/week plan, resource usage, and invoice/bill follow-through in one place
+- expose the accepted work to `Operations` -> `Operations diary` so managers
+  can review the day/week plan, resource usage, and invoice/bill follow-through
+  in one place
 - keep requirement/proposal/governance completeness visible for jobs whose
   paperwork or compliance state will matter later during execution,
   subcontractor review, insurer review, or customer invoicing
@@ -70,10 +71,11 @@ System behavior:
 ## 5. Operational Execution
 
 Downstream use:
-- dispatch can see policy context and operational fit
-- dispatch should operate from the native job-centric board rather than from the
-  source spreadsheets directly
-- dispatch/planning should assign trucks and staff at the `job_segments` level
+- `Operations` -> `Dispatch` can see policy context and operational fit
+- `Operations` -> `Dispatch` should operate from the native job-centric board
+  rather than from the source spreadsheets directly
+- `Operations` -> `Dispatch` and `Operations` -> `Planner` should assign trucks
+  and staff at the `job_segments` level
 - `job_segments` are an internal planning artifact; the intended operator workflow is a higher-level planning surface that proposes legs from route, site, and corridor context rather than requiring manual segment record entry
 - operational spreadsheets inform availability/readiness but do not own final assignment truth
 - stock and supplier coordination should follow the same `job_segments` so segment-level execution is coherent
@@ -86,7 +88,8 @@ Downstream use:
   spreadsheets or inbox-driven review
 - future international/compliance-heavy workflows should not treat paperwork as
   detached admin clutter; requirement state, proposal/document completeness, and
-  governance evidence should sit beside quote/award/dispatch decisions
+  governance evidence should sit beside quote/award/`Operations` -> `Dispatch`
+  decisions
 
 Planner interaction reference:
 - [Planner Interaction Model](planner_interaction_model.md)

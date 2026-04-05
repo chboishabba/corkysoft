@@ -2,6 +2,44 @@
 
 ## 2026-04-02
 
+- normalized the PlantUML supermega/dashboard-shell generator around the
+  implemented five-view `dashboard/views/*` layer, assigned `dashboard.theme`
+  to the shell domain, and refreshed focused UML coverage so the architecture
+  root no longer summarizes the UI through retired component-era shell labels
+- corrected the remaining canonical-doc shell drift so README, roadmap, and
+  architecture/progress control surfaces no longer describe `Planner`,
+  `Dispatch`, or `Operations diary` as pending or top-level shell tabs
+- removed the next deeper shell-doc drift in planner/diary/auth workflow specs,
+  including stale direct-tab and legacy hidden-query-param examples that no
+  longer matched the five-view shell contract
+- corrected deeper workflow specs so planner, Kent tender, spreadsheet-cutover,
+  and operations-diary docs now describe those surfaces as nested workflows
+  under the current shell rather than as standalone top-level tabs
+- removed the remaining stale `Operations diary` deep-link target from the
+  diary refresh flow, refreshed the shell-layout regression guard, and updated
+  user-testing notes so the old `experimental_rerun` crash is recorded as
+  historical evidence rather than current behavior
+- added an explicit placeholder-governance notice to all five top-level shell
+  views so scaffold KPI strips and alerts are visibly marked as
+  non-decision-grade until sourced metrics with freshness/ownership replace
+  them
+- hardened the shared KPI-strip and alert-banner primitives so telemetry-backed
+  labels, values, and messages are HTML-escaped before rendering, and added
+  focused regression coverage for those components
+- validated the current shell/provider remediation wave with a focused
+  repo-venv suite covering dashboard shell, layout, provider strictness,
+  isochrones, and quote-state flows: 133 passing tests
+- formalized the current remediation wave into four explicit worker control
+  lanes, each with standards-aligned scope, completion evidence, and promotion
+  gates in the roadmap, progress board, and architecture docs
+- aligned the dashboard shell, role docs, roadmap, and progress board around
+  the revised five-view top level: `Quote`, `Pricing Intelligence`, `Network`,
+  `Operations`, and `Admin`
+- repaired query-param deep links from quote, planner, dispatch, and
+  operations-diary flows so they return to owning top-level views instead of
+  retired flat-tab names
+- updated the Fleet-admin role-layout editor to use the live five-view shell
+  taxonomy and refreshed focused regression coverage accordingly
 - replaced the one-off dashboard architecture diagram with a generated UML suite driven by the internal Python import graph
 - added a supermega UML entrypoint plus child-view PlantUML and rendered SVG artifacts under `docs/rendered/`
 - added render/check ergonomics to `scripts/build_supermega_uml.py`, including `--render` and `--check --render`

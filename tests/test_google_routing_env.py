@@ -148,6 +148,26 @@ def test_get_routing_provider_uses_env_flag(monkeypatch: pytest.MonkeyPatch) -> 
     assert provider._client is fake_client  # type: ignore[attr-defined]
 
 
+def test_get_routing_provider_accepts_string_provider_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_client = object()
+
+    provider = analytics_rp.get_routing_provider(provider="google", client=fake_client)
+
+    assert isinstance(provider, analytics_rp.GoogleRoutesProvider)
+    assert provider._client is fake_client  # type: ignore[attr-defined]
+
+
+def test_get_routing_provider_accepts_google_maps_label() -> None:
+    fake_client = object()
+
+    provider = analytics_rp.get_routing_provider(provider="Google Maps", client=fake_client)
+
+    assert isinstance(provider, analytics_rp.GoogleRoutesProvider)
+    assert provider._client is fake_client  # type: ignore[attr-defined]
+
+
 def test_snap_coordinates_to_road_respects_routing_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ROUTING_PROVIDER", "google")
     calls: dict[str, Any] = {}

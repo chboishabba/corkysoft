@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
@@ -22,7 +23,13 @@ from analytics.price_distribution import (
     compute_profitability_line_width,
     compute_tapered_route_polygon,
 )
-from dashboard.map_provider import plotly_map_layout, pydeck_map_kwargs
+from dashboard.map_provider import (
+    _resolved_provider,
+    google_maps_requested_without_key,
+    plotly_map_layout,
+    pydeck_map_kwargs,
+    using_google_maps,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -63,13 +70,167 @@ def _hex_to_rgb(value: str) -> Tuple[int, int, int]:
 
 
 def _geojson_to_path(value: Any) -> Optional[List[List[float]]]:
-    if not isinstance(value, str) or not value.strip():
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        try:
+            value = json.dumps(value)
+        except (TypeError, ValueError):
+            return None
+    elif isinstance(value, (bytes, bytearray, memoryview)):
+        try:
+            value = bytes(value).decode("utf-8")
+        except Exception:
+            return None
+
+    if not isinstance(value, str):
+        return None
+
+    payload = value.strip()
+    if not payload or payload.startswith("<"):
+        return None
+    if '"type"' not in payload and '"features"' not in payload and '"geometry"' not in payload:
         return None
     try:
-        coords = extract_route_path(value)
+        coords = extract_route_path(payload)
     except Exception:
         return None
     return [[float(lon), float(lat)] for lat, lon in coords]
+
+
+def _has_geometry_payload(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, Mapping):
+        return bool(value)
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        try:
+            value = bytes(value).decode("utf-8")
+        except Exception:
+            return False
+    if isinstance(value, str):
+        payload = value.strip()
+        return bool(payload) and not payload.startswith("<")
+    return False
+
+
+def _sanitise_geojson_paths(
+    series: pd.Series,
+    *,
+    label: str,
+) -> pd.Series:
+    paths: list[Optional[List[List[float]]]] = []
+    skipped = 0
+    for value in series.tolist():
+        path = _geojson_to_path(value)
+        if path is None and _has_geometry_payload(value):
+            skipped += 1
+        paths.append(path)
+
+    if skipped:
+        logger.warning(
+            "Skipping %d malformed %s GeoJSON payload(s) before pydeck render.",
+            skipped,
+            label,
+        )
+
+    return pd.Series(paths, index=series.index, dtype=object)
+
+
+def _coerce_position_sequence(
+    value: object,
+    *,
+    minimum_points: int,
+) -> Optional[List[List[float]]]:
+    """Coerce a geometry payload into a list-of-coordinate-pairs.
+
+    Accepts lists, tuples, or JSON-encoded payloads containing valid point
+    sequences. Returns None when the payload is malformed or does not contain the
+    required minimum number of points.
+    """
+
+    candidate: object = value
+
+    if candidate is None:
+        return None
+
+    if isinstance(candidate, (bytes, bytearray, memoryview)):
+        try:
+            candidate = bytes(candidate).decode("utf-8")
+        except Exception:
+            return None
+
+    if isinstance(candidate, str):
+        payload = candidate.strip()
+        if not payload or payload.startswith("<"):
+            return None
+        if (
+            (payload.startswith("{") and payload.endswith("}"))
+            or (payload.startswith("[") and payload.endswith("]"))
+        ):
+            try:
+                candidate = json.loads(payload)
+            except json.JSONDecodeError:
+                return None
+        else:
+            if not payload:
+                return None
+
+    if isinstance(candidate, str):
+        parts = re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", candidate)
+        if len(parts) < minimum_points * 2:
+            return None
+        numeric_points = [float(part) for part in parts[: minimum_points * 2]]
+        pairs = [[numeric_points[i], numeric_points[i + 1]] for i in range(0, len(numeric_points), 2)]
+        return pairs if len(pairs) >= minimum_points else None
+
+    if isinstance(candidate, Mapping):
+        geometry = candidate.get("geometry") if isinstance(candidate, Mapping) else None
+        if isinstance(geometry, Mapping):
+            candidate = geometry.get("coordinates") or []
+        elif (
+            "lat" in candidate or "longitude" in candidate or "lng" in candidate or "lon" in candidate
+        ):
+            candidate = [candidate]
+        else:
+            return None
+
+    if not isinstance(candidate, (list, tuple)):
+        return None
+    if not candidate:
+        return None
+
+    while (
+        len(candidate) == 1
+        and isinstance(candidate[0], (list, tuple))
+        and candidate[0]
+        and isinstance(candidate[0][0], (list, tuple))
+    ):
+        candidate = candidate[0]  # type: ignore[assignment]
+
+    coordinates: list[list[float]] = []
+    for point in candidate:
+        if isinstance(point, Mapping):
+            lon = point.get("lon") or point.get("lng") or point.get("longitude")
+            lat = point.get("lat") or point.get("latitude")
+        elif (
+            isinstance(point, (list, tuple))
+            and len(point) >= 2
+            and not isinstance(point[0], (list, tuple, dict))
+        ):
+            lon = point[0]
+            lat = point[1]
+        else:
+            return None
+
+        try:
+            coordinates.append([float(lon), float(lat)])
+        except (TypeError, ValueError):
+            return None
+
+    if not _is_valid_position_sequence(coordinates, minimum_points=minimum_points):
+        return None
+    return coordinates
 
 
 def _build_colour_map(values: Sequence[object]) -> Dict[object, str]:
@@ -102,6 +263,7 @@ def build_route_map(
     colour_scale: Optional[Sequence[str]] = None,
     colorbar_tickformat: Optional[str] = None,
     use_route_geometry: bool = True,
+    provider: Optional[str] = None,
 ) -> go.Figure:
     """Construct a Plotly map figure showing coloured routes and points."""
 
@@ -578,6 +740,7 @@ def build_route_map(
             {"lat": -25.0, "lon": 133.0},
             zoom=3,
             engine="map",
+            provider=provider,
         ),
         margin={"r": 0, "t": 0, "l": 0, "b": 0},
         legend={"orientation": "h", "yanchor": "bottom", "y": 0.01},
@@ -620,6 +783,72 @@ def _pydeck_frame(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or df.columns.is_unique:
         return df
     return df.loc[:, ~df.columns.duplicated()].copy()
+
+
+def _base_map_layer_for_network(
+    deck_map_kwargs: Mapping[str, Any],
+    *,
+    provider: Optional[str] = None,
+) -> Optional[pdk.Layer]:
+    """Return the explicit OSM base layer only for non-Google providers."""
+
+    if provider is None:
+        if using_google_maps() or google_maps_requested_without_key():
+            return None
+    elif provider == "google" or google_maps_requested_without_key(provider):
+        return None
+    if "map_provider" in deck_map_kwargs:
+        return None
+    return pdk.Layer(
+        "TileLayer",
+        data="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        min_zoom=0,
+        max_zoom=19,
+        tile_size=256,
+        attribution="© OpenStreetMap contributors",
+    )
+
+
+def _is_valid_position_sequence(value: object, *, minimum_points: int) -> bool:
+    if not isinstance(value, (list, tuple)) or len(value) < minimum_points:
+        return False
+    for point in value:
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            return False
+        try:
+            lon = float(point[0])
+            lat = float(point[1])
+        except (TypeError, ValueError):
+            return False
+        if not (math.isfinite(lon) and math.isfinite(lat)):
+            return False
+    return True
+
+
+def _valid_xy_row(row: pd.Series, *, lon_key: str, lat_key: str) -> bool:
+    try:
+        lon = float(row.get(lon_key))
+        lat = float(row.get(lat_key))
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(lon) and math.isfinite(lat)
+
+
+def _filter_valid_geometry_rows(
+    df: pd.DataFrame,
+    *,
+    column: str,
+    minimum_points: int,
+) -> pd.DataFrame:
+    if df.empty or column not in df.columns:
+        return df
+    normalised = df.copy()
+    normalised[column] = normalised[column].apply(
+        lambda value: _coerce_position_sequence(value, minimum_points=minimum_points)
+    )
+    return _pydeck_frame(
+        normalised[normalised[column].notna()].copy()
+    )
 
 
 def _clean_value(value: object) -> str | None:
@@ -695,6 +924,7 @@ def render_network_map(
     toggle_key: str = "network_map_live_overlay_toggle",
 ) -> None:
     st.markdown("### Live network overview")
+    effective_provider = _resolved_provider()
 
     show_live_overlay: bool = True
     toggle_help = (
@@ -724,17 +954,31 @@ def render_network_map(
             key=toggle_key,
         )
 
-    deck_map_kwargs = pydeck_map_kwargs(None)
-    base_map_layer: Optional[pdk.Layer] = None
-    if "map_provider" not in deck_map_kwargs:
-        base_map_layer = pdk.Layer(
-            "TileLayer",
-            data="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-            min_zoom=0,
-            max_zoom=19,
-            tile_size=256,
-            attribution="© OpenStreetMap contributors",
+    show_actual_routes = False
+    if show_live_overlay and (
+        (
+            not historical_routes.empty
+            and "route_geojson" in historical_routes.columns
+            and historical_routes["route_geojson"].notna().any()
         )
+        or (
+            not active_routes.empty
+            and "route_geometry" in active_routes.columns
+            and active_routes["route_geometry"].notna().any()
+        )
+    ):
+        show_actual_routes = st.checkbox(
+            "Show actual route traces",
+            value=False,
+            help="Overlay available polylines for historical lanes and live routes.",
+            key=f"{toggle_key}_actual_routes",
+        )
+
+    deck_map_kwargs = pydeck_map_kwargs(None, provider=effective_provider)
+    base_map_layer = _base_map_layer_for_network(
+        deck_map_kwargs,
+        provider=effective_provider,
+    )
 
     truck_data = _pydeck_frame(trucks.copy())
     if not truck_data.empty:
@@ -747,8 +991,9 @@ def render_network_map(
 
     historical_overlay = _pydeck_frame(historical_routes.copy())
     if not historical_overlay.empty and "route_geojson" in historical_overlay.columns:
-        historical_overlay["route_path"] = historical_overlay["route_geojson"].apply(
-            _geojson_to_path
+        historical_overlay["route_path"] = _sanitise_geojson_paths(
+            historical_overlay["route_geojson"],
+            label="historical route",
         )
     else:
         historical_overlay["route_path"] = None
@@ -784,29 +1029,13 @@ def render_network_map(
     overlay_layers: list[pdk.Layer] = []
 
     if show_live_overlay and not lane_overlay.empty:
-        history_layer = pdk.Layer(
-            "PolygonLayer",
-            data=lane_overlay,
-            get_polygon="route_polygon",
-            get_fill_color="fill_colour",
-            stroked=False,
-            filled=True,
-            pickable=True,
-            extruded=False,
-            parameters={"depthTest": False},
+        lane_overlay = _filter_valid_geometry_rows(
+            lane_overlay,
+            column="route_polygon",
+            minimum_points=3,
         )
-        overlay_layers.append(history_layer)
 
     if view_mode == "Overlay":
-        show_actual_routes = False
-        if show_live_overlay and (historical_has_paths or active_has_geometry):
-            show_actual_routes = st.checkbox(
-                "Show actual route traces",
-                value=historical_has_paths and active_has_geometry,
-                help="Overlay available polylines for historical lanes and live routes.",
-                key=f"{toggle_key}_actual_routes",
-            )
-
         if show_live_overlay and not lane_overlay.empty:
             history_layer = pdk.Layer(
                 "PolygonLayer",
@@ -903,27 +1132,37 @@ def render_network_map(
                 else compute_tapered_route_polygon(row),
                 axis=1,
             )
+            enriched = _filter_valid_geometry_rows(
+                enriched,
+                column="route_polygon",
+                minimum_points=3,
+            )
 
             enriched["colour"] = enriched["colour"].apply(
                 lambda value: value if isinstance(value, (list, tuple)) else [255, 255, 255]
             )
 
-            active_layer = pdk.Layer(
-                "PolygonLayer",
-                data=enriched,
-                get_polygon="route_polygon",
-                get_fill_color="fill_colour",
-                stroked=False,
-                filled=True,
-                pickable=True,
-                extruded=False,
-                parameters={"depthTest": False},
-            )
-            overlay_layers.append(active_layer)
+            if not enriched.empty:
+                active_layer = pdk.Layer(
+                    "PolygonLayer",
+                    data=enriched,
+                    get_polygon="route_polygon",
+                    get_fill_color="fill_colour",
+                    stroked=False,
+                    filled=True,
+                    pickable=True,
+                    extruded=False,
+                    parameters={"depthTest": False},
+                )
+                overlay_layers.append(active_layer)
 
             if show_live_overlay and not lane_overlay.empty:
                 if show_actual_routes and historical_has_paths:
-                    history_paths = _pydeck_frame(lane_overlay.dropna(subset=["route_path"]))
+                    history_paths = _filter_valid_geometry_rows(
+                        _pydeck_frame(lane_overlay.dropna(subset=["route_path"])),
+                        column="route_path",
+                        minimum_points=2,
+                    )
                     if not history_paths.empty:
                         history_layer = pdk.Layer(
                             "PathLayer",
@@ -1005,7 +1244,10 @@ def render_network_map(
             )
 
             if "route_geometry" in enriched.columns:
-                enriched["route_path_geometry"] = enriched["route_geometry"].apply(_geojson_to_path)
+                enriched["route_path_geometry"] = _sanitise_geojson_paths(
+                    enriched["route_geometry"],
+                    label="active route",
+                )
                 if "route_path" in enriched.columns:
                     enriched["route_path"] = enriched["route_path_geometry"].combine_first(
                         enriched["route_path"]
@@ -1013,9 +1255,30 @@ def render_network_map(
                 else:
                     enriched["route_path"] = enriched["route_path_geometry"]
 
+            if "route_polygon" in enriched.columns:
+                enriched = _filter_valid_geometry_rows(
+                    enriched,
+                    column="route_polygon",
+                    minimum_points=3,
+                )
+            else:
+                enriched["route_polygon"] = enriched.apply(
+                    lambda row: compute_tapered_route_polygon(row),
+                    axis=1,
+                )
+                enriched = _filter_valid_geometry_rows(
+                    enriched,
+                    column="route_polygon",
+                    minimum_points=3,
+                )
+
             if show_actual_routes:
                 if "route_path" in enriched.columns:
-                    active_path_data = _pydeck_frame(enriched.dropna(subset=["route_path"]))
+                    active_path_data = _filter_valid_geometry_rows(
+                        enriched,
+                        column="route_path",
+                        minimum_points=2,
+                    )
                 else:
                     active_path_data = pd.DataFrame()
                 if not active_path_data.empty:
@@ -1034,7 +1297,13 @@ def render_network_map(
             else:
                 active_layer = pdk.Layer(
                     "LineLayer",
-                    data=enriched,
+                    data=enriched[
+                        enriched.apply(
+                            lambda row: _valid_xy_row(row, lon_key="origin_lon", lat_key="origin_lat")
+                            and _valid_xy_row(row, lon_key="dest_lon", lat_key="dest_lat"),
+                            axis=1,
+                        )
+                    ].copy(),
                     get_source_position="[origin_lon, origin_lat]",
                     get_target_position="[dest_lon, dest_lat]",
                     get_color="colour",

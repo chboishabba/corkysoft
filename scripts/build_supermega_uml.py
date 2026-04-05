@@ -77,6 +77,7 @@ DOMAIN_SPECS: tuple[DomainSpec, ...] = (
             "dashboard.shell",
             "dashboard.state",
             "dashboard.tab_registry",
+            "dashboard.theme",
         ),
         summary_modules=(
             "dashboard.app",
@@ -91,10 +92,11 @@ DOMAIN_SPECS: tuple[DomainSpec, ...] = (
         output_name="workflow_surfaces.puml",
         prefixes=("dashboard.components", "dashboard.views"),
         summary_modules=(
-            "dashboard.components.quote_builder",
-            "dashboard.components.route_maps",
-            "dashboard.components.operations_diary",
-            "dashboard.components.inventory",
+            "dashboard.views.quote_view",
+            "dashboard.views.pricing_intelligence_view",
+            "dashboard.views.network_view",
+            "dashboard.views.operations_view",
+            "dashboard.views.admin_view",
         ),
     ),
     DomainSpec(
@@ -310,9 +312,8 @@ def _representative_edge_labels(
     graph: Mapping[str, set[str]],
     source_domain: str,
     target_domain: str,
-    *,
-    limit: int = 3,
 ) -> str:
+    limit = 5 if (source_domain, target_domain) == ("dashboard_shell", "workflow_surfaces") else 3
     edges = _module_edges_for_domain_pair(graph, source_domain, target_domain)
     if not edges:
         return "imports"
@@ -344,7 +345,11 @@ def _representative_edge_labels(
 def _domain_summary_label(spec: DomainSpec) -> str:
     lines = [spec.title]
     for module_name in spec.summary_modules:
-        lines.append(module_name.replace("dashboard.components.", "components."))
+        lines.append(
+            module_name.replace("dashboard.components.", "components.").replace(
+                "dashboard.views.", "views."
+            )
+        )
     return "\\n".join(lines)
 
 
@@ -452,8 +457,8 @@ def render_supermega(
             "query-param hydration, and stable tab selection.",
             "end note",
             "note bottom of workflow_surfaces",
-            "Child workflows stay inside dashboard/components/*,",
-            "but their feeds into analytics and quote/routing remain explicit here.",
+            "Five shell views live in dashboard/views/*,",
+            "with component leaf surfaces under dashboard/components/*.",
             "end note",
             "note bottom of analytics_persistence",
             "Analytics owns prep, diary logic, map shaping,",

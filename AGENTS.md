@@ -13,6 +13,7 @@ Please note that Crusader.xlsx has been provided as a placeholder for Google She
 - `pip install -r requirements.txt` installs runtime and dev dependencies.
 - `streamlit run dashboard/app.py` launches the dashboard UI; use `streamlit_price_distribution.py` for legacy single-file demos.
 - `pytest` runs the full automated test suite; prefer `pytest tests/<module>` for targeted debugging.
+- Use the repo virtualenv exclusively for all Python, Streamlit, and pytest commands once it exists. Prefer `venv/bin/python -m pytest`, `venv/bin/python routes_to_sqlite.py`, and `venv/bin/streamlit run dashboard/app.py` instead of system Python.
 
 ## Coding Style & Naming Conventions
 - Follow PEP 8 with 4-space indentation and descriptive, lowercase_with_underscores names for modules, functions, and variables.

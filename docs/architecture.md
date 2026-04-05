@@ -28,6 +28,67 @@ The integrated whole-system entrypoint is:
 
 - [rendered/plantuml/supermega_01.puml](rendered/plantuml/supermega_01.puml)
 
+Current dashboard-shell control view:
+
+- [rendered/plantuml/dashboard_shell.puml](rendered/plantuml/dashboard_shell.puml)
+- [rendered/svg/dashboard_shell.svg](rendered/svg/dashboard_shell.svg)
+
+## Control lanes
+
+Treat the current remediation wave as four bounded control lanes rather than
+one undifferentiated refactor:
+
+- Lane 1, service-governance/docs: README, roadmap, onboarding, role matrix,
+  and operator stories must describe the same five-view shell and role entry
+  model that the code renders.
+- Lane 2, provider parity: routing, isochrones, route enrichment, and map
+  rendering must honor the selected provider without silent cross-provider
+  fallback.
+- Lane 3, shell composition: layout reset, deep-link landing, shared shell
+  primitives, and generated architecture views must remain deterministic as the
+  shell grows.
+- Lane 4, security/privacy/AI-risk: admin actions, role-hidden surfaces,
+  person/labor data exposure, and advisory/model-backed outputs must remain
+  bounded, auditable, and reviewable.
+
+Execution control:
+
+- use the repo virtualenv as the execution boundary for Python, Streamlit, and
+  pytest commands
+- treat `Quote`, `Pricing Intelligence`, `Network`, `Operations`, and `Admin`
+  as the only top-level shell boundaries in architecture and contributor docs;
+  `Planner`, `Dispatch`, `Operations diary`, `Kent tenders`, and `Kent admin`
+  remain child workflows inside those owning shells
+- treat `view=` as navigation only; support-grade workspace reconstruction
+  should move through a normalized workspace-state contract rather than raw,
+  ever-growing query-param sprawl
+- update PlantUML/C4 artifacts when the shell composition materially changes
+- treat placeholder KPI/alert content as scaffolding until provenance,
+  freshness, and ownership are explicit
+
+## Next advancement focus
+
+The next architecture-relevant advances should be:
+
+- sourced shell signals:
+  move KPI/alert rendering behind shared producer contracts that carry source,
+  owner, freshness, and fallback semantics
+- state-addressable workspace support:
+  distinguish simple navigation params from reproducible workspace-state
+  snapshots so support and audit flows can reopen the same shell/workflow state
+- customer-facing tracking and receipt surfaces:
+  treat customer status pages and printable receipts as a separate boundary from
+  both the internal operator shell and internal support replay; reuse live
+  telemetry/job-state producers, but do not expose internal shell state or
+  workflow-only fields directly
+- metasystem view discipline:
+  keep [rendered/plantuml/supermega_01.puml](rendered/plantuml/supermega_01.puml)
+  as the whole-system entrypoint and the existing child diagrams as the only
+  reviewed drill-down surfaces
+- operational data contracts:
+  keep decision-adjacent shell data explicitly classified as advisory,
+  review-backed, or decision-grade
+
 ## Entry points
 
 - `routes_to_sqlite.py`: Primary CLI for geocoding, routing, and persisting jobs.
@@ -90,6 +151,9 @@ The main Streamlit entry point remains `dashboard/app.py`.
    without hidden spreadsheet drift.
 7. Operations diary helpers combine jobs, segments, tasks, labor actuals, and
    invoice/bill review state into a manager-facing day/week workflow.
+8. Any later customer-tracking or printable-receipt surface should consume a
+   dedicated public-safe contract over reviewed job status, telemetry progress,
+   ETA, and receipt evidence rather than reopening internal dashboard state.
 
 ## Cross-project boundary
 

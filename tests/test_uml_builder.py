@@ -45,15 +45,21 @@ def test_supermega_contains_real_cross_domain_links() -> None:
     supermega = artifacts[builder.REPO_ROOT / "docs" / "rendered" / "plantuml" / "supermega_01.puml"]
 
     assert "dashboard_shell --> workflow_surfaces" in supermega
+    assert "app -> quote_view" in supermega
+    assert "app -> pricing_intelligence_view" in supermega
+    assert "app -> network_view" in supermega
+    assert "app -> operations_view" in supermega
+    assert "app -> admin_view" in supermega
     assert (
         "workflow_surfaces --> analytics_persistence : "
-        "quote_builder -> price_distribution"
+        "dispatch -> operations_assignment"
     ) in supermega
-    assert "route_maps -> price_distribution" in supermega
+    assert "distribution_overview -> price_distribution" in supermega
     assert (
         "workflow_surfaces --> quote_routing_core : "
-        "quote_builder -> quote_service"
+        "kent -> quote_service"
     ) in supermega
+    assert "quote_builder -> quote_service" in supermega
     assert "workflow_surfaces --> integrations_extensions : calls -> call_ops" in supermega
     assert "quote_routing_core --> analytics_persistence : quote_service -> kent_ams_import" in supermega
 
@@ -97,6 +103,17 @@ def test_child_diagrams_anchor_external_links_to_real_source_modules() -> None:
         "dashboard_components_calls ..> external_integrations_extensions : "
         "calls -> call_ops"
     ) in workflow_surfaces
+
+
+def test_supermega_describes_view_layer_as_shell_surface() -> None:
+    builder = _load_builder_module()
+
+    artifacts = builder.generate_artifacts()
+    supermega = artifacts[builder.REPO_ROOT / "docs" / "rendered" / "plantuml" / "supermega_01.puml"]
+
+    assert "[Workflow Surfaces\\nviews.quote_view" in supermega
+    assert "views.operations_view" in supermega
+    assert "Five shell views live in dashboard/views/*," in supermega
 
 
 def test_index_includes_rendered_svg_entrypoints() -> None:

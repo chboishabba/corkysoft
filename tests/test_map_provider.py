@@ -22,7 +22,42 @@ def test_pydeck_map_kwargs_uses_google_provider(monkeypatch: pytest.MonkeyPatch)
 
     assert kwargs["map_provider"] == "google_maps"
     assert kwargs["api_keys"]["google_maps"] == "abc123"
-    assert kwargs["map_style"] is None
+    assert kwargs["map_style"] == "roadmap"
+
+
+def test_session_selected_provider_overrides_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ROUTING_PROVIDER", "ors")
+    monkeypatch.setattr(map_provider, "_session_selected_provider", lambda: "google")
+
+    assert map_provider.using_google_maps() is True
+
+
+def test_session_selected_provider_accepts_canonical_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        map_provider.st,
+        "session_state",
+        {map_provider.ROUTING_PROVIDER_SESSION_KEY: "google"},
+    )
+
+    assert map_provider._session_selected_provider() == "google"
+
+
+def test_session_selected_provider_handles_ui_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        map_provider.st,
+        "session_state",
+        {map_provider.ROUTING_PROVIDER_SESSION_KEY: "Google Maps"},
+    )
+
+    assert map_provider._session_selected_provider() == "google"
+
+
+def test_resolved_provider_normalises_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ROUTING_PROVIDER", "Google Maps")
+
+    assert map_provider._resolved_provider() == "google"
 
 
 def test_pydeck_map_kwargs_falls_back_without_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -30,7 +65,7 @@ def test_pydeck_map_kwargs_falls_back_without_key(monkeypatch: pytest.MonkeyPatc
 
     kwargs = map_provider.pydeck_map_kwargs("mapbox-style")
 
-    assert kwargs == {"map_style": "mapbox-style"}
+    assert kwargs == {"map_style": None}
 
 
 def test_pydeck_map_kwargs_ignores_key_when_not_google(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -39,6 +74,23 @@ def test_pydeck_map_kwargs_ignores_key_when_not_google(monkeypatch: pytest.Monke
     kwargs = map_provider.pydeck_map_kwargs("mapbox-style")
 
     assert kwargs == {"map_style": "mapbox-style"}
+
+
+def test_pydeck_map_kwargs_defaults_to_light_when_not_google() -> None:
+    kwargs = map_provider.pydeck_map_kwargs(None)
+
+    assert kwargs == {"map_style": "light"}
+
+
+def test_pydeck_map_kwargs_accepts_explicit_google_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "abc123")
+
+    kwargs = map_provider.pydeck_map_kwargs(None, provider="google")
+
+    assert kwargs["map_provider"] == "google_maps"
+    assert kwargs["map_style"] == "roadmap"
 
 
 def test_plotly_map_layout_uses_google_tiles(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -55,6 +107,23 @@ def test_plotly_map_layout_uses_google_tiles(monkeypatch: pytest.MonkeyPatch) ->
     assert "google.com" in tile_url
     assert "abc123" in tile_url
     assert config["layers"][0]["below"] == "traces"
+
+
+def test_plotly_map_layout_accepts_explicit_google_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "abc123")
+
+    layout = map_provider.plotly_map_layout(
+        {"lat": -25.0, "lon": 133.0},
+        zoom=4,
+        engine="map",
+        provider="Google Maps",
+    )
+
+    config = layout["map"]
+    assert config["style"] == "white-bg"
+    assert config["layers"]
 
 
 def test_plotly_map_layout_defaults_when_not_google(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -74,6 +143,19 @@ def test_plotly_map_layout_ignores_key_when_not_google(monkeypatch: pytest.Monke
     assert "mapbox" in layout
     config = layout["mapbox"]
     assert config["style"] == "carto-positron"
+    assert "layers" not in config
+
+
+def test_plotly_map_layout_stays_blank_without_key_when_google_selected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ROUTING_PROVIDER", "google")
+
+    layout = map_provider.plotly_map_layout({"lat": -25.0, "lon": 133.0}, zoom=3, engine="map")
+
+    assert "map" in layout
+    config = layout["map"]
+    assert config["style"] == "white-bg"
     assert "layers" not in config
 
 
@@ -131,3 +213,14 @@ def test_google_street_view_embed_url_uses_google_provider(monkeypatch: pytest.M
     assert "location=-27.470000%2C153.020000" in url
     assert "heading=135.0" in url
     assert "key=abc123" in url
+
+
+def test_folium_map_configuration_stays_provider_strict_without_google_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ROUTING_PROVIDER", "google")
+
+    map_kwargs, tile_layer_kwargs = map_provider.folium_map_configuration()
+
+    assert map_kwargs["tiles"] is None
+    assert tile_layer_kwargs is None

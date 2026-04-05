@@ -13,14 +13,11 @@ from analytics.db import ensure_global_parameters_table
 
 
 TABS = [
-    "Histogram",
-    "Dispatch",
-    "Planner",
+    "Quote",
+    "Pricing Intelligence",
+    "Network",
     "Operations",
-    "Calls",
-    "Fleet",
-    "Quote builder",
-    "Kent admin",
+    "Admin",
 ]
 
 
@@ -30,10 +27,10 @@ def test_role_layout_defaults_bootstrap() -> None:
 
     layouts = get_dashboard_role_layouts(conn, available_tabs=TABS)
     dispatcher = next(item for item in layouts if item["roleKey"] == "dispatcher")
-    assert dispatcher["defaultLandingTab"] == "Dispatch"
-    assert "Planner" in dispatcher["primaryTabs"]
-    assert "Histogram" in dispatcher["hiddenTabs"]
-    assert "Fleet" in dispatcher["hiddenTabs"]
+    assert dispatcher["defaultLandingTab"] == "Operations"
+    assert "Network" in dispatcher["primaryTabs"]
+    assert "Admin" in dispatcher["hiddenTabs"]
+    assert "Pricing Intelligence" in dispatcher["hiddenTabs"]
 
 
 def test_resolve_dashboard_layout_does_not_reveal_hidden_tab_from_query_param() -> None:
@@ -45,10 +42,10 @@ def test_resolve_dashboard_layout_does_not_reveal_hidden_tab_from_query_param() 
     resolved = resolve_dashboard_layout(
         available_tabs=TABS,
         layout=layout,
-        requested_tab="Kent admin",
+        requested_tab="Admin",
     )
-    assert resolved["landingTab"] == "Dispatch"
-    assert "Kent admin" not in resolved["tabOrder"]
+    assert resolved["landingTab"] == "Operations"
+    assert "Admin" not in resolved["tabOrder"]
 
 
 def test_resolve_dashboard_layout_still_allows_visible_requested_tab() -> None:
@@ -60,10 +57,10 @@ def test_resolve_dashboard_layout_still_allows_visible_requested_tab() -> None:
     resolved = resolve_dashboard_layout(
         available_tabs=TABS,
         layout=layout,
-        requested_tab="Planner",
+        requested_tab="Network",
     )
-    assert resolved["landingTab"] == "Planner"
-    assert "Planner" in resolved["tabOrder"]
+    assert resolved["landingTab"] == "Network"
+    assert "Network" in resolved["tabOrder"]
 
 
 def test_resolve_dashboard_layout_for_primary_only_role_shows_primary_tabs_by_default() -> None:
@@ -76,7 +73,7 @@ def test_resolve_dashboard_layout_for_primary_only_role_shows_primary_tabs_by_de
         available_tabs=TABS,
         layout=layout,
     )
-    assert resolved["tabOrder"] == ["Dispatch", "Calls", "Planner", "Operations"]
+    assert resolved["tabOrder"] == ["Operations", "Network", "Quote"]
 
 
 def test_resolve_dashboard_layout_applies_primary_only_hiding_even_with_stale_session_hidden_tabs() -> None:
@@ -88,9 +85,9 @@ def test_resolve_dashboard_layout_applies_primary_only_hiding_even_with_stale_se
     resolved = resolve_dashboard_layout(
         available_tabs=TABS,
         layout=layout,
-        session_hidden_tabs=["Kent admin"],
+        session_hidden_tabs=["Admin"],
     )
-    assert resolved["tabOrder"] == ["Dispatch", "Calls", "Planner", "Operations"]
+    assert resolved["tabOrder"] == ["Operations", "Network", "Quote"]
 
 
 def test_upsert_dashboard_role_layout_updates_defaults() -> None:
@@ -99,13 +96,13 @@ def test_upsert_dashboard_role_layout_updates_defaults() -> None:
     updated = upsert_dashboard_role_layout(
         conn,
         role_key="dispatcher",
-        default_landing_tab="Planner",
-        primary_tabs=["Planner", "Dispatch"],
-        hidden_tabs=["Histogram"],
+        default_landing_tab="Network",
+        primary_tabs=["Network", "Operations"],
+        hidden_tabs=["Pricing Intelligence"],
         available_tabs=TABS,
     )
-    assert updated["defaultLandingTab"] == "Planner"
-    assert updated["primaryTabs"] == ["Planner", "Dispatch"]
+    assert updated["defaultLandingTab"] == "Network"
+    assert updated["primaryTabs"] == ["Network", "Operations"]
 
 
 def test_missing_recommended_primary_tabs_detects_stale_dispatcher_layout() -> None:
@@ -114,8 +111,8 @@ def test_missing_recommended_primary_tabs_detects_stale_dispatcher_layout() -> N
     updated = upsert_dashboard_role_layout(
         conn,
         role_key="dispatcher",
-        default_landing_tab="Dispatch",
-        primary_tabs=["Dispatch", "Planner", "Operations"],
+        default_landing_tab="Operations",
+        primary_tabs=["Operations", "Network"],
         hidden_tabs=[],
         available_tabs=TABS,
     )
@@ -124,15 +121,15 @@ def test_missing_recommended_primary_tabs_detects_stale_dispatcher_layout() -> N
         layout=updated,
         available_tabs=TABS,
     )
-    assert "Calls" in missing
+    assert "Quote" in missing
 
 
 def test_find_layout_by_tab_selects_correct_role() -> None:
     conn = sqlite3.connect(":memory:")
     ensure_global_parameters_table(conn)
     layouts = get_dashboard_role_layouts(conn, available_tabs=TABS)
-    estimator = find_layout_by_tab(layouts, "Quote builder")
-    dispatcher = find_layout_by_tab(layouts, "Dispatch")
+    estimator = find_layout_by_tab(layouts, "Quote")
+    dispatcher = find_layout_by_tab(layouts, "Operations")
     assert estimator is not None and estimator["roleKey"] == "estimator"
     assert dispatcher is not None and dispatcher["roleKey"] == "dispatcher"
     assert find_layout_by_tab(layouts, "Nonexistent tab") is None
@@ -143,16 +140,16 @@ def test_find_layout_by_tab_prefers_primary_membership_over_hidden_membership() 
         {
             "roleKey": "dispatcher",
             "label": "Dispatcher",
-            "primaryTabs": ["Dispatch"],
-            "hiddenTabs": ["Staff"],
+            "primaryTabs": ["Operations"],
+            "hiddenTabs": ["Admin"],
         },
         {
             "roleKey": "labor_planner",
             "label": "Labor Planner / Staff Coordinator",
-            "primaryTabs": ["Staff"],
+            "primaryTabs": ["Operations"],
             "hiddenTabs": [],
         },
     ]
-    selected = find_layout_by_tab(layouts, "Staff")
+    selected = find_layout_by_tab(layouts, "Operations")
     assert selected is not None
-    assert selected["roleKey"] == "labor_planner"
+    assert selected["roleKey"] == "dispatcher"

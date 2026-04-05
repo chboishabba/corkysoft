@@ -13,6 +13,15 @@ from corkysoft.routing import ROUTE_BACKOFF, get_ors_client, get_google_maps_cli
 CoordinatePair = tuple[float, float]
 
 
+def _normalise_provider_name(provider_name: Optional[str]) -> str:
+    cleaned = str(provider_name or "").strip().lower()
+    if cleaned in {"google", "google maps", "google_maps"}:
+        return "google"
+    if cleaned in {"ors", "openrouteservice", "open route service"}:
+        return "ors"
+    return cleaned or "ors"
+
+
 class RoutingProvider(Protocol):
     """Protocol describing the routing provider interface."""
 
@@ -476,15 +485,21 @@ def feature_collection_to_lat_lon(feature_collection: Any) -> tuple[list[float],
 
 def get_routing_provider(
     *,
-    provider: Optional[RoutingProvider] = None,
+    provider: Optional[RoutingProvider | str] = None,
     client: Optional[Any] = None,
 ) -> RoutingProvider:
     """Return a routing provider based on the environment configuration."""
 
     if provider is not None:
+        if isinstance(provider, str):
+            provider_name = _normalise_provider_name(provider)
+            if provider_name == "google":
+                resolved_client = get_google_maps_client(client)
+                return GoogleRoutesProvider(resolved_client)
+            return OpenRouteServiceProvider(client)
         return provider
 
-    provider_name = os.environ.get("ROUTING_PROVIDER", "ors").strip().lower()
+    provider_name = _normalise_provider_name(os.environ.get("ROUTING_PROVIDER", "ors"))
     if provider_name == "google":
         resolved_client = get_google_maps_client(client)
         return GoogleRoutesProvider(resolved_client)

@@ -189,12 +189,12 @@ Expected outputs:
 
 Primary surfaces:
 
-- `Payroll / Labor analytics`
+- `Operations` -> `Payroll / Labor analytics`
 
 Secondary surfaces:
 
-- `Staff`
-- `Driver shifts`
+- `Operations` -> `Staff`
+- `Operations` -> `Driver shifts`
 
 Trigger:
 

@@ -1,0 +1,19 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e7]:
+      - button "Deploy" [ref=e9] [cursor=pointer]:
+        - generic [ref=e11]: Deploy
+      - button [ref=e13] [cursor=pointer]:
+        - img [ref=e14]
+  - generic [ref=e19]:
+    - heading "Corkysoft" [level=1] [ref=e24]:
+      - text: Corkysoft
+      - generic [ref=e25]:
+        - link "Link to heading":
+          - /url: "#corkysoft"
+          - img
+    - paragraph [ref=e30]: Private dashboard access is controlled by Google sign-in plus a local Corkysoft allowlist.
+    - alert [ref=e33]:
+      - paragraph [ref=e38]: Sign in with Google to continue.
+    - button "Sign in with Google" [ref=e41] [cursor=pointer]:
+      - paragraph [ref=e45]: Sign in with Google

@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import math
 import os
-import sqlite3
-import inspect
+import re
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -13,31 +12,26 @@ import plotly.graph_objects as go
 import streamlit as st
 from sqlite3 import Connection
 
-try:  # pragma: no cover - optional dependency
-    import folium
-    from streamlit_folium import st_folium
-except ModuleNotFoundError:  # pragma: no cover - optional dependency
-    folium = None  # type: ignore[assignment]
-    st_folium = None  # type: ignore[assignment]
-
 from analytics.price_distribution import (
     ColumnMapping,
     available_heatmap_weightings,
     build_heatmap_source,
-    build_isochrone_polygons,
-    explain_isochrone_unavailability,
     prepare_metric_route_map_data,
     prepare_route_map_data,
 )
 from analytics.live_data import extract_route_path
-from analytics.routes_map import (
-    build_job_route_map,
-    fetch_job_route_rows,
+from analytics.route_map_prep import (
+    build_isochrone_polygons,
+    explain_isochrone_unavailability,
 )
+from analytics.routes_map import fetch_job_route_rows
 from analytics.routing_provider import get_routing_provider
 from dashboard.components.lane_scope import apply_lane_status_scope
 from dashboard.components.maps import _hex_to_rgb, build_route_map
-from dashboard.map_provider import folium_map_configuration, plotly_map_layout
+from dashboard.map_provider import (
+    _resolved_provider,
+    plotly_map_layout,
+)
 from dashboard.state import _rerun_app
 
 __all__ = ["render_route_maps_tab"]
@@ -54,6 +48,57 @@ _ISOCHRONE_PALETTE = [
     "#FF97FF",
     "#FECB52",
 ]
+
+
+def _normalise_provider_labels(
+    provider_names: List[object],
+    *,
+    routing_provider_env: object,
+) -> List[str]:
+    def _clean_provider_label(raw_label: object) -> str:
+        raw = str(raw_label or "").strip()
+        if not raw:
+            return ""
+        if raw.startswith("<class '") and raw.endswith("'>"):
+            raw = raw[len("<class '") : -2]
+        raw = raw.strip()
+        return raw
+
+    labels: List[str] = []
+    fallback = str(routing_provider_env or "").strip().lower()
+
+    for provider_name in provider_names:
+        raw = _clean_provider_label(provider_name)
+        if not raw:
+            continue
+        normalised = raw.lower()
+        if normalised in {"google", "google maps", "google_maps"}:
+            label = "Google Maps"
+        elif normalised in {
+            "ors",
+            "openrouteservice",
+            "open route service",
+            "openrouteserviceprovider",
+        }:
+            label = "OpenRouteService"
+        elif normalised in {"str", "type", "object", "unknown"}:
+            if fallback == "google":
+                label = "Google Maps"
+            elif fallback == "ors":
+                label = "OpenRouteService"
+            else:
+                continue
+        else:
+            label = raw
+        if label not in labels:
+            labels.append(label)
+
+    if not labels:
+        if fallback == "google":
+            return ["Google Maps"]
+        if fallback == "ors":
+            return ["OpenRouteService"]
+    return labels
 
 
 # -----------------------------------------------------------------------------
@@ -118,10 +163,17 @@ def render_route_maps_tab(
     conn: Connection,
     dataset_key: str,
     metro_distance_km: float,
+    *,
+    show_title: bool = True,
+    forced_mode: str | None = None,
+    network_host: bool = False,
 ) -> None:
     """Render the Route maps tab contents."""
+    effective_provider = _resolved_provider()
+    os.environ["ROUTING_PROVIDER"] = effective_provider
 
-    st.markdown("### Corridor visualisation")
+    if show_title and not network_host:
+        st.markdown("### Corridor visualisation")
     scoped_input_df = apply_lane_status_scope(
         filtered_df,
         scope_key="route_maps_lane_assignment_scope",
@@ -133,16 +185,18 @@ def render_route_maps_tab(
         caption_prefix="Route-map dataset rows after lane-status filter",
     )
 
-    map_mode = st.radio(
-        "Visualisation mode",
-        ("Routes/points", "Heatmap", "Isochrones"),
-        horizontal=True,
-        help=(
-            "Switch between individual routes/points, an aggregate density heatmap, "
-            "or travel-time isochrones around each corridor."
-        ),
-        key="dashboard_route_map_mode",
-    )
+    map_mode = forced_mode
+    if map_mode is None:
+        map_mode = st.radio(
+            "Visualisation mode",
+            ("Routes/points", "Heatmap", "Isochrones"),
+            horizontal=True,
+            help=(
+                "Switch between individual routes/points, an aggregate density heatmap, "
+                "or travel-time isochrones around each corridor."
+            ),
+            key="dashboard_route_map_mode",
+        )
     metro_only = st.checkbox(
         "Limit to metro jobs (≤100 km)",
         value=False,
@@ -220,31 +274,12 @@ def render_route_maps_tab(
     if map_mode == "Routes/points":
         _render_route_lines_tab(map_df, dataset_key, conn)
     elif map_mode == "Heatmap":
-        _render_heatmap_tab(scoped_input_df, map_df)
+        _render_heatmap_tab(scoped_input_df, map_df, provider=effective_provider)
     else:
         _render_isochrone_tab(map_df)
 
-    st.divider()
-    st.markdown("#### Saved job routes (Folium)")
-    _render_saved_job_routes(conn)
-
 
 def _render_route_lines_tab(map_df: pd.DataFrame, dataset_key: str, conn: Connection) -> None:
-    required_columns = {"origin_lat", "origin_lon", "dest_lat", "dest_lon"}
-    missing_coordinates = required_columns - set(map_df.columns)
-
-    if map_df.empty:
-        st.info("No jobs match the metro filter for the current selection.")
-        return
-    if missing_coordinates:
-        st.info("Add geocoded origin and destination coordinates to visualise routes.")
-        return
-
-    geocoded = map_df.dropna(subset=list(required_columns))
-    if geocoded.empty:
-        st.info("No routes with coordinates are available for the current filters.")
-        return
-
     colour_mode_label = st.radio(
         "Colour data by",
         ("Categorical attribute", "Metric"),
@@ -264,6 +299,17 @@ def _render_route_lines_tab(map_df: pd.DataFrame, dataset_key: str, conn: Connec
         value=True,
         key="dashboard_show_route_points",
     )
+    include_saved_jobs = False
+    if not network_host:
+        include_saved_jobs = st.checkbox(
+            "Include saved jobs overlay",
+            value=False,
+            key="dashboard_route_include_saved_jobs",
+            help=(
+                "Merge persisted job routes from the jobs table into this map. "
+                "Jobs already present in the current selection are not duplicated."
+            ),
+        )
 
     geometry_toggle_help = (
         "Switch between straight-line haversine chords and the stored route geometry "
@@ -288,6 +334,21 @@ def _render_route_lines_tab(map_df: pd.DataFrame, dataset_key: str, conn: Connec
             disabled=not show_routes,
         )
 
+    working_df = map_df.copy()
+    if include_saved_jobs:
+        working_df = _merge_saved_job_overlay_rows(working_df, conn)
+
+    required_columns = {"origin_lat", "origin_lon", "dest_lat", "dest_lon"}
+    missing_coordinates = required_columns - set(working_df.columns)
+    if missing_coordinates:
+        st.info("Add geocoded origin and destination coordinates to visualise routes.")
+        return
+
+    geocoded = working_df.dropna(subset=list(required_columns))
+    if geocoded.empty:
+        st.info("No routes with coordinates are available for the current filters.")
+        return
+
     if use_route_geometry and show_routes:
         geometry_series = geocoded.get("route_geojson")
         if geometry_series is None:
@@ -311,9 +372,21 @@ def _render_route_lines_tab(map_df: pd.DataFrame, dataset_key: str, conn: Connec
         return
 
     if colour_mode_label == "Categorical attribute":
-        _render_categorical_route_map(geocoded, show_routes, show_points, use_route_geometry)
+        _render_categorical_route_map(
+            geocoded,
+            show_routes,
+            show_points,
+            use_route_geometry,
+            provider=effective_provider,
+        )
     else:
-        _render_metric_route_map(geocoded, show_routes, show_points, use_route_geometry)
+        _render_metric_route_map(
+            geocoded,
+            show_routes,
+            show_points,
+            use_route_geometry,
+            provider=effective_provider,
+        )
 
 
 def _has_geometry(value: Any) -> bool:
@@ -340,11 +413,14 @@ def _render_categorical_route_map(
     show_routes: bool,
     show_points: bool,
     use_route_geometry: bool,
+    *,
+    provider: str,
 ) -> None:
     if use_route_geometry:
         geocoded = _enrich_route_geometry(geocoded)
 
     colour_dimensions = {
+        "Data source": "route_dataset_source",
         "Job ID": "id",
         "Client": "client_display",
         "Destination city": "destination_city",
@@ -383,6 +459,7 @@ def _render_categorical_route_map(
         show_routes=show_routes,
         show_points=show_points,
         use_route_geometry=use_route_geometry,
+        provider=provider,
     )
     st.plotly_chart(route_map, width="stretch")
 
@@ -392,6 +469,8 @@ def _render_metric_route_map(
     show_routes: bool,
     show_points: bool,
     use_route_geometry: bool,
+    *,
+    provider: str,
 ) -> None:
     if use_route_geometry:
         geocoded = _enrich_route_geometry(geocoded)
@@ -499,11 +578,17 @@ def _render_metric_route_map(
         colour_scale=metric_spec.get("scale"),
         colorbar_tickformat=metric_spec.get("tickformat"),
         use_route_geometry=use_route_geometry,
+        provider=provider,
     )
     st.plotly_chart(route_map, width="stretch")
 
 
-def _render_heatmap_tab(filtered_df: pd.DataFrame, map_df: pd.DataFrame) -> None:
+def _render_heatmap_tab(
+    filtered_df: pd.DataFrame,
+    map_df: pd.DataFrame,
+    *,
+    provider: str,
+) -> None:
     weight_options = available_heatmap_weightings(filtered_df)
     weight_label = st.selectbox(
         "Heatmap weighting",
@@ -576,6 +661,7 @@ def _render_heatmap_tab(filtered_df: pd.DataFrame, map_df: pd.DataFrame) -> None
             centre,
             zoom=4,
             engine="map",
+            provider=provider,
         ),
         margin={"l": 0, "r": 0, "t": 0, "b": 0},
         coloraxis_colorbar={"title": weight_label},
@@ -584,6 +670,7 @@ def _render_heatmap_tab(filtered_df: pd.DataFrame, map_df: pd.DataFrame) -> None
 
 
 def _render_isochrone_tab(map_df: pd.DataFrame) -> None:
+    effective_provider = _resolved_provider()
     centre_label = st.radio(
         "Isochrone centre",
         ("Origin", "Destination"),
@@ -600,6 +687,24 @@ def _render_isochrone_tab(map_df: pd.DataFrame) -> None:
             "Network-aware reachability horizon used when the configured routing stack can produce true isochrone polygons."
         ),
     )
+    if hasattr(st, "toggle"):
+        allow_approximate = st.toggle(
+            "Allow synthetic reach circles",
+            value=False,
+            help=(
+                "When provider-backed isochrones are unavailable, estimate reach using approximate circles "
+                "based on route distance and speed."
+            ),
+        )
+    else:
+        allow_approximate = st.checkbox(
+            "Allow synthetic reach circles",
+            value=False,
+            help=(
+                "When provider-backed isochrones are unavailable, estimate reach using approximate circles "
+                "based on route distance and speed."
+            ),
+        )
     max_iso_routes = st.slider(
         "Maximum corridors to display",
         min_value=5,
@@ -614,6 +719,8 @@ def _render_isochrone_tab(map_df: pd.DataFrame) -> None:
         centre="origin" if centre_label == "Origin" else "destination",
         horizon_hours=float(iso_hours),
         max_routes=int(max_iso_routes),
+        routing_provider=effective_provider,
+        allow_approximate_fallback=allow_approximate,
     )
 
     if iso_source.empty:
@@ -621,6 +728,7 @@ def _render_isochrone_tab(map_df: pd.DataFrame) -> None:
             map_df,
             centre="origin" if centre_label == "Origin" else "destination",
             horizon_hours=float(iso_hours),
+            routing_provider=effective_provider,
         )
         st.info(
             "No network-aware isochrones are available for the current filters and routing configuration."
@@ -629,16 +737,23 @@ def _render_isochrone_tab(map_df: pd.DataFrame) -> None:
             st.caption("Why this can happen:")
             for reason in diagnostics["reasons"]:
                 st.caption(f"- {reason}")
-        st.caption(
-            "This view suppresses synthetic circular reach estimates. It only renders provider-backed isochrone polygons."
-        )
+        if not allow_approximate:
+            st.caption(
+                "Synthetic circular reach estimates are currently disabled. Enable "
+                "\"Allow synthetic reach circles\" to include fallback circles when provider "
+                "polygons are not available."
+            )
         if diagnostics["next_actions"]:
             st.caption("Next steps:")
             for action in diagnostics["next_actions"]:
                 st.caption(f"- {action}")
-        if diagnostics["provider_names"]:
+        provider_labels = _normalise_provider_labels(
+            diagnostics["provider_names"],
+            routing_provider_env=diagnostics.get("routing_provider_env"),
+        )
+        if provider_labels:
             st.caption(
-                "Attempted providers: " + ", ".join(str(name) for name in diagnostics["provider_names"])
+                "Attempted providers: " + ", ".join(provider_labels)
             )
         st.caption(
             f"Candidate routes with valid centre/distance: {diagnostics['candidate_rows']} / {diagnostics['input_rows']}"
@@ -693,6 +808,90 @@ def _render_isochrone_tab(map_df: pd.DataFrame) -> None:
     st.plotly_chart(figure, width="stretch")
 
 
+def _merge_saved_job_overlay_rows(map_df: pd.DataFrame, conn: Connection) -> pd.DataFrame:
+    def _coerce_float(value: Any) -> Optional[float]:
+        try:
+            return round(float(value), 5)
+        except (TypeError, ValueError):
+            return None
+
+    def _route_signature(row: pd.Series) -> tuple[Any, ...]:
+        geojson_value = row.get("route_geojson")
+        geojson_signature = geojson_value.strip() if isinstance(geojson_value, str) else None
+        return (
+            _coerce_float(row.get("origin_lat")),
+            _coerce_float(row.get("origin_lon")),
+            _coerce_float(row.get("dest_lat")),
+            _coerce_float(row.get("dest_lon")),
+            geojson_signature,
+        )
+
+    base_df = map_df.copy()
+    base_df["route_dataset_source"] = "Current selection"
+
+    try:
+        job_rows = fetch_job_route_rows(conn, include_actual=True)
+    except Exception as exc:
+        st.warning(f"Unable to load saved jobs overlay: {exc}")
+        return base_df
+
+    if not job_rows:
+        st.caption("Saved jobs overlay is empty.")
+        return base_df
+
+    saved_df = pd.DataFrame(
+        [dict(row) if hasattr(row, "keys") else dict(row) for row in job_rows]
+    )
+    if saved_df.empty:
+        st.caption("Saved jobs overlay is empty.")
+        return base_df
+
+    saved_df["route_dataset_source"] = "Saved jobs"
+    if "origin_resolved" in saved_df.columns and "origin_city" not in saved_df.columns:
+        saved_df["origin_city"] = saved_df["origin_resolved"]
+    if "destination_resolved" in saved_df.columns and "destination_city" not in saved_df.columns:
+        saved_df["destination_city"] = saved_df["destination_resolved"]
+    if "client_display" not in saved_df.columns:
+        saved_df["client_display"] = "Saved jobs"
+
+    duplicate_count = 0
+    if "id" in base_df.columns and "id" in saved_df.columns:
+        base_ids = pd.to_numeric(base_df["id"], errors="coerce").dropna()
+        if not base_ids.empty:
+            saved_ids = pd.to_numeric(saved_df["id"], errors="coerce")
+            duplicate_mask = saved_ids.isin(set(base_ids.astype(int).tolist()))
+            duplicate_count = int(duplicate_mask.sum())
+            saved_df = saved_df.loc[~duplicate_mask].copy()
+
+    if not saved_df.empty:
+        base_signatures = {
+            _route_signature(row)
+            for _, row in base_df.iterrows()
+        }
+        signature_mask = saved_df.apply(
+            lambda row: _route_signature(row) in base_signatures,
+            axis=1,
+        )
+        signature_duplicates = int(signature_mask.sum())
+        if signature_duplicates > 0:
+            duplicate_count += signature_duplicates
+            saved_df = saved_df.loc[~signature_mask].copy()
+
+    if saved_df.empty:
+        if duplicate_count > 0:
+            st.caption("Saved jobs overlay is already covered by the current selection.")
+        return base_df
+
+    merged_df = pd.concat([base_df, saved_df], ignore_index=True, sort=False)
+    if duplicate_count > 0:
+        st.caption(
+            f"Added {len(saved_df)} saved job route rows and skipped {duplicate_count} duplicates already in the current selection."
+        )
+    else:
+        st.caption(f"Added {len(saved_df)} saved job route rows from the jobs table.")
+    return merged_df
+
+
 def _enrich_route_geometry(df: pd.DataFrame) -> pd.DataFrame:
     """Fill missing ``route_geojson`` values using the configured routing provider."""
 
@@ -700,7 +899,7 @@ def _enrich_route_geometry(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     working = df.copy()
-    provider_key = os.environ.get("ROUTING_PROVIDER", "ors").strip().lower()
+    provider_key = _resolved_provider()
     route_provider = get_routing_provider(provider=provider_key, client=None)
 
     def _coerce_float(value: Any) -> Optional[float]:
@@ -727,75 +926,3 @@ def _enrich_route_geometry(df: pd.DataFrame) -> pd.DataFrame:
             continue
 
     return working
-
-
-def _render_saved_job_routes(conn: Connection) -> None:
-    if folium is None or st_folium is None:
-        st.info("Install 'folium' and 'streamlit-folium' to view the interactive route overlay.")
-        return
-
-    try:
-        job_rows = fetch_job_route_rows(conn, include_actual=True)
-    except sqlite3.OperationalError as exc:
-        st.warning(f"Unable to load saved routes from the jobs table: {exc}")
-        return
-
-    if not job_rows:
-        st.caption("No saved jobs with coordinates are available yet.")
-        return
-
-    actual_available = any(
-        "route_geojson" in row.keys() and row["route_geojson"] for row in job_rows
-    )
-    toggle_help = "Overlay the stored routing-provider geometry instead of straight-line chords."
-    include_actual_key = "folium_job_routes_overlay"
-    default_toggle = (
-        bool(st.session_state.get(include_actual_key, actual_available))
-        if actual_available
-        else False
-    )
-
-    if hasattr(st, "toggle"):
-        include_actual = st.toggle(
-            "Overlay actual routed paths",
-            value=default_toggle,
-            key=include_actual_key,
-            help=toggle_help,
-            disabled=not actual_available,
-        )
-    else:
-        include_actual = st.checkbox(
-            "Overlay actual routed paths",
-            value=default_toggle,
-            key=include_actual_key,
-            help=toggle_help,
-            disabled=not actual_available,
-        )
-
-    if not actual_available and include_actual:
-        include_actual = False
-    if not actual_available:
-        st.caption(
-            "Stored route geometry has not been captured yet; showing straight-line connections instead."
-        )
-
-    map_kwargs, tile_layer_kwargs = folium_map_configuration()
-    build_kwargs: dict[str, Any] = {"include_actual": include_actual}
-    try:
-        parameters = inspect.signature(build_job_route_map).parameters
-    except (TypeError, ValueError):
-        parameters = {}
-    if "map_kwargs" in parameters:
-        build_kwargs["map_kwargs"] = map_kwargs
-    if "tile_layer_kwargs" in parameters:
-        build_kwargs["tile_layer_kwargs"] = tile_layer_kwargs
-
-    normalised_rows = [dict(row) if hasattr(row, "keys") else row for row in job_rows]
-    folium_map = build_job_route_map(normalised_rows, **build_kwargs)
-    st_folium(
-        folium_map,
-        height=520,
-        key="folium_saved_job_routes",
-        returned_objects=[],
-    )
-    st.caption("Use the layer control to toggle marker, straight-line, and actual route overlays.")

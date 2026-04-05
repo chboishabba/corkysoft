@@ -13,6 +13,7 @@ pd = pytest.importorskip("pandas")
 from analytics.db import ensure_global_parameters_table, set_parameter_value
 from analytics.db import ensure_dashboard_tables
 from analytics.lane_assignment import ensure_lane_assignment_schema
+import analytics.route_map_prep as route_map_prep
 from analytics.price_distribution import (
     BREAK_EVEN_KEY,
     DRIVER_COST_KEY,
@@ -2049,7 +2050,7 @@ def test_build_isochrone_polygons_validates_centre():
         build_isochrone_polygons(df, centre="truck")
 
 
-def test_build_isochrone_polygons_uses_ors_secondary_when_primary_lacks_isochrones(monkeypatch):
+def test_build_isochrone_polygons_does_not_cross_fallback_to_ors_when_google_selected(monkeypatch):
     class PrimaryProvider:
         def route_geometry(self, **_: Any) -> Any:  # pragma: no cover - unused stub
             raise NotImplementedError
@@ -2063,51 +2064,10 @@ def test_build_isochrone_polygons_uses_ors_secondary_when_primary_lacks_isochron
         ) -> IsochroneResult | None:
             return None
 
-    class SecondaryOrsProvider:
-        def __init__(self, client: Any = None) -> None:
-            self.client = client
-
-        def isochrone(
-            self,
-            *,
-            centre: tuple[float, float],
-            profile: str,
-            range_seconds: list[int],
-        ) -> IsochroneResult:
-            assert centre == (153.0260, -27.4705)
-            assert profile == "driving-hgv"
-            assert range_seconds == [7200]
-            return IsochroneResult(
-                feature_collection={
-                    "type": "FeatureCollection",
-                    "features": [
-                        {
-                            "type": "Feature",
-                            "properties": {"value": range_seconds[0]},
-                            "geometry": {
-                                "type": "Polygon",
-                                "coordinates": [
-                                    [
-                                        [153.0260, -27.4705],
-                                        [153.1260, -27.4705],
-                                        [153.1260, -27.5705],
-                                        [153.0260, -27.5705],
-                                        [153.0260, -27.4705],
-                                    ]
-                                ],
-                            },
-                        }
-                    ],
-                }
-            )
-
+    monkeypatch.setenv("ROUTING_PROVIDER", "google")
     monkeypatch.setattr(
         "analytics.route_map_prep.get_routing_provider",
         lambda client=None: PrimaryProvider(),
-    )
-    monkeypatch.setattr(
-        "analytics.route_map_prep.OpenRouteServiceProvider",
-        SecondaryOrsProvider,
     )
 
     df = pd.DataFrame(
@@ -2122,11 +2082,58 @@ def test_build_isochrone_polygons_uses_ors_secondary_when_primary_lacks_isochron
 
     iso_df = build_isochrone_polygons(df, horizon_hours=2.0)
 
+    assert iso_df.empty
+
+
+def test_build_isochrone_polygons_uses_explicit_ors_client_when_ors_selected(monkeypatch):
+    captured: dict[str, Any] = {}
+    sentinel_client = object()
+
+    class PrimaryProvider:
+        def route_geometry(self, **_: Any) -> Any:  # pragma: no cover - unused stub
+            raise NotImplementedError
+
+        def isochrone(
+            self,
+            *,
+            centre: tuple[float, float],
+            profile: str,
+            range_seconds: list[int],
+        ) -> IsochroneResult | None:
+            return IsochroneResult(
+                coordinates=[
+                    (-27.4705, 153.0260),
+                    (-27.4710, 153.0300),
+                    (-27.4705, 153.0260),
+                ]
+            )
+
+    def fake_get_routing_provider(*, provider=None, client=None):
+        captured["provider"] = provider
+        captured["client"] = client
+        return PrimaryProvider()
+
+    monkeypatch.setenv("ROUTING_PROVIDER", "ors")
+    monkeypatch.setattr(
+        "analytics.route_map_prep.get_routing_provider",
+        fake_get_routing_provider,
+    )
+
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705],
+            "origin_lon": [153.0260],
+            "distance_km": [100.0],
+            "duration_hr": [2.0],
+            "corridor_display": ["Brisbane local"],
+        }
+    )
+
+    iso_df = build_isochrone_polygons(df, ors_client=sentinel_client)
+
+    assert captured["provider"] is None
+    assert captured["client"] is sentinel_client
     assert len(iso_df) == 1
-    record = iso_df.iloc[0]
-    assert record["geometry_source"] == "network"
-    assert record["latitudes"] == [-27.4705, -27.4705, -27.5705, -27.5705, -27.4705]
-    assert record["longitudes"] == [153.026, 153.126, 153.126, 153.026, 153.026]
 
 
 def test_build_isochrone_polygons_skips_circular_fallback_by_default():
@@ -2194,6 +2201,111 @@ def test_build_isochrone_polygons_can_explicitly_use_approximate_fallback():
     assert "approximate radius" in record["tooltip"]
 
 
+def test_build_isochrone_polygons_handles_invalid_geometry():
+    class BadResult:
+        def to_lat_lon_lists(self):
+            raise ValueError("GeoJSON does not have type")
+
+    class BadProvider:
+        def route_geometry(self, **_: Any) -> Any:
+            raise NotImplementedError
+
+        def isochrone(
+            self,
+            *,
+            centre: tuple[float, float],
+            profile: str,
+            range_seconds: list[int],
+        ) -> IsochroneResult | BadResult:
+            return BadResult()
+
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705],
+            "origin_lon": [153.0260],
+            "distance_km": [100.0],
+            "duration_hr": [2.0],
+            "corridor_display": ["Brisbane local"],
+        }
+    )
+
+    iso_df = build_isochrone_polygons(df, routing_provider=BadProvider())
+    assert iso_df.empty
+
+
+def test_build_isochrone_polygons_invalid_geometry_with_approximate_fallback():
+    class BadResult:
+        def to_lat_lon_lists(self):
+            raise ValueError("GeoJSON does not have type")
+
+    class BadProvider:
+        def route_geometry(self, **_: Any) -> Any:
+            raise NotImplementedError
+
+        def isochrone(
+            self,
+            *,
+            centre: tuple[float, float],
+            profile: str,
+            range_seconds: list[int],
+        ) -> IsochroneResult | BadResult:
+            return BadResult()
+
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705],
+            "origin_lon": [153.0260],
+            "distance_km": [100.0],
+            "duration_hr": [2.0],
+            "corridor_display": ["Brisbane local"],
+        }
+    )
+
+    iso_df = build_isochrone_polygons(
+        df,
+        routing_provider=BadProvider(),
+        allow_approximate_fallback=True,
+    )
+
+    assert len(iso_df) == 1
+    record = iso_df.iloc[0]
+    assert record["geometry_source"] == "approximate_circle"
+    assert "approximate radius" in record["tooltip"]
+
+
+def test_build_isochrone_polygons_ignores_malformed_lat_lon_lists():
+    class BadResult:
+        def to_lat_lon_lists(self):
+            return [-27.4705, -27.4605], [153.0260]
+
+    class BadProvider:
+        def route_geometry(self, **_: Any) -> Any:
+            raise NotImplementedError
+
+        def isochrone(
+            self,
+            *,
+            centre: tuple[float, float],
+            profile: str,
+            range_seconds: list[int],
+        ) -> IsochroneResult | BadResult:
+            return BadResult()
+
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705],
+            "origin_lon": [153.0260],
+            "distance_km": [100.0],
+            "duration_hr": [2.0],
+            "corridor_display": ["Brisbane local"],
+        }
+    )
+
+    iso_df = build_isochrone_polygons(df, routing_provider=BadProvider())
+
+    assert iso_df.empty
+
+
 def test_explain_isochrone_unavailability_reports_missing_distance_column():
     df = pd.DataFrame(
         {
@@ -2240,5 +2352,196 @@ def test_explain_isochrone_unavailability_google_without_ors(monkeypatch):
 
     assert diagnostics["input_rows"] == 1
     assert diagnostics["candidate_rows"] == 1
-    assert any("Google routing is active" in reason for reason in diagnostics["reasons"])
-    assert any("ORS_API_KEY" in action for action in diagnostics["next_actions"])
+    assert any("cross-provider ORS fallback is intentionally disabled" in reason for reason in diagnostics["reasons"])
+    assert any("switch `ROUTING_PROVIDER=ors`" in action for action in diagnostics["next_actions"])
+
+
+def test_explain_isochrone_unavailability_google_with_ors_still_reports_provider_limit(monkeypatch):
+    monkeypatch.setenv("ROUTING_PROVIDER", "google")
+    monkeypatch.setenv("ORS_API_KEY", "configured")
+
+    class StubProvider:
+        def route_geometry(self, **_: Any) -> Any:  # pragma: no cover - protocol only
+            raise NotImplementedError
+
+        def isochrone(
+            self,
+            *,
+            centre: tuple[float, float],
+            profile: str,
+            range_seconds: list[int],
+        ) -> IsochroneResult | None:
+            return None
+
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705],
+            "origin_lon": [153.0260],
+            "distance_km": [120.0],
+            "duration_hr": [2.0],
+        }
+    )
+
+    diagnostics = explain_isochrone_unavailability(df, routing_provider=StubProvider())
+
+    assert diagnostics["ors_api_key_configured"] is True
+    assert any(
+        "cross-provider ORS fallback is intentionally disabled" in reason
+        for reason in diagnostics["reasons"]
+    )
+    assert any(
+        "enable approximate fallback explicitly" in action
+        for action in diagnostics["next_actions"]
+    )
+
+
+def test_explain_isochrone_unavailability_respects_explicit_provider_name(monkeypatch):
+    monkeypatch.setenv("ROUTING_PROVIDER", "google")
+    monkeypatch.delenv("ORS_API_KEY", raising=False)
+
+    class StubProvider:
+        def route_geometry(self, **_: Any) -> Any:  # pragma: no cover - protocol only
+            raise NotImplementedError
+
+        def isochrone(
+            self,
+            *,
+            centre: tuple[float, float],
+            profile: str,
+            range_seconds: list[int],
+        ) -> IsochroneResult | None:
+            return None
+
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705],
+            "origin_lon": [153.0260],
+            "distance_km": [120.0],
+            "duration_hr": [2.0],
+        }
+    )
+
+    diagnostics = explain_isochrone_unavailability(df, routing_provider="ors")
+
+    assert diagnostics["routing_provider_env"] == "ors"
+    assert not any(
+        "cross-provider ORS fallback is intentionally disabled" in reason
+        for reason in diagnostics["reasons"]
+    )
+
+
+def test_explain_isochrone_unavailability_normalises_google_maps_label(monkeypatch):
+    monkeypatch.setenv("ROUTING_PROVIDER", "ors")
+
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705],
+            "origin_lon": [153.0260],
+            "distance_km": [120.0],
+            "duration_hr": [2.0],
+        }
+    )
+
+    diagnostics = explain_isochrone_unavailability(df, routing_provider="Google Maps")
+
+    assert diagnostics["routing_provider_env"] == "google"
+    assert any(
+        "cross-provider ORS fallback is intentionally disabled" in reason
+        for reason in diagnostics["reasons"]
+    )
+    assert diagnostics["provider_names"] == ["Google Maps"]
+
+
+def test_explain_isochrone_unavailability_sanitises_unknown_provider_objects(monkeypatch):
+    monkeypatch.setenv("ROUTING_PROVIDER", "google")
+    monkeypatch.delenv("ORS_API_KEY", raising=False)
+
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705],
+            "origin_lon": [153.0260],
+            "distance_km": [120.0],
+            "duration_hr": [2.0],
+        }
+    )
+
+    monkeypatch.setattr(
+        route_map_prep,
+        "_resolve_isochrone_providers",
+        lambda routing_provider=None, ors_client=None: ([str], []),
+    )
+
+    diagnostics = explain_isochrone_unavailability(df)
+
+    assert diagnostics["provider_names"] == ["Google Maps"]
+
+
+def test_explain_isochrone_unavailability_normalises_unknown_provider_objects_for_ors(monkeypatch):
+    monkeypatch.setenv("ROUTING_PROVIDER", "ors")
+    monkeypatch.delenv("GOOGLE_MAPS_API_KEY", raising=False)
+
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705],
+            "origin_lon": [153.0260],
+            "distance_km": [120.0],
+            "duration_hr": [2.0],
+        }
+    )
+
+    class UnknownProvider:
+        pass
+
+    monkeypatch.setattr(
+        route_map_prep,
+        "_resolve_isochrone_providers",
+        lambda routing_provider=None, ors_client=None: ([UnknownProvider()], []),
+    )
+
+    diagnostics = explain_isochrone_unavailability(df)
+
+    assert diagnostics["provider_names"] == ["UnknownProvider", "OpenRouteService"]
+
+
+def test_build_isochrone_polygons_respects_explicit_google_provider_name(monkeypatch):
+    class PrimaryProvider:
+        def route_geometry(self, **_: Any) -> Any:  # pragma: no cover - unused stub
+            raise NotImplementedError
+
+        def isochrone(
+            self,
+            *,
+            centre: tuple[float, float],
+            profile: str,
+            range_seconds: list[int],
+        ) -> IsochroneResult | None:
+            return None
+
+    captured: dict[str, Any] = {}
+
+    def fake_get_routing_provider(*, provider=None, client=None):
+        captured["provider"] = provider
+        captured["client"] = client
+        return PrimaryProvider()
+
+    monkeypatch.setenv("ROUTING_PROVIDER", "ors")
+    monkeypatch.setattr(
+        "analytics.route_map_prep.get_routing_provider",
+        fake_get_routing_provider,
+    )
+
+    df = pd.DataFrame(
+        {
+            "origin_lat": [-27.4705],
+            "origin_lon": [153.0260],
+            "distance_km": [920.0],
+            "duration_hr": [10.0],
+            "corridor_display": ["Brisbane → Sydney"],
+        }
+    )
+
+    iso_df = build_isochrone_polygons(df, horizon_hours=2.0, routing_provider="google")
+
+    assert captured["provider"] == "google"
+    assert captured["client"] is None
+    assert iso_df.empty

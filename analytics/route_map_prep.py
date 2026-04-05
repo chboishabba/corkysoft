@@ -11,9 +11,9 @@ import pandas as pd
 
 from .profitability_map_prep import _coerce_float, _route_display_name
 from .routing_provider import (
-    OpenRouteServiceProvider,
     RoutingProvider,
     get_routing_provider,
+    _normalise_provider_name,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -271,6 +271,23 @@ def _circle_coordinates(
     return latitudes, longitudes
 
 
+def _valid_lat_lon_ring(latitudes: Sequence[float], longitudes: Sequence[float]) -> bool:
+    if not latitudes or not longitudes:
+        return False
+    if len(latitudes) != len(longitudes):
+        return False
+    if len(latitudes) < 3:
+        return False
+    try:
+        return all(
+            math.isfinite(float(lat)) and math.isfinite(float(lon))
+            for lat, lon in zip(latitudes, longitudes)
+        )
+    except (TypeError, ValueError):
+        return False
+    
+
+
 def build_isochrone_polygons(
     df: pd.DataFrame,
     *,
@@ -279,7 +296,7 @@ def build_isochrone_polygons(
     default_speed_kmh: float = 70.0,
     max_routes: int = 50,
     points: int = 60,
-    routing_provider: Optional[RoutingProvider] = None,
+    routing_provider: Optional[RoutingProvider | str] = None,
     ors_client: Optional[ORSClient] = None,
     ors_profile: str = "driving-hgv",
     allow_approximate_fallback: bool = False,
@@ -370,26 +387,44 @@ def build_isochrone_polygons(
         latitudes, longitudes = [], []
         if range_seconds:
             for provider in providers:
-                try:
-                    result = provider.isochrone(
-                        centre=(float(lon_value), float(lat_value)),
-                        profile=ors_profile,
-                        range_seconds=range_seconds,
-                    )
-                except NotImplementedError:
-                    result = None
-                except Exception as exc:  # pragma: no cover
-                    logger.debug(
-                        "Routing provider isochrone request failed for %s via %s: %s",
-                        label,
-                        provider.__class__.__name__,
-                        exc,
-                    )
-                    result = None
-                if result:
-                    latitudes, longitudes = result.to_lat_lon_lists()
-                if latitudes and longitudes:
-                    break
+                    try:
+                        result = provider.isochrone(
+                            centre=(float(lon_value), float(lat_value)),
+                            profile=ors_profile,
+                            range_seconds=range_seconds,
+                        )
+                    except NotImplementedError:
+                        result = None
+                    except Exception as exc:  # pragma: no cover
+                        logger.debug(
+                            "Routing provider isochrone request failed for %s via %s: %s",
+                            label,
+                            provider.__class__.__name__,
+                            exc,
+                        )
+                        result = None
+                    if result:
+                        try:
+                            candidate_latitudes, candidate_longitudes = result.to_lat_lon_lists()
+                        except ValueError as exc:
+                            logger.debug(
+                                "Routing provider returned invalid isochrone geometry for %s via %s: %s",
+                                label,
+                                provider.__class__.__name__,
+                                exc,
+                            )
+                            continue
+                        if not _valid_lat_lon_ring(candidate_latitudes, candidate_longitudes):
+                            logger.debug(
+                                "Routing provider returned malformed isochrone ring for %s via %s",
+                                label,
+                                provider.__class__.__name__,
+                            )
+                            continue
+                        latitudes = [float(value) for value in candidate_latitudes]
+                        longitudes = [float(value) for value in candidate_longitudes]
+                    if latitudes and longitudes:
+                        break
         if (not latitudes or not longitudes) and allow_approximate_fallback:
             latitudes, longitudes = _circle_coordinates(
                 lat_value,
@@ -432,7 +467,7 @@ def explain_isochrone_unavailability(
     *,
     centre: Literal["origin", "destination"] = "origin",
     horizon_hours: float = 4.0,
-    routing_provider: Optional[RoutingProvider] = None,
+    routing_provider: Optional[RoutingProvider | str] = None,
     ors_client: Optional[ORSClient] = None,
 ) -> dict[str, Any]:
     """Return deterministic diagnostics for empty network-isochrone results."""
@@ -464,8 +499,13 @@ def explain_isochrone_unavailability(
         routing_provider=routing_provider,
         ors_client=ors_client,
     )
-    provider_names = [provider.__class__.__name__ for provider in providers]
-    routing_provider_env = os.environ.get("ROUTING_PROVIDER", "ors").strip().lower()
+    effective_provider_name = _effective_provider_name(routing_provider)
+    provider_names = [
+        _display_provider_name(provider, fallback=effective_provider_name)
+        for provider in providers
+    ]
+    if effective_provider_name == "ors" and "OpenRouteService" not in provider_names:
+        provider_names.append("OpenRouteService")
     ors_api_key_configured = bool(str(os.environ.get("ORS_API_KEY", "")).strip())
     google_api_key_configured = bool(str(os.environ.get("GOOGLE_MAPS_API_KEY", "")).strip())
 
@@ -497,12 +537,12 @@ def explain_isochrone_unavailability(
     if provider_init_errors:
         reasons.extend(provider_init_errors)
 
-    if routing_provider_env == "google" and not ors_api_key_configured:
+    if effective_provider_name == "google":
         reasons.append(
-            "Google routing is active and ORS fallback is not configured; Google clients may not expose an isochrone endpoint."
+            "Google routing is active; cross-provider ORS fallback is intentionally disabled, and Google clients may not expose an isochrone endpoint."
         )
         next_actions.append(
-            "Set `ORS_API_KEY` for ORS-backed isochrones, or switch `ROUTING_PROVIDER=ors`."
+            "Use a Google client that exposes isochrones, enable approximate fallback explicitly, or switch `ROUTING_PROVIDER=ors`."
         )
     elif not ors_api_key_configured and "OpenRouteServiceProvider" not in provider_names:
         next_actions.append("Configure `ORS_API_KEY` to enable ORS-backed isochrone polygons.")
@@ -514,7 +554,7 @@ def explain_isochrone_unavailability(
         "candidate_rows": int(candidates),
         "missing_columns": missing_columns,
         "provider_names": provider_names,
-        "routing_provider_env": routing_provider_env,
+        "routing_provider_env": effective_provider_name,
         "ors_api_key_configured": ors_api_key_configured,
         "google_api_key_configured": google_api_key_configured,
         "reasons": reasons,
@@ -522,32 +562,78 @@ def explain_isochrone_unavailability(
     }
 
 
+def _display_provider_name(provider: Any, *, fallback: str) -> str:
+    def _normalised_fallback() -> str:
+        normalised = _normalise_provider_name(fallback)
+        if normalised == "google":
+            return "Google Maps"
+        if normalised == "ors":
+            return "OpenRouteService"
+        return "OpenRouteService"
+
+    if isinstance(provider, str):
+        normalised = _normalise_provider_name(provider)
+        if normalised in {"google", "google maps", "google_maps"}:
+            return "Google Maps"
+        if normalised in {"ors", "openrouteservice", "open route service", "openrouteserviceprovider"}:
+            return "OpenRouteService"
+        if normalised in {"str", "type", "object", "unknown", ""}:
+            return _normalised_fallback()
+        return normalised or _normalised_fallback()
+
+    if isinstance(provider, type):
+        return _display_provider_name(provider.__name__, fallback=fallback)
+
+    provider_type = provider.__class__.__name__.lower()
+    if "google" in provider_type:
+        return "Google Maps"
+    if "openrouteservice" in provider_type or "ors" in provider_type:
+        return "OpenRouteService"
+
+    raw_name = provider.__class__.__name__.strip()
+    if raw_name and raw_name.lower() not in {"object", "str", "type"}:
+        return raw_name
+    return _normalised_fallback()
+
+
 def _resolve_isochrone_providers(
     *,
-    routing_provider: Optional[RoutingProvider],
+    routing_provider: Optional[RoutingProvider | str],
     ors_client: Optional[ORSClient],
 ) -> tuple[list[RoutingProvider], list[str]]:
     providers: list[RoutingProvider] = []
     init_errors: list[str] = []
     if routing_provider is not None:
-        providers.append(routing_provider)
+        provider_client: Optional[Any]
+        if isinstance(routing_provider, str):
+            provider_client = ors_client if routing_provider.strip().lower() != "google" else None
+        else:
+            provider_client = None
+        try:
+            providers.append(get_routing_provider(provider=routing_provider, client=provider_client))
+        except Exception as exc:  # pragma: no cover
+            logger.debug("Unable to initialise explicit routing provider for isochrones: %s", exc)
+            init_errors.append(f"Explicit provider init failed: {exc}")
         return providers, init_errors
 
+    provider_name = _effective_provider_name(None)
+    provider_client: Optional[Any] = ors_client if provider_name != "google" else None
+
     try:
-        providers.append(get_routing_provider(client=None))
+        providers.append(get_routing_provider(client=provider_client))
     except Exception as exc:  # pragma: no cover
         logger.debug("Unable to initialise primary routing provider for isochrones: %s", exc)
         init_errors.append(f"Primary provider init failed: {exc}")
-
-    try:
-        ors_provider = OpenRouteServiceProvider(ors_client)
-    except Exception as exc:  # pragma: no cover
-        logger.debug("Unable to initialise ORS fallback provider for isochrones: %s", exc)
-        init_errors.append(f"ORS fallback init failed: {exc}")
-        ors_provider = None
-
-    if ors_provider is not None and not any(
-        isinstance(provider, OpenRouteServiceProvider) for provider in providers
-    ):
-        providers.append(ors_provider)
     return providers, init_errors
+
+
+def _effective_provider_name(routing_provider: Optional[RoutingProvider | str]) -> str:
+    if isinstance(routing_provider, str):
+        return _normalise_provider_name(routing_provider)
+    if routing_provider is not None:
+        provider_type = routing_provider.__class__.__name__.lower()
+        if "google" in provider_type:
+            return "google"
+        if "openrouteservice" in provider_type or "ors" in provider_type:
+            return "ors"
+    return _normalise_provider_name(os.environ.get("ROUTING_PROVIDER", "ors"))

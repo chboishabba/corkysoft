@@ -140,17 +140,17 @@ those concepts.
 The first implementation should ship as a scaffold rather than a full solver.
 
 It should include:
-- a dedicated `Planner` tab
-- lightweight role-based layout defaults that can make `Planner` the landing surface for the relevant roles
+- a dedicated `Planner` workflow inside the `Operations` shell
+- lightweight role-based layout defaults that can make `Operations` the landing shell for the relevant roles while keeping `Planner` as the primary planning workflow
 - corridor/roadway-driven candidate surfacing using existing route/profitability history
 - draft leg proposal generation that becomes internal `job_segments` only after confirmation
 - the current manual segment editor retained as advanced/manual fallback in `Operations`
 
 Current status:
-- the dedicated `Planner` tab and lightweight role-based layout defaults are implemented
+- the dedicated `Planner` workflow inside `Operations` and the supporting role-based layout defaults are implemented
 - current planner behavior supports both job-first and corridor-first planning over historical route/profitability context
 - current planner should expose a day view anchored on the selected move date so proposed legs can be compared against already-planned segments, trucks, and workers for that day
-- planner day view should link into the separate manager-facing `Operations diary` once the operator needs job usage, vehicle usage, staff usage, invoice state, or subcontractor-bill review rather than only route/leg shaping
+- planner day view should link into the manager-facing `Operations diary` workflow once the operator needs job usage, vehicle usage, staff usage, invoice state, or subcontractor-bill review rather than only route/leg shaping
 - current proposals surface routing context and resource-fit alongside corridor familiarity before confirmation
 - current proposals also surface weak-confidence warnings before confirmation into `job_segments`
 - current planner site context includes first-pass street-level imagery when Google Maps is the active provider and imagery is available

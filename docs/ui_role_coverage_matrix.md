@@ -1,73 +1,130 @@
 # UI Role Coverage Matrix
 
-This matrix maps current Corkysoft roles to the main dashboard surfaces.
-Use it as the canonical reference for who should start where.
+This matrix maps current Corkysoft roles to the revised top-level dashboard
+shell. Treat the shell views as entrypoints, then use the noted leaf workflows
+inside each shell.
+
+Current shell taxonomy:
+
+- `Quote`
+- `Pricing Intelligence`
+- `Network`
+- `Operations`
+- `Admin`
 
 Current access-boundary note:
-- `Kent admin` is visible as a governed review surface for `Commercial Owner`,
-  but write access is currently restricted to `System / Rollout Admin`.
 
-| Role | Quote builder | Dispatch | Operations | Fleet | Vehicle maintenance | Staff | Driver shifts | Inventory | Kent tenders | Kent admin | Payroll / Labor analytics |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Estimator | primary | not used | not used | not used | not used | not used | not used | not used | secondary | not used | not used |
-| Dispatcher | not used | primary | secondary | secondary | not used | not used | not used | secondary | primary | not used | not used |
-| Fleet / Operations Manager | not used | primary | primary | primary | secondary | secondary | secondary | secondary | secondary | not used | secondary |
-| Commercial Owner | primary | not used | not used | not used | not used | not used | secondary | not used | primary | secondary | primary |
-| Labor Planner / Staff Coordinator | not used | secondary | primary | secondary | not used | primary | primary | not used | not used | not used | secondary |
-| Maintenance / Compliance Coordinator | not used | secondary | secondary | primary | primary | secondary | not used | not used | not used | not used | not used |
-| Warehouse / Crew | not used | secondary | not used | not used | not used | not used | not used | primary | not used | not used | not used |
-| Inventory / Supplier Coordinator | not used | secondary | secondary | not used | not used | not used | not used | primary | not used | not used | not used |
-| Workforce Time Capture Coordinator | not used | secondary | not used | not used | not used | primary | primary | not used | not used | not used | secondary |
-| System / Rollout Admin | not used | not used | secondary | primary | secondary | admin-only | admin-only | admin-only | not used | primary | admin-only |
+- `Admin` is the governed system and Kent-policy surface.
+- `Commercial Owner` may review admin/governance state where exposed, but live
+  write access remains restricted to `System / Rollout Admin`.
+
+| Role | Quote | Pricing Intelligence | Network | Operations | Admin |
+| --- | --- | --- | --- | --- | --- |
+| Estimator | primary | primary | secondary | not used | not used |
+| Dispatcher | secondary | not used | primary | primary | not used |
+| Fleet / Operations Manager | not used | secondary | primary | primary | not used |
+| Commercial Owner | primary | primary | not used | secondary | secondary-review |
+| Labor Planner / Staff Coordinator | not used | not used | secondary | primary | not used |
+| Maintenance / Compliance Coordinator | not used | not used | secondary | primary | not used |
+| Warehouse / Crew | not used | not used | not used | primary | not used |
+| Inventory / Supplier Coordinator | not used | not used | not used | primary | not used |
+| Workforce Time Capture Coordinator | not used | not used | not used | primary | not used |
+| System / Rollout Admin | secondary | secondary | secondary | secondary | primary |
 
 ## Interpretation
 
-- `primary`: the role should normally start here for its main task.
-- `secondary`: the role uses this surface for context or follow-up work.
-- `admin-only`: the role uses only governance, import, or maintenance sections of the surface.
-- `not used`: the surface is outside the role's normal workflow.
+- `primary`: normal entrypoint for the role.
+- `secondary`: supporting context or follow-up work.
+- `secondary-review`: visible for governed review, but not the main operating surface.
+- `not used`: outside the role's normal workflow.
 
-## Mixed Surfaces
+## Leaf Workflow Mapping
 
-### Fleet
+### Quote
 
-`Fleet` currently mixes:
-- workbook sync
-- readiness policy
-- rollout admin
-- maintenance/compliance cockpit
-- vehicle register and import/export
+Primary leaf workflows:
 
-This is operationally valid today, but roles should treat it as a mixed surface rather than a pure day-to-day board.
+- `Quote builder`
+- `Calls`
+- `Kent tenders`
 
-### Staff
+Typical owners:
 
-`Staff` currently mixes:
-- roster editing
-- linked-shift review
-- role/compliance admin
-- worker readiness review
+- Estimator
+- Commercial Owner
+- Dispatcher for tender follow-up context
 
-This is the correct home for labor coordination, but some sections are coordination-focused while others are admin/governance.
+### Pricing Intelligence
 
-### Payroll / Labor analytics
+Primary leaf workflows:
 
-This is a future management and finance-facing surface for:
-- payroll preparation
-- labor forecasting
-- overtime/hours/cost distributions
-- absence and anomaly summaries
+- optimizer
+- histogram / distribution review
+- price history
+- profitability insights
 
-It should default to aggregate and exception views rather than person-by-person monitoring.
+Typical owners:
 
-### Inventory
+- Estimator
+- Commercial Owner
+- Fleet / Operations Manager for review, not daily entry
 
-`Inventory` currently mixes:
-- warehouse execution workflow
-- segment-linked stock coordination
-- supplier import
-- movement event import
-- reserve/release actions
-- exception reconciliation
+### Network
 
-This is acceptable for the current scale, but users should distinguish daily warehouse execution and stock coordination from source-data administration.
+Primary leaf workflows:
+
+- live network overview
+- telemetry and route-map review
+- corridor and historic route overlays
+
+Typical owners:
+
+- Dispatcher
+- Fleet / Operations Manager
+
+### Operations
+
+Primary leaf workflows:
+
+- `Dispatch`
+- `Planner`
+- `Operations diary`
+- `Operations`
+- `Fleet`
+- `Vehicle Maintenance`
+- `Inventory`
+- `Staff`
+- `Driver Shifts`
+- `Payroll / Labor`
+
+Typical owners:
+
+- Dispatcher
+- Fleet / Operations Manager
+- Labor Planner / Staff Coordinator
+- Maintenance / Compliance Coordinator
+- Inventory / Supplier Coordinator
+- Workforce Time Capture Coordinator
+- Warehouse / Crew
+
+### Admin
+
+Primary leaf workflows:
+
+- dashboard user administration
+- Kent governance/admin controls
+- system-log and sync actions
+
+Typical owners:
+
+- System / Rollout Admin
+- Commercial Owner for governed review only where exposed
+
+## Governance Notes
+
+- The revised shell improves operator focus, but mixed surfaces still exist
+  inside `Operations`; keep execution, review, and admin subsections visibly
+  separated there.
+- KPI strips and alert banners in the new views should be treated as
+  presentation scaffolding until the values are sourced from live metrics with
+  freshness and ownership.

@@ -18,20 +18,31 @@ Use Corkysoft as the internal operational and commercial workspace for:
 Google Sheets remain import inputs where needed, but daily planning should
 happen inside Corkysoft.
 
+Current shell entrypoints:
+
+- `Quote`
+- `Pricing Intelligence`
+- `Network`
+- `Operations`
+- `Admin`
+
+Start from the shell view that matches your role, then use the relevant leaf
+workflow inside that shell.
+
 ## Role Map
 
-| Role | Primary tabs | Secondary tabs |
+| Role | Primary shell / leaf focus | Secondary shell / leaf focus |
 | --- | --- | --- |
-| Estimator | `Quote builder` | analytics tabs |
-| Dispatcher | `Dispatch`, `Kent tenders` | `Operations` |
-| Fleet / Operations Manager | `Operations`, `Dispatch`, `Fleet` | `Vehicle maintenance` |
-| Commercial Owner | `Quote builder`, `Kent tenders` | analytics tabs, `Kent admin` review |
-| Labor Planner / Staff Coordinator | `Staff`, `Driver shifts`, `Operations` | `Dispatch` |
-| Maintenance / Compliance Coordinator | `Fleet`, `Vehicle maintenance` | `Operations`, `Dispatch` |
-| Warehouse / Crew | `Inventory` | `Dispatch` |
-| Inventory / Supplier Coordinator | `Inventory` | `Dispatch` |
-| Workforce Time Capture Coordinator | `Staff`, `Driver shifts` | future time-capture review surface |
-| System / Rollout Admin | `Fleet`, `Kent admin` | `Staff`, `Inventory`, `Driver shifts` |
+| Estimator | `Quote` -> `Quote builder` | `Pricing Intelligence`, `Network` |
+| Dispatcher | `Operations` -> `Dispatch`; `Quote` -> `Kent tenders` | `Network` |
+| Fleet / Operations Manager | `Operations` -> `Operations diary`, `Planner`, `Dispatch` | `Network`, `Pricing Intelligence` |
+| Commercial Owner | `Quote` -> `Quote builder`, `Kent tenders`; `Pricing Intelligence` | `Admin` review |
+| Labor Planner / Staff Coordinator | `Operations` -> `Staff`, `Driver Shifts` | `Network` |
+| Maintenance / Compliance Coordinator | `Operations` -> `Fleet`, `Vehicle Maintenance` | `Network` |
+| Warehouse / Crew | `Operations` -> `Inventory` | `Operations` -> `Dispatch` context |
+| Inventory / Supplier Coordinator | `Operations` -> `Inventory` | `Operations` -> `Dispatch` context |
+| Workforce Time Capture Coordinator | `Operations` -> `Staff`, `Driver Shifts` | `Operations` -> payroll/labor review |
+| System / Rollout Admin | `Admin` | `Operations`, `Network`, `Pricing Intelligence`, `Quote` |
 
 See [UI Role Coverage Matrix](ui_role_coverage_matrix.md) for the authoritative role-to-surface mapping.
 
@@ -39,7 +50,10 @@ See [UI Role Coverage Matrix](ui_role_coverage_matrix.md) for the authoritative 
 
 ### Estimator
 
-Primary tab:
+Primary shell:
+- `Quote`
+
+Primary leaf workflow:
 - `Quote builder`
 
 Use it to:
@@ -58,7 +72,11 @@ Do not use it for:
 
 ### Dispatcher
 
-Primary tabs:
+Primary shells:
+- `Operations`
+- `Quote`
+
+Primary leaf workflows:
 - `Dispatch`
 - `Kent tenders`
 
@@ -83,12 +101,17 @@ Do not use them for:
 
 ### Fleet / Operations Manager
 
-Primary tabs:
+Primary shell:
 - `Operations`
+
+Primary leaf workflows:
+- `Operations diary`
+- `Planner`
 - `Dispatch`
 - `Fleet`
 
-Secondary tab:
+Secondary shell / leaf:
+- `Network`
 - `Vehicle maintenance`
 
 Use them to:
@@ -110,12 +133,16 @@ Do not use them for:
 
 ### Commercial Owner
 
-Primary tabs:
+Primary shells:
+- `Quote`
+- `Pricing Intelligence`
+
+Primary leaf workflows:
 - `Quote builder`
 - `Kent tenders`
 
-Secondary / governed-review tab:
-- `Kent admin`
+Secondary / governed-review shell:
+- `Admin`
 
 Use them to:
 - review quote quality and tender prioritization
@@ -135,15 +162,19 @@ Do not use them for:
 - source-sheet syncing
 
 Current access note:
-- `Kent admin` is currently writable only for `System / Rollout Admin`. Treat it
-  as a review surface unless you are acting in that admin role.
+- `Admin` is currently writable only for `System / Rollout Admin` for Kent and
+  system-governance actions. Treat it as a review surface unless you are acting
+  in that admin role.
 
 ### Labor Planner / Staff Coordinator
 
-Primary tabs:
+Primary shell:
+- `Operations`
+
+Primary leaf workflows:
 - `Staff`
 - `Driver shifts`
-- `Operations`
+- supporting operations/labor review
 
 Use them to:
 - maintain the worker roster
@@ -164,12 +195,15 @@ Do not use them for:
 
 ### Maintenance / Compliance Coordinator
 
-Primary tabs:
+Primary shell:
+- `Operations`
+
+Primary leaf workflows:
 - `Fleet`
 - `Vehicle maintenance`
 
-Secondary tabs:
-- `Operations`
+Secondary shell / leaf:
+- `Network`
 - `Dispatch`
 
 Use them to:
@@ -189,11 +223,11 @@ Do not use them for:
 
 ### Warehouse / Crew
 
-Primary tab:
-- `Inventory`
+Primary shell / leaf:
+- `Operations` -> `Inventory`
 
-Secondary tab:
-- `Dispatch`
+Secondary shell / leaf:
+- `Operations` -> `Dispatch`
 
 Use them to:
 - move planned stock through pick / pack / load
@@ -214,11 +248,11 @@ Do not use them for:
 
 ### Inventory / Supplier Coordinator
 
-Primary tab:
-- `Inventory`
+Primary shell / leaf:
+- `Operations` -> `Inventory`
 
-Secondary tab:
-- `Dispatch`
+Secondary shell / leaf:
+- `Operations` -> `Dispatch`
 
 Use them to:
 - review stock balances and supplier context
@@ -245,9 +279,9 @@ Do not use them for:
 
 ### Workforce Time Capture Coordinator
 
-Primary tabs:
-- `Staff`
-- `Driver shifts`
+Primary shell / leaf:
+- `Operations` -> `Staff`
+- `Operations` -> `Driver shifts`
 
 Use them to:
 - reconcile captured clock-on / clock-off events against the labor plan
@@ -267,12 +301,12 @@ Do not use them for:
 
 ### Owner / Commercial / Finance-facing Manager
 
-Primary future tab:
-- `Payroll / Labor analytics`
+Primary future shell / leaf:
+- `Operations` -> `Payroll / Labor analytics`
 
-Supporting tabs:
-- `Staff`
-- `Driver shifts`
+Supporting shell / leaf:
+- `Operations` -> `Staff`
+- `Operations` -> `Driver shifts`
 
 Use them to:
 - forecast labor/pay exposure over a selected date range
@@ -294,13 +328,13 @@ Do not use them for:
 
 ### System / Rollout Admin
 
-Primary tab:
-- `Fleet`
+Primary shell:
+- `Admin`
 
-Secondary tabs:
-- `Staff`
-- `Inventory`
-- `Driver shifts`
+Secondary shell / leaf:
+- `Operations` -> `Staff`
+- `Operations` -> `Inventory`
+- `Operations` -> `Driver shifts`
 
 Use them to:
 - sync the shared operations workbook
@@ -323,22 +357,22 @@ Do not use it for:
 
 ## Recommended Daily Flow
 
-1. Estimator reviews or creates quotes in `Quote builder`.
-2. Dispatcher runs booked work from `Dispatch` and tender triage from `Kent tenders`.
-3. Fleet / operations management maintains segments and assignments in `Operations`.
-4. Labor planning is maintained in `Staff` and reconciled in `Driver shifts`.
-5. Maintenance and compliance are monitored in `Fleet` and `Vehicle maintenance`.
-6. Warehouse / crew runs daily inventory execution in `Inventory`, with execution context from `Dispatch`.
-7. Inventory and supplier coordination follow the same work in `Inventory`, focusing on shortages, substitutions, supply-side exceptions, and support constraints around the work.
-8. Workforce time capture should reconcile into `Staff` and `Driver shifts`, even when the source channel is WhatsApp or a voice/landline path.
-9. Kent policy and override governance are maintained in `Kent admin`.
-10. Spreadsheet cutover reviews and promotions are handled in `Fleet`, not in operator tabs.
+1. Estimator starts in `Quote` and mainly works through `Quote builder`.
+2. Dispatcher starts in `Operations` for `Dispatch`, and uses `Quote` for `Kent tenders`.
+3. Fleet / operations management starts in `Operations`, using `Operations diary`, `Planner`, `Dispatch`, and `Fleet`.
+4. Labor planning remains in `Operations` through `Staff` and `Driver shifts`.
+5. Maintenance and compliance remain in `Operations` through `Fleet` and `Vehicle maintenance`.
+6. Warehouse / crew runs daily inventory execution in `Operations` through `Inventory`, with `Dispatch` as supporting context.
+7. Inventory and supplier coordination follows the same `Operations` shell flow through `Inventory`, focusing on shortages, substitutions, and supply-side exceptions.
+8. Workforce time capture should reconcile inside `Operations` through `Staff` and `Driver shifts`, even when the source channel is WhatsApp or a voice/landline path.
+9. Kent policy and override governance are maintained in `Admin`.
+10. Spreadsheet cutover reviews and promotions are handled through governed admin/operations surfaces, not day-to-day operator entry flows.
 11. Payroll and labor analytics should stay aggregate-first by default; person-level drill-down is for anomaly resolution, payroll prep, or planning justification rather than general worker monitoring.
 
 ## Spreadsheet Cutover Rules
 
-- `Dispatch` is read-only for rollout governance.
-- `Fleet` is the cutover administration surface.
+- `Dispatch` remains an execution surface, not the rollout-governance write surface.
+- `Admin` is the primary governance surface.
 - Workflow promotion is governed:
   - operations manager requests promotion
   - commercial owner approves or rejects it

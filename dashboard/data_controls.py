@@ -119,8 +119,8 @@ def _render_routing_provider_selector(rerun_app: Callable[[], None]) -> None:
         help="Select which routing provider to use for map tiles and route geometry.",
     )
     resolved_provider = PROVIDER_OPTIONS[provider_choice_label]
+    os.environ["ROUTING_PROVIDER"] = resolved_provider
     if resolved_provider != current_provider_env:
-        os.environ["ROUTING_PROVIDER"] = resolved_provider
         rerun_app()
 
     if resolved_provider == "google" and not google_maps_api_key():
@@ -414,7 +414,7 @@ def render_dataset_sidebar(
         if sidebar_caption:
             st.caption(sidebar_caption)
         analytics_sidebar = (
-            st.expander("Analytics filters and pricing controls", expanded=False)
+            st.expander("Analytics filters and pricing controls", expanded=False, icon="📊")
             if collapse_analytics_sidebar
             else st.container()
         )

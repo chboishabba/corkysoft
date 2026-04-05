@@ -42,7 +42,7 @@ That means:
 
 Primary surfaces:
 
-- `Inventory`
+- `Operations` -> `Inventory`
 
 Responsibilities:
 
@@ -65,8 +65,8 @@ Not allowed to:
 
 Primary surfaces:
 
-- `Dispatch`
-- `Inventory`
+- `Operations` -> `Dispatch`
+- `Operations` -> `Inventory`
 
 Responsibilities:
 
@@ -84,7 +84,7 @@ Authority:
 
 Primary surfaces:
 
-- `Inventory`
+- `Operations` -> `Inventory`
 
 Responsibilities:
 
@@ -96,9 +96,9 @@ Responsibilities:
 
 Primary surfaces:
 
-- `Dispatch`
-- `Inventory`
-- `Fleet`
+- `Operations` -> `Dispatch`
+- `Operations` -> `Inventory`
+- `Operations` -> `Fleet`
 
 Responsibilities:
 

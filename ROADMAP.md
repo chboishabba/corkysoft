@@ -2,6 +2,289 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 
 ---
 
+## UI Revision Audit (2026-04-02)
+
+The major dashboard-shell revision is materially landed in code.
+The top-level user-facing navigation is now organized around five workflow
+views:
+
+- `Quote`
+- `Pricing Intelligence`
+- `Network`
+- `Operations`
+- `Admin`
+
+Observed implementation state:
+
+- shared design-system injection is now wired through `dashboard/theme.py`
+- reusable KPI and alert primitives now exist in `dashboard/components/kpi_strip.py`
+  and `dashboard/components/alert_banner.py`
+- workflow views now compose leaf surfaces under `dashboard/views/` rather than
+  exposing the old flat top-level tab set directly
+- role-layout defaults and tests now target the new shell taxonomy
+
+Audit conclusions:
+
+- the UI revision itself is real and test-backed; the main drift is now
+  documentation, governance wording, and placeholder-decision data inside the
+  new shells
+- one concrete provider regression was present in the route-map enrichment path:
+  Google provider selection could be bypassed or diluted by string/provider
+  mismatch plus implicit ORS/OSM fallback behavior
+- several docs still instruct operators to start in old leaf tabs such as
+  `Quote builder`, `Dispatch`, `Kent tenders`, and `Kent admin` instead of
+  explaining the new shell entrypoints and the leaf workflows inside them
+- the new KPI strips and alert banners currently use static/demo values in the
+  new workflow views, so they should not yet be treated as operational truth
+  without provenance, freshness, and ownership
+- repo automation guidance was too loose about interpreter choice; agent/user
+  instructions now need to enforce repo-venv execution as a control boundary
+
+Control objectives for the next wave:
+
+- `ITIL`: treat the new shell as a service transition; document ownership,
+  supported workflows, incident paths, and change gates per view
+- `ISO 9001`: make view purpose, inputs, outputs, and acceptance criteria
+  explicit so shell changes remain reviewable rather than taste-driven
+- `ISO 42001` / `NIST AI RMF` / `ISO 23894`: keep advisory/model-backed
+  outputs bounded, explainable, and human-reviewed; do not let placeholder risk
+  banners or inferred signals masquerade as governed truth
+- `ISO 27001` / `ISO 27701`: keep role visibility, admin actions, audit
+  attribution, and labor/person data exposure least-privilege and documented
+- `Six Sigma`: remove workflow variance caused by stale labels, mixed role
+  entrypoints, and duplicate shell semantics across docs and UI
+- `C4` / `PlantUML`: refresh the dashboard-shell diagrams so the five-view
+  workflow shell is the documented current-state architecture
+
+Worker lanes for the remediation wave:
+
+- Worker 1: docs and service-governance alignment
+  Scope: README, onboarding, role matrix, roadmap/progress board, ownership and
+  acceptance criteria for the five shell views.
+- Worker 2: provider-parity and mapping-control hardening
+  Scope: enforce strict Google-versus-ORS/OSM provider behavior across route
+  enrichment, route maps, isochrones, and map rendering so selected provider
+  matches actual behavior without cross-provider fallback.
+- Worker 3: composition and quality hardening
+  Scope: expand tests around shared theme/components, provider selection, view
+  composition, role layout reset/deep-link behavior, and responsive regressions
+  in the new shell.
+- Worker 4: security, privacy, and AI-risk controls
+  Scope: admin-action auditability, role-hidden surface verification, PII/labor
+  data minimization, governance for advisory/media/model-backed outputs, and
+  repo-venv execution discipline in contributor/agent instructions.
+
+Orchestrator execution contract:
+
+| Worker | Primary lane | Standards focus | Required inputs | Completion evidence |
+| --- | --- | --- | --- | --- |
+| Worker 1 | docs and service-governance alignment | ITIL, ISO 9001, Six Sigma | README, onboarding, role matrix, roadmap, progress board, operator stories | shell labels and role entrypoints match code; owner and acceptance language is explicit; changelog/docs sync complete |
+| Worker 2 | provider-parity and mapping-control hardening | ISO 9001, Six Sigma, ISO 27001 | routing provider selection, map rendering, route enrichment, isochrone paths, provider tests | Google selection remains Google-only; no silent ORS/OSM fallback; targeted regression suite passes in repo venv |
+| Worker 3 | shell composition and regression hardening | ITIL, ISO 9001, C4/PlantUML | dashboard shell/views/components, role layout logic, deep links, UML sources | shell/view composition stays deterministic; reset/deep-link regressions are covered; architecture diagrams still describe the current shell |
+| Worker 4 | security, privacy, AI-risk, and repo-venv discipline | ISO 27001, ISO 27701, ISO 42001, ISO 23894, NIST AI RMF | authz boundaries, admin actions, labor/person data surfaces, advisory/model-backed output handling, AGENTS/README execution rules | least-privilege visibility holds; advisory outputs remain reviewable and bounded; contributor/agent execution stays inside repo venv |
+
+Promotion gate for this wave:
+
+- no worker lane closes on prose alone; each lane needs matching code/docs/tests evidence
+- do not mark placeholder KPI or alert content as decision-grade until provenance, freshness, and owner are explicit
+- do not accept provider parity work while any Google-selected path can silently render or compute through ORS/OSM
+- keep the generated PlantUML/C4 suite aligned with the implemented shell before declaring the UI revision governance-complete
+
+## Targeted Advancement Wave (2026-04-02)
+
+This wave should prioritize four bounded advances rather than reopening the
+already-landed shell refactor.
+
+### 1. Sourced shell signals and KPI provenance
+
+Problem:
+
+- the shell-level KPI strips and alert banners still use scaffold values in the
+  five top-level views
+- the UI now tells the truth that these are placeholders, but it still does not
+  expose real source, freshness, owner, or unknown-state semantics
+
+Roadmap:
+
+- define a normalized signal contract for shell metrics and alerts covering
+  `signal_id`, source module, owner, refresh cadence, stale threshold,
+  confidence/review state, and fallback behavior
+- replace per-view hard-coded KPI/alert payloads with shared signal builders so
+  shell views render from one reviewed contract rather than free-form literals
+- show freshness, owner, and advisory-versus-decision-grade state in the
+  shared rendering layer instead of burying those rules in each view
+- fail closed to explicit unknown/stale states when data is unavailable or
+  outside freshness policy
+
+Completion evidence:
+
+- each top-level shell view renders from a shared signal contract
+- no hard-coded decision-looking KPI/alert payloads remain in shell views
+- tests cover fresh, stale, unknown, and advisory-only signal rendering
+
+### 3. State-addressable shell and regression hardening
+
+Problem:
+
+- the current shell supports basic `view=` landing, but not a support-grade,
+  shareable workspace-state contract
+- session state, query params, and role layout are still only loosely coupled,
+  which is enough for landing but not enough for reproducible support links or
+  logged incident snapshots
+
+Roadmap:
+
+- separate simple navigation params from durable workspace state:
+  `view=` remains the landing selector, while heavier workflow state moves into
+  a normalized workspace-state layer
+- define a support-safe share model that can reconstruct a user's shell,
+  child workflow, filters, and selected records without leaking secrets or
+  high-risk person data directly into the URL
+- prefer compact URL-safe state for low-risk filters and navigation, and use
+  persisted snapshot IDs for heavier or sensitive workspace state that should
+  be reopened for support/audit
+- add explicit state canonicalization so role changes, stale session keys, and
+  hidden-tab constraints cannot resurrect invalid or unauthorized surfaces
+
+Current progress:
+
+- phase 1 is now landed:
+  a normalized `ws` workspace-state payload exists for supported shell and
+  operations child-workflow contexts, and canonical query-state writes are now
+  emitted from quote, planner, dispatch, and operations-diary navigation paths
+- the remaining gap is phase 2:
+  persisted snapshot IDs for heavier or sensitive support replay, plus richer
+  form/filter reconstruction for quote and other workflow-heavy surfaces
+
+Completion evidence:
+
+- users can open a reproducible workspace state for supported workflows instead
+  of only a coarse `view=` landing
+- support/audit flows can record and reopen workspace snapshots deterministically
+- tests cover query-param normalization, role/layout reset, hidden-tab
+  rejection, and snapshot rehydration
+
+### 4. Architecture surface normalization
+
+Problem:
+
+- the UML suite exists, but the next value is governance, not more diagrams
+- the repo needs one whole-system metasystem view plus a small reviewed set of
+  child diagrams that stay aligned with the five-view shell and the new
+  workspace-state/data-contract layers
+
+Roadmap:
+
+- treat `docs/rendered/plantuml/supermega_01.puml` as the metasystem entry
+  surface and `docs/rendered/plantuml/dashboard_shell.puml` plus the existing
+  child views as the reviewed drill-down set
+- extend architecture guidance so any material shell-state or data-contract
+  boundary change triggers a `scripts/build_supermega_uml.py --check`
+  validation pass
+- avoid creating extra diagram families unless they explain a real new control
+  boundary; keep the whole-system view plus child views small and stable
+
+Completion evidence:
+
+- architecture docs name the metasystem view and reviewed child diagrams
+- UML freshness is checked when shell topology or control boundaries move
+- no competing hand-curated architecture surface drifts away from generated UML
+
+### 5. Operational data contracts
+
+Problem:
+
+- the UI increasingly depends on decision-adjacent metrics, but the contract
+  around source, owner, freshness, and fallback is still implicit
+
+Roadmap:
+
+- define one normalized operational-data contract for shell signals and similar
+  review surfaces covering source, owner, refresh cadence, freshness SLA,
+  stale threshold, fallback/unknown behavior, and advisory-versus-decision-grade
+  classification
+- keep the contract close to producer code and reference it from architecture
+  and roadmap surfaces rather than duplicating field semantics in many docs
+- require all new shell metrics, alerts, and review panels to declare the
+  contract before they can be promoted as operational truth
+
+Completion evidence:
+
+- a reviewed contract exists and is referenced by shell-signal producers
+- new decision-looking shell data cannot ship without owner/freshness/fallback
+  semantics
+- tests verify contract-driven stale/unknown-state rendering and auditability
+
+### 6. Customer-facing tracking and receipt surfaces
+
+Problem:
+
+- the repo already contains live telemetry, ETA, dispatch-share, observer-outbox,
+  and delivery-receipt-adjacent primitives, but there is no public-safe or
+  customer-safe surface for a shareable tracking page, printable status receipt,
+  or low-friction delivery-status update flow
+- customers increasingly expect Domino's/Uber/Taxibox-style visibility:
+  live vehicle state where allowed, ETA, status progression, proof/receipt
+  artifacts, and a support-safe page they can reopen without joining the
+  internal operator shell
+
+Roadmap:
+
+- define a dedicated customer-tracking contract rather than reusing internal
+  shell or support-state payloads:
+  one public-safe page model for status timeline, ETA, current stage, and
+  optional vehicle-map visibility; one printable/shareable receipt model for
+  post-delivery evidence and summary
+- anchor the backend on existing primitives where possible:
+  `analytics/live_data.py` for vehicle/ETA inputs,
+  `analytics/adaptive_policy.py` for governed ETA modifiers,
+  dispatch-share and observer/outbox patterns for issuance/audit/receipt
+  delivery semantics
+- require tokenized, scoped, expiring access rather than raw query-param or
+  session-state mirroring:
+  customer links and internal support replay links must be separate products
+  with different scopes, TTLs, and audit expectations
+- classify every exposed field as public-safe, customer-confidential,
+  internal-only, or admin-only, and do not expose worker/labor/admin/internal
+  notes on customer pages
+- make inferred values explicit:
+  ETA, delay risk, disruption, or advisory status must declare freshness,
+  uncertainty class, and fallback behavior so the page does not imply a legal
+  or operational guarantee it cannot support
+
+Completion evidence:
+
+- a reviewed customer-tracking/receipt contract exists with scope, expiry,
+  revocation, and field-classification rules
+- one bounded customer page can render status timeline plus ETA from approved
+  sources without exposing internal-only state
+- printable/shareable receipt output is generated from reviewed delivery/event
+  evidence rather than ad hoc UI text
+- tests cover token expiry/revocation, hidden-surface denial, stale ETA
+  downgrade, and public-origin misconfiguration fail-closed behavior
+
+### Worker assignments for this wave
+
+| Worker | Lane | Primary outcome | Standards focus |
+| --- | --- | --- | --- |
+| Worker 1 | sourced shell signals | replace scaffold KPI/alert payloads with contract-backed signals | ITIL, ISO 9001, ISO 42001, Six Sigma |
+| Worker 2 | state-addressable shell and regression hardening | make workspace state reproducible and shareable without unsafe URL drift | ITIL, ISO 9001, ISO 27001, ISO 27701 |
+| Worker 3 | architecture surface normalization | keep one metasystem UML/C4 view and the reviewed child diagrams aligned | C4/PlantUML, ISO 9001 |
+| Worker 4 | operational data contracts | formalize freshness/owner/fallback/advisory semantics for decision-adjacent data | ISO 9001, ISO 42001, ISO 23894, NIST AI RMF |
+
+Adjacent future lane:
+
+- Worker 1 or a later customer-experience lane can own customer-facing tracking
+  and receipt surfaces once the state and data-contract layers are stable
+
+Sidecars:
+
+- docs sidecar: active for this planning wave because the next control surfaces
+  needed explicit normalization
+- UML sidecar: inactive until shell topology or control boundaries actually
+  change
+- commit sidecar: inactive until a publish/checkpoint request exists
+
 ## Documentation TODOs
 
 - Keep `spec.md`, `plan.md`, `status.json`, and `devlog.md` current during the remediation milestone.
@@ -68,8 +351,8 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Support a temporary, explicit owner/testing shortcut where successful Google logins auto-provision as local admins, while preserving a clean path back to proper per-user roles.
 - Treat role-hidden admin tabs as part of the authz boundary; do not allow query-param navigation or stale session state to re-expose them.
 - Keep bootstrap-admin seeding one-shot and explicit; do not let lingering env vars silently reassert admin access after user setup exists.
-- Deepen the `Planner` tab from the current hybrid scaffold toward richer site-aware and more interactive visual planning.
-- Add a separate `Operations diary` above Planner and Dispatch so managers can review day/week workload, usage, tasks, and invoice/bill exceptions without collapsing those concerns back into the route-planning UI.
+- Deepen the implemented Planner workflow inside `Operations` from the current hybrid scaffold toward richer site-aware and more interactive visual planning.
+- Deepen the implemented `Operations diary` workflow inside `Operations` so managers can review day/week workload, usage, tasks, and invoice/bill exceptions with stronger sourcing, task follow-through, and reconciliation state.
 - Google/ORS parity is now aligned across Planner preview and saved-route Folium overlays; continue auditing remaining route/map surfaces and fallback behavior for strict parity.
 - Planner now supports accepted site-risk interpretation plus Google-first 360/media attachment, advisory CV/volume scaffolding, and first derived site constraints. The current priority should favor real media/CV ingestion and reviewed outputs; deeper interpreted constraint logic should follow once that evidence pipeline is more real.
 - Route geometry should be enriched automatically during ingest/load/seed flows; manual population is no longer the intended operator path.
@@ -118,8 +401,8 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Add native role/compliance assignment flows so readiness governance can be maintained inside Corkysoft rather than only through sheets.
 - Replace `VEHICLE_DRIVER` as the primary roster/planning surface with native labor planning and imported-shift reconciliation.
 - Link inventory allocation and supplier coordination directly to `job_segments` so stock planning cooperates with truck/worker planning.
-- Make the Dispatch tab the primary job-centric execution surface across trucks, workers, inventory, suppliers, and readiness flags.
-- Add a manager-facing day/week diary that links jobs, tasks, vehicle usage, staff usage, labor reconciliation, customer invoice readiness, and subcontractor-bill reconciliation.
+- Keep the Dispatch workflow inside `Operations` as the primary job-centric execution surface across trucks, workers, inventory, suppliers, and readiness flags.
+- Deepen the implemented manager-facing day/week diary so it links jobs, tasks, vehicle usage, staff usage, labor reconciliation, customer invoice readiness, and subcontractor-bill reconciliation with reviewable operational truth.
 - Add persistent diary tasks for day/week/job/segment follow-through that do not need to masquerade as `job_segments`.
 - Add invoice and subcontractor-bill review records tied to jobs, with explicit exception states when operational truth is incomplete.
 - Implemented a Corkysoft-native observer outbox for diary/planner/reconciliation
@@ -150,6 +433,12 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 - Add approval-backed rollout promotions so ops requests, commercial approval, and final status transitions are all visible in one audit trail.
 - Suppress irrelevant `historical_jobs` warnings on operational tabs so Dispatch, Operations, Fleet, and Kent surfaces do not inherit analytics-only noise.
 - Review whether the default landing surface should remain analytics-first or become role-aware / operational-first for day-to-day users.
+- Record that the major five-view shell revision is now implemented and keep all
+  user-facing docs aligned with `Quote` / `Pricing Intelligence` / `Network` /
+  `Operations` / `Admin`.
+- Replace static/demo KPI and alert content in the new workflow shells with
+  sourced operational metrics, explicit freshness, and unknown-state handling
+  before treating those banners as decision-grade signals.
 - Fix the current role-layout reset/repair flow so session-backed layout widgets do not throw `StreamlitAPIException` when operators repair or reset a role layout.
 - Make role-aware deep-linking deterministic in development and authenticated runs so `view=` routes can land users in the owning role instead of silently inheriting a stale session layout.
 - Sweep remaining operator surfaces for direct `st.experimental_rerun()` usage before the next live testing wave.

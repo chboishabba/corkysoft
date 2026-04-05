@@ -213,7 +213,7 @@ Current heuristic weights:
 
 Dashboard workflow now implemented:
 
-- Streamlit includes a `Kent tenders` tab
+- Streamlit includes a `Quote` -> `Kent tenders` workflow
 - operators can:
   - review ranked tenders
   - inspect policy fail reasons and flags

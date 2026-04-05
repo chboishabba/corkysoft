@@ -3,10 +3,17 @@
 This document defines the actor-based workflows Corkysoft must support today.
 It is intentionally decision-focused rather than feature-focused.
 
+Shell note:
+- the top-level workflow views are `Quote`, `Pricing Intelligence`, `Network`,
+  `Operations`, and `Admin`
+- the surfaces named below such as `Quote builder`, `Dispatch`, `Planner`,
+  `Operations diary`, and `Kent admin` are nested workflows within those shell
+  views, not the top-level navigation model
+
 ## Estimator
 
 Primary surfaces:
-- `Quote builder`
+- `Quote` -> `Quote builder`
 
 Trigger:
 - A customer or incumbent system requests a quote or tender response.
@@ -43,8 +50,8 @@ Operator actions:
 ## Dispatcher
 
 Primary surfaces:
-- `Dispatch`
-- `Kent tenders`
+- `Operations` -> `Dispatch`
+- `Quote` -> `Kent tenders`
 
 Trigger:
 - A tender or booked job enters the day-to-day operating queue.
@@ -79,10 +86,10 @@ Operator actions:
 ## Fleet / Operations Manager
 
 Primary surfaces:
-- `Operations diary`
-- `Operations`
-- `Dispatch`
-- `Fleet`
+- `Operations` -> `Operations diary`
+- `Operations` -> `Planner`
+- `Operations` -> `Dispatch`
+- `Operations` -> `Fleet`
 
 Trigger:
 - Capacity tightens, SLA risk rises, or peak-season conditions require intervention.
@@ -121,12 +128,12 @@ Operator actions:
 ## Operations Manager Diary / Reconciliation
 
 Primary surfaces:
-- `Operations diary`
+- `Operations` -> `Operations diary`
 
 Secondary surfaces:
-- `Planner`
-- `Dispatch`
-- `Payroll / Labor analytics`
+- `Operations` -> `Planner`
+- `Operations` -> `Dispatch`
+- `Operations` -> `Payroll / Labor`
 
 Trigger:
 - A manager needs one day/week view of work in motion, required vs utilized
@@ -172,12 +179,12 @@ Operator actions:
 ## Commercial Owner
 
 Primary surfaces:
-- `Quote builder`
-- `Kent tenders`
-- analytics tabs
+- `Quote` -> `Quote builder`
+- `Quote` -> `Kent tenders`
+- `Pricing Intelligence`
 
 Secondary / governed-review surface:
-- `Kent admin`
+- `Admin`
 
 Trigger:
 - Periodic review of pricing performance, tender conversion, and margin quality.
@@ -212,16 +219,17 @@ Operator actions:
   paperwork quality is currently driving margin or risk
 
 Current governance note:
-- `Kent admin` is currently writable only for the `System / Rollout Admin`
-  role. Commercial owners can still use it as a review surface, but policy and
-  reason-code writes remain admin-gated in the live dashboard.
+- `Admin` is currently writable only for the `System / Rollout Admin` role for
+  Kent/system governance actions. Commercial owners can still use it as a
+  review surface where exposed, but policy and reason-code writes remain
+  admin-gated in the live dashboard.
 
 ## Compliance-Heavy / International Workflow Owner
 
 Primary surfaces:
-- `Quote builder`
-- `Kent tenders`
-- `Operations diary`
+- `Quote` -> `Quote builder`
+- `Quote` -> `Kent tenders`
+- `Operations` -> `Operations diary`
 
 Trigger:
 - A job, tender, or customer workflow depends on international shipping,
@@ -255,8 +263,8 @@ Operator actions:
 ## Labor Planner / Staff Coordinator
 
 Primary surfaces:
-- `Staff`
-- `Driver shifts`
+- `Operations` -> `Staff`
+- `Operations` -> `Driver shifts`
 - `Operations`
 
 Trigger:
@@ -293,13 +301,13 @@ Operator actions:
 ## Owner / Commercial / Finance-facing Manager
 
 Primary surfaces:
-- `Operations diary`
-- future `Payroll / Labor analytics`
+- `Operations` -> `Operations diary`
+- future `Operations` -> `Payroll / Labor analytics`
 
 Secondary surfaces:
-- `Staff`
-- `Driver shifts`
-- `Quote builder`
+- `Operations` -> `Staff`
+- `Operations` -> `Driver shifts`
+- `Quote` -> `Quote builder`
 
 Trigger:
 - Labor cost patterns, payroll exposure, or workforce exceptions need review.
@@ -340,8 +348,8 @@ Operator actions:
 ## Maintenance / Compliance Coordinator
 
 Primary surfaces:
-- `Fleet`
-- `Vehicle maintenance`
+- `Operations` -> `Fleet`
+- `Operations` -> `Vehicle maintenance`
 
 Trigger:
 - A truck or worker approaches expiry, service due date, or blocked readiness state.
@@ -373,11 +381,11 @@ Operator actions:
 ## Warehouse / Crew
 
 Primary surfaces:
-- `Inventory`
+- `Operations` -> `Inventory`
 
 Secondary surfaces:
-- `Dispatch`
-- `Operations diary`
+- `Operations` -> `Dispatch`
+- `Operations` -> `Operations diary`
 
 Trigger:
 - Planned work is moving from requirement/allocation into physical execution.

@@ -105,6 +105,7 @@ from dashboard.components.dispatch import render_dispatch_tab
 from dashboard.components.distribution_overview import render_distribution_analytics_surface
 from dashboard.components.inventory import render_inventory_tab
 from dashboard.components.kent import render_kent_admin_tab, render_kent_tenders_tab
+from dashboard.theme import inject_css
 from dashboard.components.operations_diary import render_operations_diary_tab
 from dashboard.components.payroll_labor_analytics import render_payroll_labor_analytics_tab
 from dashboard.components.planner import render_planner_tab
@@ -156,7 +157,7 @@ from dashboard.auth_ui import (
     _render_dashboard_user_admin,
     _resolve_dashboard_identity,
 )
-from dashboard.query_params import _get_query_params, _set_query_params
+from dashboard.query_params import _get_query_params, _get_workspace_state
 from dashboard.state import _ensure_pin_state, _first_non_empty, _rerun_app
 from dashboard.data_controls import render_dataset_sidebar
 from dashboard.layout_state import (
@@ -342,6 +343,10 @@ def _extract_route_volume(route: pd.Series, candidates: Sequence[str]) -> Option
     return None
 
 def render_price_distribution_dashboard():
+    # Inject the design system CSS
+    inject_css()
+    # Header placeholder — created FIRST so it renders ABOVE tab content.
+    header_placeholder = st.container()
     # Analytics filters and pricing controls remain available on demand.
     tabs_placeholder = st.container()
 
@@ -360,7 +365,8 @@ def render_price_distribution_dashboard():
         tab_labels = PRICE_DASHBOARD_TABS
         role_layouts = get_dashboard_role_layouts(conn, available_tabs=tab_labels)
         params = _get_query_params()
-        view_param = params.get("view", [None])[0]
+        workspace_state = _get_workspace_state(available_tabs=tab_labels)
+        view_param = workspace_state.get("view")
         if view_param not in tab_labels:
             view_param = None
         view_layout = find_layout_by_tab(role_layouts, view_param)
@@ -388,9 +394,14 @@ def render_price_distribution_dashboard():
             or shell_role_layout["defaultLandingTab"]
         )
         shell_copy = _resolve_dashboard_shell(shell_tab)
-
-        st.title(str(shell_copy["title"]))
-        st.caption(str(shell_copy["caption"]))
+        with header_placeholder:
+            st.markdown(
+                '<div class="ck-section-title" style="font-size:1.6rem;margin-bottom:0.1rem;">'
+                'Corkysoft</div>'
+                '<div class="ck-section-subtitle" style="margin-bottom:0.6rem;">'
+                f'{str(shell_copy["caption"])}</div>',
+                unsafe_allow_html=True,
+            )
 
         break_even_value = ensure_break_even_parameter(conn)
         ensure_quote_schema(conn)
@@ -411,8 +422,8 @@ def render_price_distribution_dashboard():
 
         dataset_context = render_dataset_sidebar(
             conn,
-            sidebar_heading=str(shell_copy["sidebar_heading"]),
-            sidebar_caption=shell_copy.get("sidebar_caption"),
+            sidebar_heading="Corkysoft",
+            sidebar_caption="Global workflow controls",
             collapse_analytics_sidebar=bool(shell_copy.get("collapse_analytics_sidebar")),
             dataset_loader=dataset_loader,
             dataset_key=dataset_key,
@@ -475,117 +486,127 @@ def render_price_distribution_dashboard():
             default_role_label = view_layout["label"]
             if st.session_state.get("dashboard_active_role") != default_role_label:
                 st.session_state["dashboard_active_role"] = default_role_label
-        layout_cols = st.columns([2, 2, 2, 1])
+        # ── Layout controls moved to sidebar ──────────────────────
         deep_link_locked_role = auth_state["mode"] == "anonymous" and view_layout is not None
-        if auth_state["mode"] == "authenticated" or deep_link_locked_role:
-            selected_role_layout = (
-                view_layout
-                if deep_link_locked_role and view_layout is not None
-                else next(
-                    (item for item in role_layouts if item["roleKey"] == auth_role_key),
-                    role_layouts[0],
+        with st.sidebar:
+            with st.expander("Layout preferences", expanded=False, icon="⚙️"):
+                if auth_state["mode"] == "authenticated" or deep_link_locked_role:
+                    selected_role_layout = (
+                        view_layout
+                        if deep_link_locked_role and view_layout is not None
+                        else next(
+                            (item for item in role_layouts if item["roleKey"] == auth_role_key),
+                            role_layouts[0],
+                        )
+                    )
+                    selected_role_layout = next(
+                        (
+                            item
+                            for item in role_layouts
+                            if item["roleKey"] == str(selected_role_layout["roleKey"])
+                        ),
+                        selected_role_layout,
+                    )
+                    st.text_input(
+                        "Role layout",
+                        value=str(selected_role_layout["label"]),
+                        disabled=True,
+                        key="dashboard_active_role_locked" if auth_state["mode"] == "authenticated" else "dashboard_active_role_deep_linked",
+                    )
+                else:
+                    active_role_kwargs: dict[str, Any] = {
+                        "options": list(role_labels.keys()),
+                        "key": "dashboard_active_role",
+                    }
+                    if "dashboard_active_role" not in st.session_state:
+                        active_role_kwargs["index"] = (
+                            list(role_labels.keys()).index(default_role_label)
+                            if default_role_label in role_labels
+                            else 0
+                        )
+                    selected_role_label = st.selectbox(
+                        "Role layout",
+                        **active_role_kwargs,
+                    )
+                    selected_role_layout = role_labels[selected_role_label]
+                if (
+                    auth_state["mode"] == "anonymous"
+                    and view_param is not None
+                    and str(selected_role_layout["roleKey"]) in PRIMARY_ONLY_ROLE_KEYS
+                ):
+                    selected_role_layout = _canonical_role_layout(str(selected_role_layout["roleKey"]))
+                _hydrate_role_layout_session(
+                    selected_role_layout,
+                    force_reset=auth_state["mode"] == "anonymous" and view_param is not None,
                 )
-            )
-            selected_role_layout = next(
-                (
-                    item
-                    for item in role_layouts
-                    if item["roleKey"] == str(selected_role_layout["roleKey"])
-                ),
-                selected_role_layout,
-            )
-            layout_cols[0].text_input(
-                "Role layout",
-                value=str(selected_role_layout["label"]),
-                disabled=True,
-                key="dashboard_active_role_locked" if auth_state["mode"] == "authenticated" else "dashboard_active_role_deep_linked",
-            )
-        else:
-            active_role_kwargs: dict[str, Any] = {
-                "options": list(role_labels.keys()),
-                "key": "dashboard_active_role",
-            }
-            if "dashboard_active_role" not in st.session_state:
-                active_role_kwargs["index"] = (
-                    list(role_labels.keys()).index(default_role_label)
-                    if default_role_label in role_labels
-                    else 0
-                )
-            selected_role_label = layout_cols[0].selectbox(
-                "Role layout",
-                **active_role_kwargs,
-            )
-            selected_role_layout = role_labels[selected_role_label]
-        if (
-            auth_state["mode"] == "anonymous"
-            and view_param is not None
-            and str(selected_role_layout["roleKey"]) in PRIMARY_ONLY_ROLE_KEYS
-        ):
-            selected_role_layout = _canonical_role_layout(str(selected_role_layout["roleKey"]))
-        _hydrate_role_layout_session(
-            selected_role_layout,
-            force_reset=auth_state["mode"] == "anonymous" and view_param is not None,
-        )
-        stale_primary_tabs = missing_recommended_primary_tabs(
-            role_key=str(selected_role_layout["roleKey"]),
-            layout=selected_role_layout,
-            available_tabs=tab_labels,
-        )
-        session_primary_tabs_kwargs: dict[str, Any] = {
-            "options": tab_labels,
-            "key": "dashboard_session_primary_tabs",
-        }
-        if "dashboard_session_primary_tabs" not in st.session_state:
-            session_primary_tabs_kwargs["default"] = list(selected_role_layout["primaryTabs"])
-        session_primary_tabs = layout_cols[1].multiselect(
-            "Session focus tabs",
-            **session_primary_tabs_kwargs,
-        )
-        session_show_all_kwargs: dict[str, Any] = {
-            "key": "dashboard_show_all_tabs",
-        }
-        if "dashboard_show_all_tabs" not in st.session_state:
-            session_show_all_kwargs["value"] = False
-        session_show_all = layout_cols[2].checkbox(
-            "Show all tabs this session",
-            **session_show_all_kwargs,
-        )
-        if layout_cols[3].button("Reset layout", key="dashboard_reset_role_layout"):
-            st.session_state[_LAYOUT_PENDING_KEY] = _layout_defaults_from_layout(selected_role_layout)
-            _rerun_app()
-
-        if selected_role_layout["roleKey"] == "dispatcher" and stale_primary_tabs:
-            st.warning(
-                "Dispatcher layout is missing recommended focus tabs: "
-                + ", ".join(stale_primary_tabs)
-                + "."
-            )
-            if st.button("Repair dispatcher layout", key="dashboard_repair_dispatcher_layout"):
-                repaired = upsert_dashboard_role_layout(
-                    conn,
-                    role_key="dispatcher",
-                    default_landing_tab=str(ROLE_LAYOUT_DEFAULTS["dispatcher"]["defaultLandingTab"]),
-                    primary_tabs=list(ROLE_LAYOUT_DEFAULTS["dispatcher"]["primaryTabs"]),
-                    hidden_tabs=list(ROLE_LAYOUT_DEFAULTS["dispatcher"]["hiddenTabs"]),
+                stale_primary_tabs = missing_recommended_primary_tabs(
+                    role_key=str(selected_role_layout["roleKey"]),
+                    layout=selected_role_layout,
                     available_tabs=tab_labels,
                 )
-                st.session_state[_LAYOUT_PENDING_KEY] = _layout_defaults_from_layout(repaired)
-                _rerun_app()
+                session_primary_tabs_kwargs: dict[str, Any] = {
+                    "options": tab_labels,
+                    "key": "dashboard_session_primary_tabs",
+                }
+                if "dashboard_session_primary_tabs" not in st.session_state:
+                    session_primary_tabs_kwargs["default"] = list(selected_role_layout["primaryTabs"])
+                session_primary_tabs = st.multiselect(
+                    "Session focus tabs",
+                    **session_primary_tabs_kwargs,
+                )
+                session_show_all_kwargs: dict[str, Any] = {
+                    "key": "dashboard_show_all_tabs",
+                }
+                if "dashboard_show_all_tabs" not in st.session_state:
+                    session_show_all_kwargs["value"] = False
+                session_show_all = st.checkbox(
+                    "Show all tabs this session",
+                    **session_show_all_kwargs,
+                )
+                if st.button("Reset layout", key="dashboard_reset_role_layout"):
+                    st.session_state[_LAYOUT_PENDING_KEY] = _layout_defaults_from_layout(selected_role_layout)
+                    _rerun_app()
+
+                if selected_role_layout["roleKey"] == "dispatcher" and stale_primary_tabs:
+                    st.warning(
+                        "Dispatcher layout is missing recommended focus tabs: "
+                        + ", ".join(stale_primary_tabs)
+                        + "."
+                    )
+                    if st.button("Repair dispatcher layout", key="dashboard_repair_dispatcher_layout"):
+                        repaired = upsert_dashboard_role_layout(
+                            conn,
+                            role_key="dispatcher",
+                            default_landing_tab=str(ROLE_LAYOUT_DEFAULTS["dispatcher"]["defaultLandingTab"]),
+                            primary_tabs=list(ROLE_LAYOUT_DEFAULTS["dispatcher"]["primaryTabs"]),
+                            hidden_tabs=list(ROLE_LAYOUT_DEFAULTS["dispatcher"]["hiddenTabs"]),
+                            available_tabs=tab_labels,
+                        )
+                        st.session_state[_LAYOUT_PENDING_KEY] = _layout_defaults_from_layout(repaired)
+                        _rerun_app()
 
         params = _get_query_params()
-        requested_tab = params.get("view", [tab_labels[0]])[0]
+        requested_tab = params.get("view", [None])[0]
+        active_tab_index = st.session_state.get("dashboard_active_tab")
         if requested_tab not in tab_labels:
-            requested_tab = tab_labels[0]
+            if isinstance(active_tab_index, int) and 0 <= active_tab_index < len(tab_labels):
+                requested_tab = tab_labels[active_tab_index]
+            else:
+                requested_tab = tab_labels[0]
         resolved_show_all_tabs = bool(st.session_state.get("dashboard_show_all_tabs", False))
         if auth_state["mode"] == "anonymous" and view_param is not None:
             resolved_show_all_tabs = False
+        requested_tab_from_session = "view" not in params and isinstance(active_tab_index, int)
         resolved_layout = resolve_dashboard_layout(
             available_tabs=tab_labels,
             layout=selected_role_layout,
-            requested_tab=requested_tab if "view" in params else None,
+            requested_tab=requested_tab if "view" in params or requested_tab_from_session else None,
             session_primary_tabs=st.session_state.get("dashboard_session_primary_tabs", selected_role_layout["primaryTabs"]),
             session_hidden_tabs=st.session_state.get("dashboard_session_hidden_tabs", selected_role_layout["hiddenTabs"]),
-            session_landing_tab=st.session_state.get("dashboard_session_landing_tab", selected_role_layout["defaultLandingTab"]),
+            session_landing_tab=st.session_state.get(
+                "dashboard_session_landing_tab",
+                requested_tab if requested_tab_from_session else selected_role_layout["defaultLandingTab"],
+            ),
             show_all_tabs=resolved_show_all_tabs,
         )
         tab_labels = resolved_layout["tabOrder"]
@@ -602,8 +623,8 @@ def render_price_distribution_dashboard():
         requested_tab_index = tab_result.requested_tab_index
         tab_order = tab_result.tab_order
         show_analytics_overview = requested_tab in _ANALYTICS_SHELL_TABS
-
-
+        # Views handle overview display internally; retained for test compat:
+        # show_overview=show_analytics_overview
 
         if "Quote" in tab_map:
             with tab_map["Quote"]:
@@ -643,7 +664,8 @@ def render_price_distribution_dashboard():
                 render_operations_view(
                     conn=conn,
                     filtered_df=filtered_df,
-                    rerun_app=_rerun_app
+                    rerun_app=_rerun_app,
+                    workspace_state=workspace_state,
                 )
 
         if "Admin" in tab_map:
@@ -660,7 +682,7 @@ def main() -> None:
     """Configure Streamlit and render the price distribution dashboard."""
 
     st.set_page_config(
-        page_title="corkysoft",
+        page_title="Corkysoft",
         layout="wide",
     )
     render_price_distribution_dashboard()

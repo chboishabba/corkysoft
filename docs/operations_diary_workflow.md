@@ -1,6 +1,7 @@
 # Operations Diary Workflow
 
-This document defines the manager-facing `Operations diary` workflow.
+This document defines the manager-facing `Operations diary` workflow inside the
+`Operations` shell.
 
 The diary is a separate operational cockpit that sits above `Planner`,
 `Dispatch`, labor reconciliation, supplier coordination, and invoicing.
@@ -75,7 +76,7 @@ It should show:
 
 ## Navigation Contract
 
-The diary is a separate screen, not a Planner subpanel.
+The diary is a separate workflow inside `Operations`, not a Planner subpanel.
 
 Entry points:
 

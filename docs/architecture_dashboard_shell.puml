@@ -16,6 +16,7 @@ package "Dashboard Shell" {
   [dashboard.shell] as dashboard_shell
   [dashboard.state] as dashboard_state
   [dashboard.tab_registry] as dashboard_tab_registry
+  [dashboard.theme] as dashboard_theme
 }
 dashboard_app --> dashboard_auth_ui
 dashboard_app --> dashboard_data
@@ -26,6 +27,7 @@ dashboard_app --> dashboard_query_params
 dashboard_app --> dashboard_shell
 dashboard_app --> dashboard_state
 dashboard_app --> dashboard_tab_registry
+dashboard_app --> dashboard_theme
 dashboard_auth_ui --> dashboard_state
 dashboard_data_controls --> dashboard_data
 dashboard_data_controls --> dashboard_map_provider
@@ -41,5 +43,5 @@ dashboard_data_controls ..> external_quote_routing_core : data_controls -> quote
 dashboard_data ..> external_quote_routing_core : data -> repo\ndata -> schema
 dashboard_state ..> external_quote_routing_core : state -> quote_service
 [Workflow Surfaces] as external_workflow_surfaces
-dashboard_app ..> external_workflow_surfaces : app -> quote_builder\napp -> route_maps\napp -> operations_diary
+dashboard_app ..> external_workflow_surfaces : app -> quote_view\napp -> pricing_intelligence_view\napp -> network_view
 @enduml

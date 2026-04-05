@@ -145,10 +145,10 @@ Supervisor or labor planner reviews and resolves the record.
 
 Time capture should integrate with:
 
-- `Staff`
-- `Driver shifts`
+- `Operations` -> `Staff`
+- `Operations` -> `Driver shifts`
 - `Operations`
-- `Dispatch`
+- `Operations` -> `Dispatch`
 
 Primary uses:
 

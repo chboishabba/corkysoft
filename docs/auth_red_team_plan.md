@@ -65,7 +65,7 @@ External:
 - start auth-required mode with missing secrets and verify fail-closed behavior
 - sign in with a non-allowlisted Google account and confirm denial
 - sign in with an inactive local account and confirm denial
-- try `?view=Kent admin` or other hidden-tab query params as a non-admin role
+- try hidden-tab query-param paths such as `?view=Admin` with stale nested-tab state and confirm non-admin roles still fail closed
 
 Low-privileged authenticated:
 

@@ -20,12 +20,28 @@ from analytics.operations_diary import (
     upsert_operations_diary_task,
     upsert_subcontractor_bill_review,
 )
-from dashboard.query_params import _get_query_params, _set_query_params
+from dashboard.query_params import _get_query_params, _set_workspace_query_params
 from dashboard.state import _rerun_app
 
 
 def _get_query_param(key: str, default: str) -> str:
     return _get_query_params().get(key, [default])[0]
+
+
+def _set_operations_diary_workspace_params(
+    *,
+    view_mode: str,
+    anchor_date: date,
+    focus_job_id: int | None,
+) -> None:
+    _set_workspace_query_params(
+        available_tabs=["Quote", "Pricing Intelligence", "Network", "Operations", "Admin"],
+        view="Operations",
+        workflow="operations_diary",
+        diary_view=view_mode,
+        diary_date=anchor_date.isoformat(),
+        diary_job=str(focus_job_id or ""),
+    )
 
 
 def _labor_reconciliation_table_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -95,11 +111,10 @@ def render_operations_diary_tab(conn: sqlite3.Connection) -> None:
         key="operations_diary_anchor_date",
     )
     if controls[2].button("Refresh diary", key="operations_diary_refresh"):
-        _set_query_params(
-            view="Operations diary",
-            diary_view=view_mode,
-            diary_date=anchor_date.isoformat(),
-            diary_job=str(focus_job_id or ""),
+        _set_operations_diary_workspace_params(
+            view_mode=view_mode,
+            anchor_date=anchor_date,
+            focus_job_id=focus_job_id,
         )
 
     diary = build_operations_diary(
@@ -328,29 +343,26 @@ def render_operations_diary_tab(conn: sqlite3.Connection) -> None:
         key="operations_diary_selected_job",
     )
     selected_job_id = int(options[selected_label])
-    _set_query_params(
-        view="Operations diary",
-        diary_view=view_mode,
-        diary_date=anchor_date.isoformat(),
-        diary_job=str(selected_job_id),
+    _set_operations_diary_workspace_params(
+        view_mode=view_mode,
+        anchor_date=anchor_date,
+        focus_job_id=selected_job_id,
     )
 
     details = build_job_usage_details(conn, job_id=selected_job_id)
     job = details["job"]
     header_cols = st.columns(3)
     if header_cols[0].button("Open in Planner", key=f"operations_diary_to_planner_{selected_job_id}"):
-        _set_query_params(
-            view="Planner",
-            diary_view=view_mode,
-            diary_date=anchor_date.isoformat(),
-            diary_job=str(selected_job_id),
+        _set_workspace_query_params(
+            available_tabs=["Quote", "Pricing Intelligence", "Network", "Operations", "Admin"],
+            view="Operations",
+            workflow="planner",
         )
     if header_cols[1].button("Open in Dispatch", key=f"operations_diary_to_dispatch_{selected_job_id}"):
-        _set_query_params(
-            view="Dispatch",
-            diary_view=view_mode,
-            diary_date=anchor_date.isoformat(),
-            diary_job=str(selected_job_id),
+        _set_workspace_query_params(
+            available_tabs=["Quote", "Pricing Intelligence", "Network", "Operations", "Admin"],
+            view="Operations",
+            workflow="dispatch",
         )
     header_cols[2].caption(
         f"Review window: {diary['startDate']} to {diary['endDate']}"

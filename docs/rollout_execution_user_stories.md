@@ -8,8 +8,8 @@ fallback handling, and promotion between rollout states.
 ## Dispatcher
 
 Trigger:
-- daily dispatch runs from the native Dispatch board, but an external handoff or
-  temporary fallback may still be needed
+- daily dispatch runs from `Operations` -> `Dispatch`, but an external handoff
+  or temporary fallback may still be needed
 
 Primary decisions:
 - can work continue from the native board
@@ -17,7 +17,7 @@ Primary decisions:
 - does the bypass of the native board need to be logged as fallback use
 
 Required inputs:
-- Dispatch board status
+- `Operations` -> `Dispatch` status
 - dispatch workflow cutover status
 - recent cutover events
 - job and segment readiness

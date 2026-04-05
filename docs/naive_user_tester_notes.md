@@ -131,11 +131,15 @@ What completed successfully:
   - recorded a cutover review in `Fleet`
   - event persisted and `last review` updated live
 
-What broke:
-- `Calls` action flows still call `st.experimental_rerun()` after persisting changes
-- `Inventory` execution/substitution flows still call `st.experimental_rerun()` after persisting changes
-- under the current Streamlit build, those actions succeed in the DB and then crash the page with:
+What broke at the time:
+- `Calls` action flows were still calling `st.experimental_rerun()` after persisting changes
+- `Inventory` execution/substitution flows were still calling `st.experimental_rerun()` after persisting changes
+- under the tested Streamlit build, those actions succeeded in the DB and then crashed the page with:
   - `AttributeError: module 'streamlit' has no attribute 'experimental_rerun'`
+
+Current status:
+- those flows have since been moved onto the shared rerun compatibility helper
+- continue treating this note as historical evidence for why rerun usage must stay centralized in `dashboard/state.py`
 
 What I liked:
 - the persisted operational truth was correct even when the UI crashed afterward
@@ -149,7 +153,7 @@ What I disliked:
 - warehouse flows still succeed-then-crash, which is a trust problem even though the database state is correct
 
 Remaining path from this walkthrough:
-- replace remaining `st.experimental_rerun()` usage in live operator surfaces with a compatibility helper like the one already used in `Fleet`
+- keep remaining operator surfaces on the shared rerun compatibility helper and avoid reintroducing direct `st.experimental_rerun()` calls
 - rerun the same MCP/UI role wave after that fix so success is measured in both persistence and uninterrupted operator flow
 - add explicit outbox delivery retry/idempotency coverage once the StatiBaker delivery worker exists
 - deepen inventory custody conflict handling beyond current latest-location assertions

@@ -52,7 +52,7 @@ Deliverables:
 - conflict detection
 - readiness checks
 - planner UX that derives draft operational legs from route/corridor/site context instead of expecting manual segment authoring as the normal operator flow
-- dedicated `Planner` tab as the primary planning surface
+- dedicated `Planner` workflow inside `Operations` as the primary planning surface
 - existing `Operations` segment form retained as advanced/manual fallback
 
 Exit criteria:
@@ -147,7 +147,7 @@ Deliverables:
 - operator training and rollback instructions
 
 Current implementation:
-- Dispatch tab provides a native job-centric execution board across segments,
+- Dispatch workflow inside `Operations` provides a native job-centric execution board across segments,
   trucks, workers, stock, suppliers, and readiness flags
 - dispatch snapshot CSV export exists for external stakeholders who still need a
   lightweight operational extract

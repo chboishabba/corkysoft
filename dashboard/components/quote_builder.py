@@ -43,13 +43,14 @@ from corkysoft.repo import (
 )
 from corkysoft.routing import snap_coordinates_to_road
 from dashboard.map_provider import (
+    _resolved_provider,
     folium_map_configuration,
     google_street_view_360_url,
     google_street_view_embed_url,
     pydeck_map_kwargs,
     street_view_available,
 )
-from dashboard.query_params import _set_query_params
+from dashboard.query_params import _set_workspace_query_params
 from dashboard.state import (
     _apply_quote_suggestion,
     _first_non_empty,
@@ -243,7 +244,9 @@ def _render_pin_picker(
     map_available = folium is not None and st_folium is not None
     if map_available:
         zoom = 12 if entry.get("lon") is not None and entry.get("lat") is not None else 4
-        map_kwargs, tile_layer_kwargs = folium_map_configuration()
+        map_kwargs, tile_layer_kwargs = folium_map_configuration(
+            provider=_resolved_provider()
+        )
         map_obj = folium.Map(
             location=[current_lat, current_lon],
             zoom_start=zoom,
@@ -341,7 +344,10 @@ def apply_quote_suggestion(
 
     st.session_state["quote_pin_override"] = _initial_pin_state(updated_result)
     st.session_state.pop(_HAVERSINE_MODAL_STATE_KEY, None)
-    _set_query_params(view="Quote builder")
+    _set_workspace_query_params(
+        available_tabs=["Quote", "Pricing Intelligence", "Network", "Operations", "Admin"],
+        view="Quote",
+    )
 
 
 def apply_recommended_quote(recommended_quote_total: float) -> None:
@@ -695,7 +701,12 @@ def render_quote_builder(
                         ),
                     ],
                 }
-                deck_kwargs.update(pydeck_map_kwargs("mapbox://styles/mapbox/light-v9"))
+                deck_kwargs.update(
+                    pydeck_map_kwargs(
+                        "mapbox://styles/mapbox/light-v9",
+                        provider=_resolved_provider(),
+                    )
+                )
                 deck = pdk.Deck(**deck_kwargs)
                 st.pydeck_chart(deck)
                 st.caption("Selected route visualised on the map.")
@@ -1065,7 +1076,10 @@ def render_quote_builder(
                     )
                     st.session_state["quote_pin_override"] = _initial_pin_state(result)
                     st.session_state.pop(_HAVERSINE_MODAL_STATE_KEY, None)
-                    _set_query_params(view="Quote builder")
+                    _set_workspace_query_params(
+                        available_tabs=["Quote", "Pricing Intelligence", "Network", "Operations", "Admin"],
+                        view="Quote",
+                    )
                     st.success("Quote calculated. Review the breakdown below.")
                     stored_inputs = quote_inputs
                     quote_result = result
@@ -1387,7 +1401,10 @@ def render_quote_builder(
                 st.session_state["quote_pin_override"] = pin_override_state
                 st.session_state.pop(_HAVERSINE_MODAL_STATE_KEY, None)
                 st.success("Quote recalculated using manual pins.")
-                _set_query_params(view="Quote builder")
+                _set_workspace_query_params(
+                    available_tabs=["Quote", "Pricing Intelligence", "Network", "Operations", "Admin"],
+                    view="Quote",
+                )
                 _rerun_app()
 
         metric_cols = st.columns(4)
@@ -1556,7 +1573,10 @@ def render_quote_builder(
                     st.error(f"Failed to persist quote: {exc}")
                 else:
                     st.session_state["quote_saved_rowid"] = rowid
-                    _set_query_params(view="Quote builder")
+                    _set_workspace_query_params(
+                        available_tabs=["Quote", "Pricing Intelligence", "Network", "Operations", "Admin"],
+                        view="Quote",
+                    )
                     _rerun_app()
         if action_cols[1].button("Reset quote builder"):
             st.session_state.pop("quote_result", None)
@@ -1565,7 +1585,10 @@ def render_quote_builder(
             st.session_state.pop("quote_manual_override_amount", None)
             st.session_state.pop("quote_pin_override", None)
             st.session_state.pop(_HAVERSINE_MODAL_STATE_KEY, None)
-            _set_query_params(view="Quote builder")
+            _set_workspace_query_params(
+                available_tabs=["Quote", "Pricing Intelligence", "Network", "Operations", "Admin"],
+                view="Quote",
+            )
             _rerun_app()
 
         if st.session_state.get(_NULL_CLIENT_MODAL_STATE_KEY):

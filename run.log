@@ -1,0 +1,8 @@
+
+  You can now view your Streamlit app in your browser.
+
+  Local URL: http://localhost:8502
+  Network URL: http://192.168.4.53:8502
+
+2026-04-02 14:28:58.594 Origin mismatch, the origin of websocket request is not the same origin of redirect_uri in secrets.toml
+2026-04-02 14:28:59.895 Origin mismatch, the origin of websocket request is not the same origin of redirect_uri in secrets.toml

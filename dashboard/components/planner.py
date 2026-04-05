@@ -35,7 +35,7 @@ from analytics.planner import (
     list_planner_corridor_candidates,
 )
 from dashboard.map_provider import plotly_map_layout
-from dashboard.query_params import _set_query_params
+from dashboard.query_params import _set_workspace_query_params
 from dashboard.state import _rerun_app
 from dashboard.map_provider import (
     google_street_view_360_url,
@@ -278,8 +278,10 @@ def render_planner_tab(filtered_df: pd.DataFrame, conn: sqlite3.Connection) -> N
         "Open selected day/job in Operations diary",
         key="planner_open_operations_diary",
     ):
-        _set_query_params(
-            view="Operations diary",
+        _set_workspace_query_params(
+            available_tabs=["Quote", "Pricing Intelligence", "Network", "Operations", "Admin"],
+            view="Operations",
+            workflow="operations_diary",
             diary_view="day",
             diary_date=selected_day.isoformat(),
             diary_job=str(target_job_id or ""),

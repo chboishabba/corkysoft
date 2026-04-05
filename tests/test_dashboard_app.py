@@ -29,15 +29,11 @@ def test_dashboard_app_module_importable() -> None:
     module = importlib.import_module("dashboard.app")
     assert hasattr(module, "render_price_distribution_dashboard")
     tabs = getattr(module, "PRICE_DASHBOARD_TABS", [])
-    assert "Price history" in tabs
-    assert "Dispatch" in tabs
-    assert "Planner" in tabs
+    assert "Quote" in tabs
+    assert "Pricing Intelligence" in tabs
+    assert "Network" in tabs
     assert "Operations" in tabs
-    assert "Calls" in tabs
-    assert "Kent tenders" in tabs
-    assert "Kent admin" in tabs
-    assert "Calls" in tabs
-    assert "Payroll / Labor analytics" in tabs
+    assert "Admin" in tabs
 
 
 def test_streamlit_entrypoint_exposed() -> None:
@@ -55,18 +51,20 @@ def test_planner_tab_is_rendered_in_dashboard_flow() -> None:
     source = inspect.getsource(render)
     assert "_render_authenticated_user_banner(auth_state)" in source
     assert "_render_anonymous_dev_banner(auth_state)" in source
-    assert 'with tab_map["Planner"]' in source
-    assert "render_planner_tab(" in source
-    assert 'with tab_map["Calls"]' in source
-    assert "render_calls_tab(" in source
-    assert 'with tab_map["Payroll / Labor analytics"]' in source
-    assert "render_payroll_labor_analytics_tab(conn, rerun_app=_rerun_app)" in source
+    assert 'with tab_map["Operations"]' in source
+    assert "render_operations_view(" in source
+    assert 'with tab_map["Quote"]' in source
+    assert "render_quote_view(" in source
+    assert 'with tab_map["Admin"]' in source
+    assert "render_admin_view(" in source
     assert "Repair dispatcher layout" in source
     assert "find_layout_by_tab(role_layouts, view_param)" in source
     assert '_resolve_dashboard_shell(shell_tab)' in source
     assert '_canonical_role_layout(str(selected_role_layout["roleKey"]))' in source
     assert "show_analytics_overview = requested_tab in _ANALYTICS_SHELL_TABS" in source
     assert "show_overview=show_analytics_overview" in source
+    assert 'active_tab_index = st.session_state.get("dashboard_active_tab")' in source
+    assert 'requested_tab if "view" in params or requested_tab_from_session else None' in source
     assert 'Analytics filters and pricing controls' in source
     assert 'st.session_state[_LAYOUT_PENDING_KEY] = _layout_defaults_from_layout(selected_role_layout)' in source
     assert 'if "dashboard_active_role" not in st.session_state:' in source
@@ -93,6 +91,10 @@ def test_planner_tab_is_rendered_in_dashboard_flow() -> None:
     payroll_source = inspect.getsource(getattr(module, "render_payroll_labor_analytics_tab"))
     assert "Export-ready Labor Summary" in payroll_source
     assert "Absence / Leave" in payroll_source
+
+    operations_diary_source = inspect.getsource(getattr(module, "render_operations_diary_tab"))
+    assert "_set_operations_diary_workspace_params(" in operations_diary_source
+    assert 'view="Operations diary"' not in operations_diary_source
 
     staff_source = inspect.getsource(getattr(module, "render_staff_tab"))
     assert "Reviewed worker-time events" in staff_source
@@ -218,9 +220,9 @@ def _fake_layout(label: str) -> dict[str, Any]:
     return {
         "label": label,
         "roleKey": label.lower().replace(" ", "_"),
-        "primaryTabs": ["Quote builder"],
-        "hiddenTabs": ["Kent admin"],
-        "defaultLandingTab": "Quote builder",
+        "primaryTabs": ["Quote"],
+        "hiddenTabs": ["Admin"],
+        "defaultLandingTab": "Quote",
     }
 
 
@@ -228,17 +230,17 @@ def test_hydrate_role_layout_session_applies_pending_choice() -> None:
     dashboard_app.st.session_state.clear()
     layout = _fake_layout("Estimator")
     pending = {
-        "primaryTabs": ["Dispatch"],
-        "hiddenTabs": ["Fleet"],
-        "landingTab": "Dispatch",
+        "primaryTabs": ["Operations"],
+        "hiddenTabs": ["Pricing Intelligence"],
+        "landingTab": "Operations",
         "showAll": True,
     }
     dashboard_app.st.session_state[dashboard_app._LAYOUT_PENDING_KEY] = pending
     dashboard_app._hydrate_role_layout_session(layout)
     assert dashboard_app._LAYOUT_PENDING_KEY not in dashboard_app.st.session_state
-    assert dashboard_app.st.session_state["dashboard_session_primary_tabs"] == ["Dispatch"]
-    assert dashboard_app.st.session_state["dashboard_session_hidden_tabs"] == ["Fleet"]
-    assert dashboard_app.st.session_state["dashboard_session_landing_tab"] == "Dispatch"
+    assert dashboard_app.st.session_state["dashboard_session_primary_tabs"] == ["Operations"]
+    assert dashboard_app.st.session_state["dashboard_session_hidden_tabs"] == ["Pricing Intelligence"]
+    assert dashboard_app.st.session_state["dashboard_session_landing_tab"] == "Operations"
     assert dashboard_app.st.session_state["dashboard_show_all_tabs"]
     assert dashboard_app.st.session_state["dashboard_active_role_last"] == "Estimator"
 
@@ -248,26 +250,26 @@ def test_hydrate_role_layout_session_resets_on_role_change() -> None:
     layout_a = _fake_layout("Estimator")
     layout_b = _fake_layout("Dispatcher")
     dashboard_app._hydrate_role_layout_session(layout_a)
-    assert dashboard_app.st.session_state["dashboard_session_primary_tabs"] == ["Quote builder"]
+    assert dashboard_app.st.session_state["dashboard_session_primary_tabs"] == ["Quote"]
     dashboard_app._hydrate_role_layout_session(layout_b)
-    assert dashboard_app.st.session_state["dashboard_session_primary_tabs"] == ["Quote builder"]
+    assert dashboard_app.st.session_state["dashboard_session_primary_tabs"] == ["Quote"]
     assert dashboard_app.st.session_state["dashboard_active_role_last"] == "Dispatcher"
 
 
 def test_hydrate_role_layout_session_force_resets_same_role() -> None:
     dashboard_app.st.session_state.clear()
     layout = _fake_layout("Dispatcher")
-    dashboard_app.st.session_state["dashboard_session_primary_tabs"] = ["Dispatch"]
+    dashboard_app.st.session_state["dashboard_session_primary_tabs"] = ["Operations"]
     dashboard_app.st.session_state["dashboard_session_hidden_tabs"] = []
-    dashboard_app.st.session_state["dashboard_session_landing_tab"] = "Dispatch"
+    dashboard_app.st.session_state["dashboard_session_landing_tab"] = "Operations"
     dashboard_app.st.session_state["dashboard_show_all_tabs"] = True
     dashboard_app.st.session_state["dashboard_active_role_last"] = "Dispatcher"
 
     dashboard_app._hydrate_role_layout_session(layout, force_reset=True)
 
-    assert dashboard_app.st.session_state["dashboard_session_primary_tabs"] == ["Quote builder"]
-    assert dashboard_app.st.session_state["dashboard_session_hidden_tabs"] == ["Kent admin"]
-    assert dashboard_app.st.session_state["dashboard_session_landing_tab"] == "Quote builder"
+    assert dashboard_app.st.session_state["dashboard_session_primary_tabs"] == ["Quote"]
+    assert dashboard_app.st.session_state["dashboard_session_hidden_tabs"] == ["Admin"]
+    assert dashboard_app.st.session_state["dashboard_session_landing_tab"] == "Quote"
     assert dashboard_app.st.session_state["dashboard_show_all_tabs"] is False
 
 
@@ -283,31 +285,31 @@ def test_anonymous_view_layout_primes_active_role_for_deep_link() -> None:
 
 
 def test_resolve_dashboard_shell_distinguishes_operator_and_analytics_tabs() -> None:
-    analytics_shell = dashboard_app._resolve_dashboard_shell("Histogram")
-    assert analytics_shell["title"] == "Price distribution analytics"
+    analytics_shell = dashboard_app._resolve_dashboard_shell("Pricing Intelligence")
+    assert analytics_shell["title"] == "Pricing Intelligence"
     assert analytics_shell["sidebar_heading"] == "Filters"
     assert not analytics_shell["collapse_analytics_sidebar"]
 
-    operator_shell = dashboard_app._resolve_dashboard_shell("Dispatch")
-    assert operator_shell["title"] == "Operations control tower"
+    operator_shell = dashboard_app._resolve_dashboard_shell("Operations")
+    assert operator_shell["title"] == "Operations & Network Control"
     assert operator_shell["sidebar_heading"] == "Workflow support"
     assert operator_shell["collapse_analytics_sidebar"]
 
-    commercial_shell = dashboard_app._resolve_dashboard_shell("Quote builder")
-    assert commercial_shell["title"] == "Commercial workflow workspace"
+    commercial_shell = dashboard_app._resolve_dashboard_shell("Quote")
+    assert commercial_shell["title"] == "Quote Workspace"
     assert commercial_shell["collapse_analytics_sidebar"]
 
 
 def test_canonical_role_layout_uses_role_defaults() -> None:
     dispatcher_layout = dashboard_app._canonical_role_layout("dispatcher")
-    assert dispatcher_layout["defaultLandingTab"] == "Dispatch"
-    assert "Operations diary" in dispatcher_layout["primaryTabs"]
-    assert dispatcher_layout["hiddenTabs"] == ["Kent admin"]
+    assert dispatcher_layout["defaultLandingTab"] == "Operations"
+    assert "Network" in dispatcher_layout["primaryTabs"]
+    assert "Admin" in dispatcher_layout["hiddenTabs"]
 
 
 def test_main_sets_static_corkysoft_page_title() -> None:
     source = inspect.getsource(dashboard_app.main)
-    assert 'page_title="corkysoft"' in source
+    assert 'page_title="Corkysoft"' in source
 
 
 def test_distribution_overview_has_optional_non_tab_summary_gate() -> None:
@@ -328,11 +330,11 @@ def test_build_tab_map_keeps_order_stable_without_keyed_tabs(monkeypatch) -> Non
     monkeypatch.setattr("dashboard.tab_registry.st.tabs", lambda labels: fake_tabs)
 
     result = build_tab_map(
-        tab_labels=["Histogram", "Fleet", "Quote builder"],
-        requested_tab="Quote builder",
-        params={"view": ["Quote builder"]},
+        tab_labels=["Quote", "Operations", "Admin"],
+        requested_tab="Operations",
+        params={"view": ["Operations"]},
         tabs_placeholder=tabs_placeholder,
     )
 
-    assert result.tab_order == ["Histogram", "Fleet", "Quote builder"]
-    assert list(result.tab_map.keys()) == ["Histogram", "Fleet", "Quote builder"]
+    assert result.tab_order == ["Quote", "Operations", "Admin"]
+    assert list(result.tab_map.keys()) == ["Quote", "Operations", "Admin"]

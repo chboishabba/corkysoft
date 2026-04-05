@@ -15,7 +15,8 @@ from analytics.operations_assignment import (
     record_dispatch_share_action,
     record_operations_cutover_event,
 )
-from dashboard.state import _rerun_app, _set_query_params
+from dashboard.query_params import _set_workspace_query_params
+from dashboard.state import _rerun_app
 
 
 def render_dispatch_tab(conn: sqlite3.Connection) -> None:
@@ -369,8 +370,10 @@ def render_dispatch_tab(conn: sqlite3.Connection) -> None:
             )
     if st.button("Open in Operations diary", key="dispatch_open_operations_diary"):
         diary_date = str(selected.get("plannedStart") or "")[:10]
-        _set_query_params(
-            view="Operations diary",
+        _set_workspace_query_params(
+            available_tabs=["Quote", "Pricing Intelligence", "Network", "Operations", "Admin"],
+            view="Operations",
+            workflow="operations_diary",
             diary_view="day",
             diary_date=diary_date or "",
             diary_job=str(selected["jobId"]),
@@ -409,4 +412,3 @@ def render_dispatch_tab(conn: sqlite3.Connection) -> None:
         ]
     )
     st.dataframe(segment_df, width='stretch', hide_index=True)
-

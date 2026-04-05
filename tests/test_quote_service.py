@@ -1168,10 +1168,13 @@ def test_apply_quote_suggestion_updates_inputs(monkeypatch: pytest.MonkeyPatch) 
     st.session_state["Origin"] = inputs.origin
     st.session_state["Destination"] = inputs.destination
 
-    def _fake_set_query_params(**kwargs: str) -> None:
-        st.session_state["query_params_called"] = kwargs
+    def _fake_set_workspace_query_params(*, available_tabs: list[str], **kwargs: str) -> None:
+        st.session_state["query_params_called"] = {
+            "available_tabs": available_tabs,
+            "state": kwargs,
+        }
 
-    monkeypatch.setattr(quote_builder, "_set_query_params", _fake_set_query_params)
+    monkeypatch.setattr(quote_builder, "_set_workspace_query_params", _fake_set_workspace_query_params)
 
     def _fake_calculate(_: object, new_inputs: QuoteInput) -> QuoteResult:
         st.session_state.setdefault("calculate_calls", []).append(
@@ -1220,7 +1223,10 @@ def test_apply_quote_suggestion_updates_inputs(monkeypatch: pytest.MonkeyPatch) 
         ("Suggested Origin", inputs.destination),
         ("Suggested Origin", "Suggested Destination"),
     ]
-    assert st.session_state.get("query_params_called") == {"view": "Quote builder"}
+    assert st.session_state.get("query_params_called") == {
+        "available_tabs": ["Quote", "Pricing Intelligence", "Network", "Operations", "Admin"],
+        "state": {"view": "Quote"},
+    }
 
 
 def test_apply_recommended_quote_enables_manual_override() -> None:
