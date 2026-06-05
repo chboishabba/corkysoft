@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import base64
+import binascii
 from typing import Any, Dict, List, Optional, Sequence
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field
 
 from analytics.db_connection import connection_scope
@@ -13,7 +14,15 @@ from analytics.operations_diary import (
     export_operations_diary_observer_events,
     list_observer_outbox_events,
 )
-from corkysoft.api_shared import _current_db_path, require_internal_api_token
+from corkysoft.api_shared import (
+    CALLS_WRITE_SCOPE,
+    WORKER_TIME_WRITE_SCOPE,
+    ApiAuthContext,
+    _current_db_path,
+    record_api_write_receipt,
+    require_api_auth_context,
+    require_internal_api_read_token,
+)
 from corkysoft.call_ops import (
     AMBIENT_SESSION_STATUSES,
     CALL_DIRECTIONS,
@@ -60,7 +69,14 @@ from corkysoft.call_ops import (
 )
 from corkysoft.whisperx_adapter import WhisperXAdapterError
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_internal_api_read_token)])
+require_calls_write = require_api_auth_context((CALLS_WRITE_SCOPE,))
+require_worker_time_write = require_api_auth_context((WORKER_TIME_WRITE_SCOPE,))
+
+_ALLOWED_TRANSCRIPT_AUDIO_EXTENSIONS = {".m4a", ".mp3", ".mp4", ".ogg", ".wav"}
+_MAX_TRANSCRIPT_AUDIO_BYTES = 25 * 1024 * 1024
+_MAX_TRANSCRIPT_BASE64_CHARS = 36 * 1024 * 1024
+_MAX_TRANSCRIPT_TEXT_CHARS = 100_000
 
 
 def _submit_call_audio_for_transcription(conn, **kwargs: Any) -> dict[str, Any]:
@@ -79,6 +95,31 @@ def _poll_transcript_artifact(conn, *, artifact_id: int) -> dict[str, Any]:
 
     poller = getattr(api_module, "poll_transcript_artifact", poll_transcript_artifact)
     return poller(conn, artifact_id=artifact_id)
+
+
+def _bound_actor(auth: ApiAuthContext, supplied: Optional[str] = None) -> str:
+    if auth.legacy and supplied:
+        return supplied
+    return auth.actor
+
+
+def _receipt(
+    conn,
+    *,
+    auth: ApiAuthContext,
+    action: str,
+    resource_type: str,
+    resource_id: object,
+    request: Request,
+) -> None:
+    record_api_write_receipt(
+        conn,
+        auth=auth,
+        action=action,
+        resource_type=resource_type,
+        resource_id=str(resource_id),
+        request=request,
+    )
 
 
 class CallEventCreateRequest(BaseModel):
@@ -314,23 +355,56 @@ class CallLinkResolutionRequest(BaseModel):
 class TranscriptArtifactCreateRequest(BaseModel):
     serviceKey: str = "ops"
     status: str = "completed"
-    transcriptText: Optional[str] = None
-    confidence: Optional[float] = None
+    transcriptText: Optional[str] = Field(
+        default=None,
+        max_length=_MAX_TRANSCRIPT_TEXT_CHARS,
+        description="Reviewed transcript text. Raw transcript content is observer-capture data.",
+    )
+    confidence: Optional[float] = Field(default=None, ge=0, le=1)
     isFinal: bool = True
 
 
 class TranscriptUploadRequest(BaseModel):
-    serviceKey: str = "ops"
-    filename: str
-    contentBase64: str
-    language: Optional[str] = None
+    serviceKey: str = Field(default="ops", max_length=64)
+    filename: str = Field(..., max_length=255)
+    contentBase64: str = Field(..., max_length=_MAX_TRANSCRIPT_BASE64_CHARS)
+    language: Optional[str] = Field(default=None, max_length=16)
     diarize: bool = True
 
 
+def _decode_transcript_audio_upload(
+    payload: TranscriptUploadRequest,
+) -> tuple[bytes, str]:
+    filename = (payload.filename or "call_audio.bin").strip()
+    suffix = f".{filename.rsplit('.', 1)[-1].lower()}" if "." in filename else ""
+    if suffix not in _ALLOWED_TRANSCRIPT_AUDIO_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="filename must use one of: m4a, mp3, mp4, ogg, wav",
+        )
+    content_base64 = (payload.contentBase64 or "").strip()
+    if not content_base64:
+        raise HTTPException(status_code=400, detail="contentBase64 is required")
+    if len(content_base64) > _MAX_TRANSCRIPT_BASE64_CHARS:
+        raise HTTPException(status_code=413, detail="audio upload is too large")
+    try:
+        file_bytes = base64.b64decode(content_base64.encode("utf-8"), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="contentBase64 must contain valid base64 data",
+        ) from exc
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="audio upload cannot be empty")
+    if len(file_bytes) > _MAX_TRANSCRIPT_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail="audio upload is too large")
+    return file_bytes, filename
+
+
 class FakeTranscriptRequest(BaseModel):
-    serviceKey: str = "ops"
-    scenario: Optional[str] = None
-    operatorGoal: Optional[str] = None
+    serviceKey: str = Field(default="ops", max_length=64)
+    scenario: Optional[str] = Field(default=None, max_length=10_000)
+    operatorGoal: Optional[str] = Field(default=None, max_length=10_000)
 
 
 class TranscriptArtifactResponse(BaseModel):
@@ -347,6 +421,9 @@ class TranscriptArtifactResponse(BaseModel):
     confidence: Optional[float] = None
     isFinal: bool
     errorMessage: Optional[str] = None
+    dataClassification: str
+    authorityClass: str
+    failureKind: Optional[str] = None
     createdAt: str
     updatedAt: str
 
@@ -504,6 +581,9 @@ class AmbientTranscriptArtifactResponse(BaseModel):
     confidence: Optional[float] = None
     isFinal: bool
     errorMessage: Optional[str] = None
+    dataClassification: str
+    authorityClass: str
+    failureKind: Optional[str] = None
     createdAt: str
     updatedAt: str
 
@@ -529,8 +609,9 @@ def get_call_sessions(
     summary="Create a routed call session with an initial leg",
 )
 def post_call_session(
+    request: Request,
     payload: CallSessionCreateRequest,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_calls_write),
 ) -> CallSessionResponse:
     if payload.eventKind not in CALL_EVENT_KINDS:
         raise HTTPException(status_code=400, detail="Unsupported call event kind")
@@ -554,13 +635,21 @@ def post_call_session(
             job_id=payload.jobId,
             segment_id=payload.segmentId,
             worker_id=payload.workerId,
-            operator_id=payload.operatorId,
+            operator_id=_bound_actor(auth, payload.operatorId),
             started_at=payload.startedAt,
             ended_at=payload.endedAt,
             captured_at=payload.capturedAt,
             correlation_id=payload.correlationId,
             initial_destination_kind=payload.initialDestinationKind,
             initial_destination_label=payload.initialDestinationLabel,
+        )
+        _receipt(
+            conn,
+            auth=auth,
+            action="calls.session.create",
+            resource_type="call_session",
+            resource_id=row["id"],
+            request=request,
         )
     return CallSessionResponse(**row)
 
@@ -596,9 +685,10 @@ def get_call_session_legs(call_session_id: int = Path(...)) -> List[CallLegRespo
     summary="Add a routed or consult leg to a call session",
 )
 def post_call_session_leg(
+    request: Request,
     call_session_id: int = Path(...),
     payload: CallLegCreateRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_calls_write),
 ) -> CallLegResponse:
     if payload.legKind not in CALL_LEG_KINDS:
         raise HTTPException(status_code=400, detail="Unsupported call leg kind")
@@ -619,12 +709,20 @@ def post_call_session_leg(
                 source_channel=payload.sourceChannel,
                 destination_kind=payload.destinationKind,
                 destination_label=payload.destinationLabel,
-                operator_id=payload.operatorId,
+                operator_id=_bound_actor(auth, payload.operatorId),
                 caller_phone=payload.callerPhone,
                 callee_phone=payload.calleePhone,
                 started_at=payload.startedAt,
                 answered_at=payload.answeredAt,
                 ended_at=payload.endedAt,
+            )
+            _receipt(
+                conn,
+                auth=auth,
+                action="calls.leg.create",
+                resource_type="call_leg",
+                resource_id=row["id"],
+                request=request,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -650,9 +748,10 @@ def get_call_session_routing_events(
     summary="Record a routing or transfer event for a call session",
 )
 def post_call_session_routing_event(
+    request: Request,
     call_session_id: int = Path(...),
     payload: CallRoutingEventCreateRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_calls_write),
 ) -> CallRoutingEventResponse:
     if payload.eventType not in CALL_ROUTING_EVENT_TYPES:
         raise HTTPException(status_code=400, detail="Unsupported routing event type")
@@ -665,8 +764,16 @@ def post_call_session_routing_event(
                 call_leg_id=payload.callLegId,
                 from_destination=payload.fromDestination,
                 to_destination=payload.toDestination,
-                actor=payload.actor,
+                actor=_bound_actor(auth, payload.actor),
                 detail=payload.detail,
+            )
+            _receipt(
+                conn,
+                auth=auth,
+                action="calls.routing_event.create",
+                resource_type="call_routing_event",
+                resource_id=row["id"],
+                request=request,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -692,8 +799,9 @@ def get_ambient_call_sessions(
     summary="Create an ambient office transcript session",
 )
 def post_ambient_call_session(
+    request: Request,
     payload: AmbientSessionCreateRequest,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_calls_write),
 ) -> AmbientSessionResponse:
     if payload.status not in AMBIENT_SESSION_STATUSES:
         raise HTTPException(status_code=400, detail="Unsupported ambient session status")
@@ -710,11 +818,19 @@ def post_ambient_call_session(
             job_id=payload.jobId,
             segment_id=payload.segmentId,
             worker_id=payload.workerId,
-            operator_id=payload.operatorId,
+            operator_id=_bound_actor(auth, payload.operatorId),
             started_at=payload.startedAt,
             ended_at=payload.endedAt,
             captured_at=payload.capturedAt,
             correlation_id=payload.correlationId,
+        )
+        _receipt(
+            conn,
+            auth=auth,
+            action="calls.ambient_session.create",
+            resource_type="ambient_session",
+            resource_id=row["id"],
+            request=request,
         )
     return AmbientSessionResponse(**row)
 
@@ -754,9 +870,10 @@ def get_ambient_call_session_transcripts(
     summary="Create a manual transcript artifact for an ambient session",
 )
 def post_ambient_call_session_transcript(
+    request: Request,
     ambient_session_id: int = Path(...),
     payload: TranscriptArtifactCreateRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_calls_write),
 ) -> AmbientTranscriptArtifactResponse:
     with connection_scope(_current_db_path()) as conn:
         row = record_ambient_transcript_artifact(
@@ -768,6 +885,14 @@ def post_ambient_call_session_transcript(
             confidence=payload.confidence,
             is_final=payload.isFinal,
         )
+        _receipt(
+            conn,
+            auth=auth,
+            action="calls.ambient_transcript.create",
+            resource_type="ambient_transcript_artifact",
+            resource_id=row["id"],
+            request=request,
+        )
     return AmbientTranscriptArtifactResponse(**row)
 
 
@@ -777,9 +902,10 @@ def post_ambient_call_session_transcript(
     summary="Generate a fake transcript artifact for an ambient office session",
 )
 def post_fake_ambient_call_session_transcript(
+    request: Request,
     ambient_session_id: int = Path(...),
     payload: FakeTranscriptRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_calls_write),
 ) -> AmbientTranscriptArtifactResponse:
     with connection_scope(_current_db_path()) as conn:
         row = generate_fake_ambient_transcript_artifact(
@@ -788,6 +914,14 @@ def post_fake_ambient_call_session_transcript(
             scenario=payload.scenario,
             operator_goal=payload.operatorGoal,
             service_key=payload.serviceKey,
+        )
+        _receipt(
+            conn,
+            auth=auth,
+            action="calls.ambient_transcript.fake",
+            resource_type="ambient_transcript_artifact",
+            resource_id=row["id"],
+            request=request,
         )
     return AmbientTranscriptArtifactResponse(**row)
 
@@ -820,8 +954,9 @@ def get_call_events(
     summary="Create a call event and auto-link by phone where possible",
 )
 def post_call_event(
+    request: Request,
     payload: CallEventCreateRequest,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_calls_write),
 ) -> CallEventResponse:
     if payload.eventKind not in CALL_EVENT_KINDS:
         raise HTTPException(status_code=400, detail="Unsupported call event kind")
@@ -845,11 +980,19 @@ def post_call_event(
             job_id=payload.jobId,
             segment_id=payload.segmentId,
             worker_id=payload.workerId,
-            operator_id=payload.operatorId,
+            operator_id=_bound_actor(auth, payload.operatorId),
             started_at=payload.startedAt,
             ended_at=payload.endedAt,
             captured_at=payload.capturedAt,
             correlation_id=payload.correlationId,
+        )
+        _receipt(
+            conn,
+            auth=auth,
+            action="calls.event.create",
+            resource_type="call_event",
+            resource_id=row["id"],
+            request=request,
         )
     return CallEventResponse(**row)
 
@@ -889,19 +1032,28 @@ def get_call_notes_for_event(
     summary="Add an authoritative or advisory note to a call event",
 )
 def post_call_note(
+    request: Request,
     call_event_id: int = Path(..., description="Call event identifier"),
     payload: CallNoteCreateRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_calls_write),
 ) -> CallNoteResponse:
     with connection_scope(_current_db_path()) as conn:
         try:
             row = add_call_note(
                 conn,
                 call_event_id=call_event_id,
-                author=payload.author,
+                author=_bound_actor(auth, payload.author),
                 note_text=payload.noteText,
                 note_kind=payload.noteKind,
                 authoritative=payload.authoritative,
+            )
+            _receipt(
+                conn,
+                auth=auth,
+                action="calls.note.create",
+                resource_type="call_note",
+                resource_id=row["id"],
+                request=request,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -927,9 +1079,10 @@ def get_call_extracted_actions(
     summary="Add an extracted action candidate for review",
 )
 def post_call_extracted_action(
+    request: Request,
     call_event_id: int = Path(..., description="Call event identifier"),
     payload: ExtractedActionCreateRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_calls_write),
 ) -> ExtractedActionResponse:
     with connection_scope(_current_db_path()) as conn:
         try:
@@ -942,6 +1095,14 @@ def post_call_extracted_action(
                 span_start=payload.spanStart,
                 span_end=payload.spanEnd,
             )
+            _receipt(
+                conn,
+                auth=auth,
+                action="calls.extracted_action.create",
+                resource_type="extracted_action",
+                resource_id=row["id"],
+                request=request,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ExtractedActionResponse(**row)
@@ -953,9 +1114,10 @@ def post_call_extracted_action(
     summary="Accept or reject an extracted action candidate",
 )
 def post_call_extracted_action_decision(
+    request: Request,
     action_id: int = Path(..., description="Extracted action identifier"),
     payload: ExtractedActionDecisionRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_calls_write),
 ) -> ExtractedActionResponse:
     if payload.status not in EXTRACTED_ACTION_STATUSES or payload.status == "pending":
         raise HTTPException(
@@ -968,8 +1130,16 @@ def post_call_extracted_action_decision(
                 conn,
                 action_id=action_id,
                 status=payload.status,
-                decided_by=payload.decidedBy,
+                decided_by=_bound_actor(auth, payload.decidedBy),
                 decision_note=payload.decisionNote,
+            )
+            _receipt(
+                conn,
+                auth=auth,
+                action="calls.extracted_action.decide",
+                resource_type="extracted_action",
+                resource_id=action_id,
+                request=request,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -982,22 +1152,31 @@ def post_call_extracted_action_decision(
     summary="Resolve a call event to client/job/segment/worker context",
 )
 def post_call_link_resolution(
+    request: Request,
     call_event_id: int = Path(..., description="Call event identifier"),
     payload: CallLinkResolutionRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_calls_write),
 ) -> CallEventResponse:
     with connection_scope(_current_db_path()) as conn:
         try:
             row = resolve_call_links(
                 conn,
                 call_event_id=call_event_id,
-                actor=payload.actor,
+                actor=_bound_actor(auth, payload.actor),
                 client_id=payload.clientId,
                 quote_id=payload.quoteId,
                 job_id=payload.jobId,
                 segment_id=payload.segmentId,
                 worker_id=payload.workerId,
                 resolution_note=payload.resolutionNote,
+            )
+            _receipt(
+                conn,
+                auth=auth,
+                action="calls.event.resolve",
+                resource_type="call_event",
+                resource_id=call_event_id,
+                request=request,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1023,9 +1202,10 @@ def get_call_leg_transcripts(
     summary="Create a manual transcript artifact for a call leg",
 )
 def post_manual_call_leg_transcript(
+    request: Request,
     call_leg_id: int = Path(..., description="Call leg identifier"),
     payload: TranscriptArtifactCreateRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_calls_write),
 ) -> TranscriptArtifactResponse:
     with connection_scope(_current_db_path()) as conn:
         row = record_transcript_artifact(
@@ -1037,6 +1217,14 @@ def post_manual_call_leg_transcript(
             confidence=payload.confidence,
             is_final=payload.isFinal,
         )
+        _receipt(
+            conn,
+            auth=auth,
+            action="calls.transcript.create",
+            resource_type="transcript_artifact",
+            resource_id=row["id"],
+            request=request,
+        )
     return TranscriptArtifactResponse(**row)
 
 
@@ -1046,9 +1234,10 @@ def post_manual_call_leg_transcript(
     summary="Generate a fake transcript artifact for a call leg",
 )
 def post_fake_call_leg_transcript(
+    request: Request,
     call_leg_id: int = Path(..., description="Call leg identifier"),
     payload: FakeTranscriptRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_calls_write),
 ) -> TranscriptArtifactResponse:
     with connection_scope(_current_db_path()) as conn:
         row = generate_fake_transcript_artifact(
@@ -1057,6 +1246,14 @@ def post_fake_call_leg_transcript(
             scenario=payload.scenario,
             operator_goal=payload.operatorGoal,
             service_key=payload.serviceKey,
+        )
+        _receipt(
+            conn,
+            auth=auth,
+            action="calls.transcript.fake",
+            resource_type="transcript_artifact",
+            resource_id=row["id"],
+            request=request,
         )
     return TranscriptArtifactResponse(**row)
 
@@ -1067,27 +1264,35 @@ def post_fake_call_leg_transcript(
     summary="Submit audio to WhisperX and create a queued transcript artifact for a call leg",
 )
 def post_call_leg_transcript_upload(
+    request: Request,
     call_leg_id: int = Path(..., description="Call leg identifier"),
     payload: TranscriptUploadRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_calls_write),
 ) -> TranscriptArtifactResponse:
-    try:
-        file_bytes = base64.b64decode(payload.contentBase64.encode("utf-8"))
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="contentBase64 must contain valid base64 data",
-        ) from exc
+    file_bytes, filename = _decode_transcript_audio_upload(payload)
     with connection_scope(_current_db_path()) as conn:
-        row = _submit_call_audio_for_transcription(
-            conn,
-            call_leg_id=call_leg_id,
-            service_key=payload.serviceKey,
-            file_bytes=file_bytes,
-            filename=payload.filename or "call_audio.bin",
-            language=payload.language,
-            diarize=payload.diarize,
-        )
+        try:
+            row = _submit_call_audio_for_transcription(
+                conn,
+                call_leg_id=call_leg_id,
+                service_key=payload.serviceKey,
+                file_bytes=file_bytes,
+                filename=filename,
+                language=payload.language,
+                diarize=payload.diarize,
+            )
+            _receipt(
+                conn,
+                auth=auth,
+                action="calls.transcript.upload",
+                resource_type="transcript_artifact",
+                resource_id=row["id"],
+                request=request,
+            )
+        except WhisperXAdapterError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     return TranscriptArtifactResponse(**row)
 
 
@@ -1110,9 +1315,10 @@ def get_call_transcripts(
     summary="Create a manual transcript artifact",
 )
 def post_manual_call_transcript(
+    request: Request,
     call_event_id: int = Path(..., description="Call event identifier"),
     payload: TranscriptArtifactCreateRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_calls_write),
 ) -> TranscriptArtifactResponse:
     with connection_scope(_current_db_path()) as conn:
         try:
@@ -1125,6 +1331,14 @@ def post_manual_call_transcript(
                 confidence=payload.confidence,
                 is_final=payload.isFinal,
             )
+            _receipt(
+                conn,
+                auth=auth,
+                action="calls.transcript.create",
+                resource_type="transcript_artifact",
+                resource_id=row["id"],
+                request=request,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     return TranscriptArtifactResponse(**row)
@@ -1136,9 +1350,10 @@ def post_manual_call_transcript(
     summary="Generate a fake transcript artifact for workflow testing",
 )
 def post_fake_call_transcript(
+    request: Request,
     call_event_id: int = Path(..., description="Call event identifier"),
     payload: FakeTranscriptRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_calls_write),
 ) -> TranscriptArtifactResponse:
     with connection_scope(_current_db_path()) as conn:
         try:
@@ -1148,6 +1363,14 @@ def post_fake_call_transcript(
                 scenario=payload.scenario,
                 operator_goal=payload.operatorGoal,
                 service_key=payload.serviceKey,
+            )
+            _receipt(
+                conn,
+                auth=auth,
+                action="calls.transcript.fake",
+                resource_type="transcript_artifact",
+                resource_id=row["id"],
+                request=request,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1160,17 +1383,12 @@ def post_fake_call_transcript(
     summary="Submit audio to WhisperX and create a queued transcript artifact",
 )
 def post_call_transcript_upload(
+    request: Request,
     call_event_id: int = Path(..., description="Call event identifier"),
     payload: TranscriptUploadRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_calls_write),
 ) -> TranscriptArtifactResponse:
-    try:
-        file_bytes = base64.b64decode(payload.contentBase64.encode("utf-8"))
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="contentBase64 must contain valid base64 data",
-        ) from exc
+    file_bytes, filename = _decode_transcript_audio_upload(payload)
     with connection_scope(_current_db_path()) as conn:
         try:
             row = _submit_call_audio_for_transcription(
@@ -1178,9 +1396,17 @@ def post_call_transcript_upload(
                 call_event_id=call_event_id,
                 service_key=payload.serviceKey,
                 file_bytes=file_bytes,
-                filename=payload.filename or "call_audio.bin",
+                filename=filename,
                 language=payload.language,
                 diarize=payload.diarize,
+            )
+            _receipt(
+                conn,
+                auth=auth,
+                action="calls.transcript.upload",
+                resource_type="transcript_artifact",
+                resource_id=row["id"],
+                request=request,
             )
         except WhisperXAdapterError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -1195,12 +1421,21 @@ def post_call_transcript_upload(
     summary="Poll WhisperX for transcript task completion",
 )
 def post_call_transcript_poll(
+    request: Request,
     artifact_id: int = Path(..., description="Transcript artifact identifier"),
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_calls_write),
 ) -> TranscriptArtifactResponse:
     with connection_scope(_current_db_path()) as conn:
         try:
             row = _poll_transcript_artifact(conn, artifact_id=artifact_id)
+            _receipt(
+                conn,
+                auth=auth,
+                action="calls.transcript.poll",
+                resource_type="transcript_artifact",
+                resource_id=artifact_id,
+                request=request,
+            )
         except WhisperXAdapterError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         except ValueError as exc:
@@ -1230,8 +1465,9 @@ def get_worker_time_events(
     summary="Record a worker time-capture event from app, WhatsApp, or voice call",
 )
 def post_worker_time_event(
+    request: Request,
     payload: WorkerTimeCaptureCreateRequest,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_worker_time_write),
 ) -> WorkerTimeCaptureResponse:
     if payload.eventType not in WORKER_TIME_EVENT_TYPES:
         raise HTTPException(status_code=400, detail="Unsupported worker time event type")
@@ -1257,6 +1493,14 @@ def post_worker_time_event(
                 confidence=payload.confidence,
                 raw_payload=payload.rawPayload,
             )
+            _receipt(
+                conn,
+                auth=auth,
+                action="worker_time.event.create",
+                resource_type="worker_time_event",
+                resource_id=row["id"],
+                request=request,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     return WorkerTimeCaptureResponse(**row)
@@ -1268,9 +1512,10 @@ def post_worker_time_event(
     summary="Accept or reject a worker time-capture event after review",
 )
 def post_worker_time_event_decision(
+    request: Request,
     event_id: int = Path(..., description="Worker time event identifier"),
     payload: WorkerTimeCaptureDecisionRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_worker_time_write),
 ) -> WorkerTimeCaptureResponse:
     with connection_scope(_current_db_path()) as conn:
         try:
@@ -1278,12 +1523,20 @@ def post_worker_time_event_decision(
                 conn,
                 event_id=event_id,
                 review_status=payload.reviewStatus,
-                reviewer=payload.reviewer,
+                reviewer=_bound_actor(auth, payload.reviewer),
                 review_note=payload.reviewNote,
                 worker_id=payload.workerId,
                 job_id=payload.jobId,
                 segment_id=payload.segmentId,
                 truck_id=payload.truckId,
+            )
+            _receipt(
+                conn,
+                auth=auth,
+                action="worker_time.event.decide",
+                resource_type="worker_time_event",
+                resource_id=event_id,
+                request=request,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1398,8 +1651,9 @@ def get_state_egress_events(
     summary="Emit append-only observer envelopes for operations-diary planning snapshots and reconciliation exceptions",
 )
 def post_operations_diary_export(
+    request: Request,
     payload: OperationsDiaryObserverExportRequest,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_calls_write),
 ) -> OperationsDiaryObserverExportResponse:
     with connection_scope(_current_db_path()) as conn:
         row = export_operations_diary_observer_events(
@@ -1407,9 +1661,17 @@ def post_operations_diary_export(
             anchor_date=payload.anchorDate,
             view_mode=payload.viewMode,
             focus_job_id=payload.focusJobId,
-            actor_ref=payload.actorRef,
+            actor_ref=_bound_actor(auth, payload.actorRef),
             include_planning_snapshot=payload.includePlanningSnapshot,
             include_reconciliation_exceptions=payload.includeReconciliationExceptions,
+        )
+        _receipt(
+            conn,
+            auth=auth,
+            action="state_egress.operations_diary_export",
+            resource_type="operations_diary_export",
+            resource_id=f"{row['anchorDate']}:{row['viewMode']}",
+            request=request,
         )
     return OperationsDiaryObserverExportResponse(
         anchorDate=row["anchorDate"],

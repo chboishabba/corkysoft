@@ -59,6 +59,15 @@ CALL_TRANSCRIPT_STATUSES: tuple[str, ...] = (
     "completed",
     "failed",
 )
+TRANSCRIPT_DATA_CLASSIFICATIONS: tuple[str, ...] = (
+    "observer_capture_transcript",
+    "synthetic_observer_capture_transcript",
+    "failed_observer_capture_transcript",
+)
+TRANSCRIPT_AUTHORITY_CLASS = "observer_capture_ref"
+TRANSCRIPT_DATA_CLASSIFICATION_OBSERVER = "observer_capture_transcript"
+TRANSCRIPT_DATA_CLASSIFICATION_SYNTHETIC = "synthetic_observer_capture_transcript"
+TRANSCRIPT_DATA_CLASSIFICATION_FAILED = "failed_observer_capture_transcript"
 EXTRACTED_ACTION_STATUSES: tuple[str, ...] = ("pending", "accepted", "rejected")
 WORKER_TIME_EVENT_TYPES: tuple[str, ...] = ("clock_on", "clock_off")
 WORKER_TIME_CHANNELS: tuple[str, ...] = (
@@ -201,6 +210,9 @@ CREATE TABLE IF NOT EXISTS call_transcript_artifacts (
     confidence REAL,
     is_final INTEGER NOT NULL DEFAULT 0,
     error_message TEXT,
+    data_classification TEXT NOT NULL DEFAULT 'observer_capture_transcript',
+    authority_class TEXT NOT NULL DEFAULT 'observer_capture_ref',
+    failure_kind TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY(call_event_id) REFERENCES call_events(id) ON DELETE CASCADE,
@@ -346,6 +358,9 @@ CREATE TABLE IF NOT EXISTS ambient_transcript_artifacts (
     confidence REAL,
     is_final INTEGER NOT NULL DEFAULT 0,
     error_message TEXT,
+    data_classification TEXT NOT NULL DEFAULT 'observer_capture_transcript',
+    authority_class TEXT NOT NULL DEFAULT 'observer_capture_ref',
+    failure_kind TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY(ambient_session_id) REFERENCES ambient_sessions(id) ON DELETE CASCADE
@@ -382,6 +397,32 @@ def ensure_call_ops_tables(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
     _ensure_column(conn, "call_transcript_artifacts", "call_session_id", "call_session_id INTEGER")
     _ensure_column(conn, "call_transcript_artifacts", "call_leg_id", "call_leg_id INTEGER")
+    _ensure_column(
+        conn,
+        "call_transcript_artifacts",
+        "data_classification",
+        "data_classification TEXT NOT NULL DEFAULT 'observer_capture_transcript'",
+    )
+    _ensure_column(
+        conn,
+        "call_transcript_artifacts",
+        "authority_class",
+        "authority_class TEXT NOT NULL DEFAULT 'observer_capture_ref'",
+    )
+    _ensure_column(conn, "call_transcript_artifacts", "failure_kind", "failure_kind TEXT")
+    _ensure_column(
+        conn,
+        "ambient_transcript_artifacts",
+        "data_classification",
+        "data_classification TEXT NOT NULL DEFAULT 'observer_capture_transcript'",
+    )
+    _ensure_column(
+        conn,
+        "ambient_transcript_artifacts",
+        "authority_class",
+        "authority_class TEXT NOT NULL DEFAULT 'observer_capture_ref'",
+    )
+    _ensure_column(conn, "ambient_transcript_artifacts", "failure_kind", "failure_kind TEXT")
     _ensure_column(conn, "call_notes", "ambient_session_id", "ambient_session_id INTEGER")
     _ensure_column(conn, "call_extracted_actions", "ambient_session_id", "ambient_session_id INTEGER")
     _ensure_column(conn, "call_link_resolutions", "ambient_session_id", "ambient_session_id INTEGER")
@@ -649,6 +690,11 @@ __all__ = [
     "CALL_SOURCE_CHANNELS",
     "CALL_STATUSES",
     "CALL_TRANSCRIPT_STATUSES",
+    "TRANSCRIPT_AUTHORITY_CLASS",
+    "TRANSCRIPT_DATA_CLASSIFICATION_FAILED",
+    "TRANSCRIPT_DATA_CLASSIFICATION_OBSERVER",
+    "TRANSCRIPT_DATA_CLASSIFICATION_SYNTHETIC",
+    "TRANSCRIPT_DATA_CLASSIFICATIONS",
     "EXTRACTED_ACTION_STATUSES",
     "WORKER_TIME_CHANNELS",
     "WORKER_TIME_EVENT_TYPES",

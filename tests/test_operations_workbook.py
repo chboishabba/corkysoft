@@ -9,6 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from analytics.operations_workbook import sync_operations_workbook
+import analytics.google_sheets as google_sheets
 
 
 def test_sync_operations_workbook_dispatches_all_imports(monkeypatch):
@@ -69,3 +70,13 @@ def test_sync_operations_workbook_requires_reference(monkeypatch):
         assert "OPERATIONS_WORKBOOK_SHEET_ID/URL" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("Expected ValueError when no workbook reference is configured")
+
+
+def test_google_sheet_references_resolve_to_export_urls_only():
+    xlsx_url = google_sheets.build_google_sheet_xlsx_url("sheet-123")
+    csv_url = google_sheets.build_google_sheet_csv_url("sheet-123", "SUPPLIERS")
+
+    assert "/export?format=xlsx" in xlsx_url
+    assert "tqx=out:csv" in csv_url
+    assert "/edit" not in xlsx_url
+    assert "/edit" not in csv_url

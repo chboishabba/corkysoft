@@ -19,10 +19,24 @@ The generated UML suite is documented in:
 
 - [architecture_dashboard_shell.puml](architecture_dashboard_shell.puml)
 - [UML_INDEX.md](UML_INDEX.md)
+- [service_blueprint_flows.puml](diagrams/service_blueprint_flows.puml)
+- [service_blueprint_flows.svg](diagrams/service_blueprint_flows.svg)
+- [service_blueprint_flows.png](diagrams/service_blueprint_flows.png)
 
-The UML sources are generated from the internal Python import graph by:
+The generated UML sources are generated from the internal Python import graph
+by:
 
 - `python scripts/build_supermega_uml.py`
+
+[service_blueprint_flows.puml](diagrams/service_blueprint_flows.puml) is intentionally
+hand-authored. It maps lifecycle story paths, users, shells, interactions, and
+authority gates from [Service Blueprint](service_blueprint.md), so it should be
+updated when service stories or role/shell attribution changes rather than when
+Python imports change.
+
+Rendered service-flow views are available as
+[SVG](diagrams/service_blueprint_flows.svg) and
+[PNG](diagrams/service_blueprint_flows.png).
 
 The integrated whole-system entrypoint is:
 
@@ -83,8 +97,10 @@ The next architecture-relevant advances should be:
   workflow-only fields directly
 - metasystem view discipline:
   keep [rendered/plantuml/supermega_01.puml](rendered/plantuml/supermega_01.puml)
-  as the whole-system entrypoint and the existing child diagrams as the only
-  reviewed drill-down surfaces
+  as the whole-system code-structure entrypoint, keep generated child diagrams
+  as code drill-down surfaces, and keep
+  [service_blueprint_flows.puml](diagrams/service_blueprint_flows.puml) as the
+  actor/story-path drill-down surface
 - operational data contracts:
   keep decision-adjacent shell data explicitly classified as advisory,
   review-backed, or decision-grade

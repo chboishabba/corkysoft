@@ -1,0 +1,146 @@
+@startuml
+title Corkysoft Service Blueprint Story Paths
+left to right direction
+
+skinparam shadowing false
+skinparam wrapWidth 220
+skinparam maxMessageSize 180
+skinparam packageStyle rectangle
+skinparam componentStyle rectangle
+
+actor Customer
+actor "Estimator /\nCall Operator" as Estimator
+actor "Dispatcher" as Dispatcher
+actor "Fleet /\nOperations Manager" as OpsManager
+actor "Worker /\nCrew" as Crew
+actor "Labor Planner /\nTime Capture" as Labor
+actor "Support /\nCustomer Service" as Support
+actor "System /\nRollout Admin" as Admin
+
+rectangle "Public-safe Customer Projection\n(no internal shell access)" as PublicProjection {
+  [SP-CUST-01\nInquiry acknowledgement] as CustInquiry
+  [SP-CUST-02\nQuote sent / accepted / expired] as CustQuote
+  [SP-CUST-03\nBooking + day-before reminder] as CustBooking
+  [SP-CUST-04\nETA / progress / disruption update] as CustProgress
+  [SP-CUST-05\nCompletion receipt / POD / support path] as CustCompletion
+}
+
+package "Quote Shell" {
+  [Calls] as Calls
+  [Quote builder] as QuoteBuilder
+  [Kent tenders] as KentTenders
+}
+
+package "Pricing Intelligence Shell" {
+  [Price / margin review] as PricingReview
+}
+
+package "Network Shell" {
+  [Reviewed telemetry / ETA] as NetworkEta
+}
+
+package "Operations Shell" {
+  [Planner] as Planner
+  [Dispatch] as Dispatch
+  [Operations diary] as Diary
+  [Fleet] as Fleet
+  [Inventory] as Inventory
+  [Staff / Driver Shifts] as Staff
+  [Payroll / Labor] as PayrollLabor
+}
+
+package "Admin Shell" {
+  [User / source governance] as AdminGovernance
+  [Notification and status receipts] as AdminReceipts
+}
+
+rectangle "Authority / Safety Gates" as Gates {
+  [Accepted action\nnot raw transcript] as AcceptedAction
+  [Contact consent /\nchannel preference] as ContactConsent
+  [Public-safe field\nclassification] as FieldClass
+  [Freshness / stale\nETA downgrade] as Freshness
+  [Actor-bound write\nand scoped read] as ActorScope
+  [Completion gate] as CompletionGate
+  [Notification /\nmessage receipt] as MessageReceipt
+}
+
+rectangle "Promotion Blockers From Known Bad Cases" as Blockers #MistyRose {
+  [BAD-001\nUnauthenticated sensitive reads] as Bad001
+  [BAD-002\nShared token / free-text actor] as Bad002
+  [BAD-003\nTranscript/audio classification gaps] as Bad003
+  [BAD-004\nHidden tab reveal path] as Bad004
+  [BAD-013\nPublic tunnel / startup auth posture] as Bad013
+}
+
+Customer --> CustInquiry : asks for quote or progress
+CustInquiry --> Calls : SP-CUST-01
+Calls --> AcceptedAction : SP-CALL-01
+AcceptedAction --> QuoteBuilder : accepted inquiry / missing-info task
+CustInquiry --> ContactConsent : SB-LC-01
+Estimator --> Calls
+Estimator --> QuoteBuilder
+QuoteBuilder --> PricingReview : SP-CUST-02
+PricingReview --> CustQuote : reviewed quote output
+CustQuote --> KentTenders : accepted work
+KentTenders --> Planner : SP-CUST-03
+Planner --> Dispatch
+Dispatch --> CustBooking : booking / day-before output
+ContactConsent --> CustBooking
+CustBooking --> MessageReceipt : SB-LC-04 / SB-LC-07
+Dispatcher --> Dispatch
+OpsManager --> Diary
+Dispatch --> NetworkEta : SP-CUST-04 status request
+NetworkEta --> Freshness
+Freshness --> FieldClass
+FieldClass --> CustProgress
+Support --> Calls : customer status or complaint call
+Support --> Diary : customer-safe timeline request
+Diary --> CustCompletion : SP-CUST-05
+Diary --> CompletionGate : SP-MGR-01
+
+Crew --> Dispatch : SP-WORK-01 acknowledgement
+Dispatch --> MessageReceipt : worker acknowledgement receipt
+Dispatch --> Staff
+Crew --> Inventory : SP-WORK-02 pick / pack / load / exception
+Inventory --> Diary : custody and exception state
+Labor --> Staff : SP-WORK-03 time capture review
+Staff --> PayrollLabor
+PayrollLabor --> Diary : reviewed labor actuals
+Diary --> CompletionGate
+CompletionGate --> AdminReceipts : receipt / withheld reason
+AdminReceipts --> CustCompletion
+AdminReceipts --> MessageReceipt
+MessageReceipt --> PublicProjection
+
+Admin --> AdminGovernance : SP-ADMIN-01
+AdminGovernance --> ActorScope
+ActorScope --> Calls
+ActorScope --> Dispatch
+ActorScope --> AdminReceipts
+FieldClass --> PublicProjection
+
+Bad001 -[#red,dashed]-> ActorScope
+Bad002 -[#red,dashed]-> ActorScope
+Bad003 -[#red,dashed]-> AcceptedAction
+Bad004 -[#red,dashed]-> FieldClass
+Bad013 -[#red,dashed]-> AdminReceipts
+
+note right of PublicProjection
+Customer-facing outputs are planned contract work.
+They must be generated from reviewed, public-safe state,
+not from raw internal dashboard shells or advisory model output.
+end note
+
+note bottom of CompletionGate
+A job is complete only when segments, inventory,
+labor actuals, invoice/bill state, diary tasks,
+and customer receipt/support handling are reviewed
+or explicitly exception-owned.
+end note
+
+note bottom of Blockers
+Customer tracking, support replay, notification automation,
+and receipts must not promote while these blockers remain open.
+end note
+
+@enduml

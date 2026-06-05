@@ -138,7 +138,11 @@ def test_build_fastmcp_server_raises_clear_error_when_sdk_missing(
         sys.modules.update(original_modules)
 
 
-def test_quote_guidance_preview_tool_returns_benchmark_overlay(tmp_path: Path) -> None:
+def test_quote_guidance_preview_tool_returns_benchmark_overlay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CORKYSOFT_MCP_DB_ROOTS", str(tmp_path))
     db_path = tmp_path / "quote.db"
     conn = sqlite3.connect(db_path)
     try:
@@ -199,7 +203,11 @@ def test_quote_guidance_preview_tool_returns_benchmark_overlay(tmp_path: Path) -
     assert result["recommended_quote_total"] is not None
 
 
-def test_dispatch_and_diary_tools_return_read_only_summaries(tmp_path: Path) -> None:
+def test_dispatch_and_diary_tools_return_read_only_summaries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CORKYSOFT_MCP_DB_ROOTS", str(tmp_path))
     db_path = tmp_path / "ops.db"
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -305,7 +313,11 @@ def test_dispatch_and_diary_tools_return_read_only_summaries(tmp_path: Path) -> 
     assert diary_response["result"]["jobs"][0]["invoiceStatus"] == "ready_to_invoice"
 
 
-def test_profitability_summary_tool_returns_model_and_validation(tmp_path: Path) -> None:
+def test_profitability_summary_tool_returns_model_and_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CORKYSOFT_MCP_DB_ROOTS", str(tmp_path))
     db_path = tmp_path / "profit.db"
     conn = sqlite3.connect(db_path)
     try:
@@ -372,3 +384,30 @@ def test_profitability_summary_tool_returns_model_and_validation(tmp_path: Path)
     assert result["model"]["fittedJobCount"] == 8
     assert result["validation"]["trustLabel"] in {"reviewable", "caution", "low_support", "insufficient_data"}
     assert isinstance(result["preview"], list)
+
+
+def test_mcp_tool_rejects_db_path_outside_allowed_roots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allowed_root = tmp_path / "allowed"
+    outside_root = tmp_path / "outside"
+    allowed_root.mkdir()
+    outside_root.mkdir()
+    monkeypatch.setenv("CORKYSOFT_MCP_DB_ROOTS", str(allowed_root))
+
+    response = _call_tool(
+        "corkysoft.quote_guidance_preview",
+        {
+            "db_path": str(outside_root / "quote.db"),
+            "origin_resolved": "Brisbane",
+            "destination_resolved": "Gold Coast",
+            "cubic_m": 10.0,
+            "current_quote_total": 2500.0,
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "input_error"
+    assert "allowed MCP DB root" in response["error"]["message"]
+    assert response["error"]["details"]["field"] == "db_path"

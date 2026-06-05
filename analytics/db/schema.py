@@ -562,6 +562,7 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
     _ensure_worker_absence_records_table(conn)
     _ensure_operations_diary_tables(conn)
     _ensure_dashboard_user_tables(conn)
+    _ensure_api_write_receipts_table(conn)
     conn.commit()
 
     for table_name in (
@@ -584,11 +585,44 @@ def ensure_dashboard_tables(conn: sqlite3.Connection) -> None:
         "customer_invoice_reviews",
         "subcontractor_bill_reviews",
         "dashboard_users",
+        "api_write_receipts",
     ):
         if not _table_exists(conn, table_name):
             conn.execute(
                 f"SELECT RAISE(FAIL, 'Failed to create {table_name} during bootstrap')"
             )
+
+
+def _ensure_api_write_receipts_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS api_write_receipts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            credential_id TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            scopes_json TEXT NOT NULL,
+            action TEXT NOT NULL,
+            resource_type TEXT NOT NULL,
+            resource_id TEXT NOT NULL,
+            request_id TEXT NOT NULL,
+            route TEXT,
+            method TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_api_write_receipts_request
+            ON api_write_receipts(request_id, created_at DESC)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_api_write_receipts_resource
+            ON api_write_receipts(resource_type, resource_id, created_at DESC)
+        """
+    )
 
 
 def _ensure_dashboard_user_tables(conn: sqlite3.Connection) -> None:

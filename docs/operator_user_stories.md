@@ -9,6 +9,12 @@ Shell note:
 - the surfaces named below such as `Quote builder`, `Dispatch`, `Planner`,
   `Operations diary`, and `Kent admin` are nested workflows within those shell
   views, not the top-level navigation model
+- role-to-shell and role-to-leaf ownership comes from
+  [UI Role Coverage Matrix](ui_role_coverage_matrix.md)
+- customer-visible status, notification, receipt, support, worker execution,
+  and job-completion gates come from
+  [Service Blueprint](service_blueprint.md)
+- this document owns actor triggers, decisions, inputs, outputs, and actions
 
 ## Estimator
 
@@ -418,8 +424,8 @@ Operator actions:
 ## Inventory / Supplier Coordinator
 
 Primary surfaces:
-- `Inventory`
-- `Dispatch`
+- `Operations` -> `Inventory`
+- `Operations` -> `Dispatch`
 
 Trigger:
 - Inventory, supplier coordination, or segment allocations need review.
@@ -462,8 +468,8 @@ Operator actions:
 ## Workforce Time Capture Coordinator
 
 Primary surfaces:
-- `Staff`
-- `Driver shifts`
+- `Operations` -> `Staff`
+- `Operations` -> `Driver shifts`
 
 Secondary surfaces:
 - future time-capture intake/review surface
@@ -503,8 +509,9 @@ Substitution authority:
 ## System / Rollout Admin
 
 Primary surfaces:
-- `Fleet`
-- admin/import areas in `Staff`, `Inventory`, and `Driver shifts`
+- `Admin`
+- governed import/admin areas in `Operations` -> `Staff`, `Inventory`, and
+  `Driver shifts`
 
 Trigger:
 - Operational source data must be refreshed, or spreadsheet cutover state must be governed.

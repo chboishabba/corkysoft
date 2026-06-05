@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Path, Query
+from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field
 
 from analytics.db import fetch_driver_shifts
@@ -19,7 +19,14 @@ from analytics.operations_diary import (
 from analytics.operations_workbook import sync_operations_workbook
 from corkysoft.api_calls import router as calls_router
 from corkysoft.api_operations import router as operations_router
-from corkysoft.api_shared import _current_db_path, require_internal_api_token
+from corkysoft.api_shared import (
+    IMPORT_WRITE_SCOPE,
+    ApiAuthContext,
+    _current_db_path,
+    record_api_write_receipt,
+    require_api_auth_context,
+    require_internal_api_read_token,
+)
 from corkysoft.call_ops import (
     WORKER_TIME_CHANNELS,
     WORKER_TIME_EVENT_TYPES,
@@ -241,6 +248,7 @@ class ImportSummary(BaseModel):
 
 
 app = FastAPI(title="Corkysoft API", version="0.1.0")
+require_import_write = require_api_auth_context((IMPORT_WRITE_SCOPE,))
 app.include_router(calls_router)
 app.include_router(kent_router)
 app.include_router(labor_router)
@@ -313,9 +321,10 @@ def _build_job_response(row: Any) -> JobResponse:
     summary="Import MoveWare data",
 )
 def import_moveware_resource(
+    request: Request,
     resource: str = Path(..., description="MoveWare resource identifier"),
     payload: MovewareImportRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_import_write),
 ) -> ImportSummary:
     """Return a summary for an incoming MoveWare import request."""
 
@@ -325,6 +334,15 @@ def import_moveware_resource(
         payload.records,
         dry_run=payload.dry_run,
     )
+    with connection_scope(_current_db_path()) as conn:
+        record_api_write_receipt(
+            conn,
+            auth=auth,
+            action="import.moveware",
+            resource_type="moveware_import",
+            resource_id=resource,
+            request=request,
+        )
     return ImportSummary(
         resource=resource,
         imported=len(payload.records),
@@ -338,9 +356,10 @@ def import_moveware_resource(
     summary="Import Kent AMS adapter data",
 )
 def import_kent_ams_resource(
+    request: Request,
     resource: str = Path(..., description="Kent AMS resource identifier"),
     payload: MovewareImportRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_import_write),
 ) -> ImportSummary:
     """Return a summary for an incoming Kent AMS adapter import request."""
 
@@ -350,6 +369,15 @@ def import_kent_ams_resource(
         payload.records,
         dry_run=payload.dry_run,
     )
+    with connection_scope(_current_db_path()) as conn:
+        record_api_write_receipt(
+            conn,
+            auth=auth,
+            action="import.kent_ams",
+            resource_type="kent_ams_import",
+            resource_id=resource,
+            request=request,
+        )
     return ImportSummary(
         resource=resource,
         imported=len(payload.records),
@@ -362,7 +390,10 @@ def import_kent_ams_resource(
     response_model=JobResponse,
     summary="Fetch a job by its identifier",
 )
-def get_job(jobId: str = Path(..., description="Unique job identifier")) -> JobResponse:
+def get_job(
+    jobId: str = Path(..., description="Unique job identifier"),
+    _auth: None = Depends(require_internal_api_read_token),
+) -> JobResponse:
     """Return a job from the ``jobs`` table."""
 
     with connection_scope(_current_db_path()) as conn:
@@ -395,6 +426,7 @@ def list_driver_shifts(
     trucks: Optional[List[str]] = Query(
         default=None, description="Filter results to specific truck identifiers"
     ),
+    _auth: None = Depends(require_internal_api_read_token),
 ) -> List[DriverShiftResponse]:
     """Return driver shifts stored in the ``driver_shifts`` table."""
 

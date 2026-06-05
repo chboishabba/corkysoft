@@ -6,6 +6,11 @@ from typing import Any, Sequence
 
 from .call_ops import (
     CALL_TRANSCRIPT_STATUSES,
+    TRANSCRIPT_AUTHORITY_CLASS,
+    TRANSCRIPT_DATA_CLASSIFICATION_FAILED,
+    TRANSCRIPT_DATA_CLASSIFICATION_OBSERVER,
+    TRANSCRIPT_DATA_CLASSIFICATION_SYNTHETIC,
+    TRANSCRIPT_DATA_CLASSIFICATIONS,
     _emit_state_event,
     _utc_now,
     ensure_call_ops_tables,
@@ -13,6 +18,29 @@ from .call_ops import (
     get_call_event,
     get_call_leg,
 )
+
+_MAX_ERROR_MESSAGE_CHARS = 500
+
+
+def _sanitize_error_message(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = " ".join(str(value).replace("\x00", "").split())
+    if len(text) > _MAX_ERROR_MESSAGE_CHARS:
+        return text[: _MAX_ERROR_MESSAGE_CHARS - 3] + "..."
+    return text or None
+
+
+def _classification_for_status(
+    status: str,
+    *,
+    requested: str | None = None,
+) -> str:
+    if requested in TRANSCRIPT_DATA_CLASSIFICATIONS:
+        return requested
+    if status == "failed":
+        return TRANSCRIPT_DATA_CLASSIFICATION_FAILED
+    return TRANSCRIPT_DATA_CLASSIFICATION_OBSERVER
 
 
 def record_transcript_artifact(
@@ -29,6 +57,9 @@ def record_transcript_artifact(
     confidence: float | None = None,
     is_final: bool = False,
     error_message: str | None = None,
+    data_classification: str | None = None,
+    authority_class: str = TRANSCRIPT_AUTHORITY_CLASS,
+    failure_kind: str | None = None,
 ) -> dict[str, Any]:
     ensure_call_ops_tables(conn)
     if call_event_id is None and call_leg_id is None:
@@ -47,14 +78,20 @@ def record_transcript_artifact(
         ).fetchone()
         session_id = int(session_row["id"]) if session_row is not None else None
     normalized_status = status if status in CALL_TRANSCRIPT_STATUSES else "queued"
+    normalized_classification = _classification_for_status(
+        normalized_status,
+        requested=data_classification,
+    )
+    sanitized_error = _sanitize_error_message(error_message)
     timestamp = _utc_now()
     cursor = conn.execute(
         """
         INSERT INTO call_transcript_artifacts (
             call_event_id, call_session_id, call_leg_id, service_key, external_task_id, status, transcript_text,
             transcript_segments_json, diarization_json, confidence, is_final, error_message,
+            data_classification, authority_class, failure_kind,
             created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             call_event_id,
@@ -68,7 +105,10 @@ def record_transcript_artifact(
             json.dumps(list(diarization or [])),
             confidence,
             1 if is_final else 0,
-            error_message,
+            sanitized_error,
+            normalized_classification,
+            authority_class,
+            failure_kind,
             timestamp,
             timestamp,
         ),
@@ -98,8 +138,11 @@ def record_transcript_artifact(
             "serviceKey": service_key,
             "externalTaskId": external_task_id,
             "isFinal": bool(is_final),
+            "dataClassification": normalized_classification,
+            "authorityClass": authority_class,
+            "failureKind": failure_kind,
         },
-        authority_class="observer_capture_ref",
+        authority_class=authority_class,
         correlation_id=call["correlationId"] if call is not None else None,
         occurred_at=timestamp,
     )
@@ -168,6 +211,7 @@ def generate_fake_transcript_artifact(
         diarization=[],
         confidence=0.5,
         is_final=True,
+        data_classification=TRANSCRIPT_DATA_CLASSIFICATION_SYNTHETIC,
     )
 
 
@@ -192,6 +236,13 @@ def get_transcript_artifact(conn: sqlite3.Connection, artifact_id: int) -> dict[
         "confidence": row["confidence"],
         "isFinal": bool(row["is_final"]),
         "errorMessage": row["error_message"],
+        "dataClassification": row["data_classification"]
+        if "data_classification" in row.keys()
+        else TRANSCRIPT_DATA_CLASSIFICATION_OBSERVER,
+        "authorityClass": row["authority_class"]
+        if "authority_class" in row.keys()
+        else TRANSCRIPT_AUTHORITY_CLASS,
+        "failureKind": row["failure_kind"] if "failure_kind" in row.keys() else None,
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
     }
@@ -280,7 +331,16 @@ def poll_transcript_artifact(conn: sqlite3.Connection, *, artifact_id: int) -> d
     transcript_segments: list[dict[str, Any]] = []
     diarization: list[dict[str, Any]] = []
     confidence: float | None = None
-    error_message = payload.get("message") if normalized_status == "failed" else None
+    error_message = (
+        _sanitize_error_message(payload.get("message") or payload.get("error"))
+        if normalized_status == "failed"
+        else None
+    )
+    normalized_persisted_status = (
+        normalized_status if normalized_status in CALL_TRANSCRIPT_STATUSES else "queued"
+    )
+    data_classification = _classification_for_status(normalized_persisted_status)
+    failure_kind = "adapter_task_failed" if normalized_persisted_status == "failed" else None
     if isinstance(result, list):
         transcript_segments = [segment for segment in result if isinstance(segment, dict)]
         transcript_text = "\n".join(
@@ -307,22 +367,26 @@ def poll_transcript_artifact(conn: sqlite3.Connection, *, artifact_id: int) -> d
         """
         UPDATE call_transcript_artifacts
         SET status = ?, transcript_text = ?, transcript_segments_json = ?,
-            diarization_json = ?, confidence = ?, is_final = ?, error_message = ?, updated_at = ?
+            diarization_json = ?, confidence = ?, is_final = ?, error_message = ?,
+            data_classification = ?, authority_class = ?, failure_kind = ?, updated_at = ?
         WHERE id = ?
         """,
         (
-            normalized_status if normalized_status in CALL_TRANSCRIPT_STATUSES else "queued",
+            normalized_persisted_status,
             transcript_text,
             json.dumps(transcript_segments),
             json.dumps(diarization),
             confidence,
-            1 if normalized_status == "completed" else 0,
+            1 if normalized_persisted_status in {"completed", "failed"} else 0,
             error_message,
+            data_classification,
+            TRANSCRIPT_AUTHORITY_CLASS,
+            failure_kind,
             timestamp,
             artifact_id,
         ),
     )
-    if normalized_status == "completed":
+    if normalized_persisted_status == "completed":
         if artifact["callEventId"] is not None:
             conn.execute(
                 "UPDATE call_events SET processed_at = ?, updated_at = ? WHERE id = ?",
@@ -337,16 +401,25 @@ def poll_transcript_artifact(conn: sqlite3.Connection, *, artifact_id: int) -> d
     _emit_state_event(
         conn,
         source_entity_id=f"call_leg:{artifact['callLegId']}" if artifact.get("callLegId") is not None else f"call_event:{artifact['callEventId']}",
-        event_type="transcript_available" if normalized_status == "completed" else "transcript_task_updated",
+        event_type=(
+            "transcript_available"
+            if normalized_persisted_status == "completed"
+            else "transcript_task_failed"
+            if normalized_persisted_status == "failed"
+            else "transcript_task_updated"
+        ),
         payload={
             "callEventId": artifact["callEventId"],
             "callSessionId": artifact.get("callSessionId"),
             "callLegId": artifact.get("callLegId"),
             "artifactId": artifact_id,
-            "status": normalized_status,
+            "status": normalized_persisted_status,
             "externalTaskId": artifact["externalTaskId"],
+            "dataClassification": data_classification,
+            "authorityClass": TRANSCRIPT_AUTHORITY_CLASS,
+            "failureKind": failure_kind,
         },
-        authority_class="observer_capture_ref",
+        authority_class=TRANSCRIPT_AUTHORITY_CLASS,
         correlation_id=call["correlationId"] if call is not None else None,
         occurred_at=timestamp,
     )
@@ -366,18 +439,27 @@ def record_ambient_transcript_artifact(
     confidence: float | None = None,
     is_final: bool = False,
     error_message: str | None = None,
+    data_classification: str | None = None,
+    authority_class: str = TRANSCRIPT_AUTHORITY_CLASS,
+    failure_kind: str | None = None,
 ) -> dict[str, Any]:
     ensure_call_ops_tables(conn)
     ambient = get_ambient_session(conn, ambient_session_id)
     normalized_status = status if status in CALL_TRANSCRIPT_STATUSES else "queued"
+    normalized_classification = _classification_for_status(
+        normalized_status,
+        requested=data_classification,
+    )
+    sanitized_error = _sanitize_error_message(error_message)
     timestamp = _utc_now()
     cursor = conn.execute(
         """
         INSERT INTO ambient_transcript_artifacts (
             ambient_session_id, service_key, status, transcript_text,
             transcript_segments_json, diarization_json, confidence, is_final, error_message,
+            data_classification, authority_class, failure_kind,
             created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             ambient_session_id,
@@ -388,7 +470,10 @@ def record_ambient_transcript_artifact(
             json.dumps(list(diarization or [])),
             confidence,
             1 if is_final else 0,
-            error_message,
+            sanitized_error,
+            normalized_classification,
+            authority_class,
+            failure_kind,
             timestamp,
             timestamp,
         ),
@@ -408,8 +493,11 @@ def record_ambient_transcript_artifact(
             "artifactId": artifact_id,
             "status": normalized_status,
             "serviceKey": service_key,
+            "dataClassification": normalized_classification,
+            "authorityClass": authority_class,
+            "failureKind": failure_kind,
         },
-        authority_class="observer_capture_ref",
+        authority_class=authority_class,
         correlation_id=ambient["correlationId"],
         occurred_at=timestamp,
     )
@@ -450,6 +538,7 @@ def generate_fake_ambient_transcript_artifact(
         diarization=[],
         confidence=0.5,
         is_final=True,
+        data_classification=TRANSCRIPT_DATA_CLASSIFICATION_SYNTHETIC,
     )
 
 
@@ -471,6 +560,13 @@ def get_ambient_transcript_artifact(conn: sqlite3.Connection, artifact_id: int) 
         "confidence": row["confidence"],
         "isFinal": bool(row["is_final"]),
         "errorMessage": row["error_message"],
+        "dataClassification": row["data_classification"]
+        if "data_classification" in row.keys()
+        else TRANSCRIPT_DATA_CLASSIFICATION_OBSERVER,
+        "authorityClass": row["authority_class"]
+        if "authority_class" in row.keys()
+        else TRANSCRIPT_AUTHORITY_CLASS,
+        "failureKind": row["failure_kind"] if "failure_kind" in row.keys() else None,
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
     }

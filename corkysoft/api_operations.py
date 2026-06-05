@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field
 
 from analytics.db.inventory import (
@@ -33,9 +33,44 @@ from analytics.operations_assignment import (
     upsert_operations_cutover_workflow,
 )
 from analytics.operations_workbook import sync_operations_workbook
-from corkysoft.api_shared import _current_db_path, require_internal_api_token
+from corkysoft.api_shared import (
+    OPERATIONS_CUTOVER_APPROVE_SCOPE,
+    OPERATIONS_CUTOVER_WRITE_SCOPE,
+    OPERATIONS_WRITE_SCOPE,
+    ApiAuthContext,
+    _current_db_path,
+    record_api_write_receipt,
+    require_api_auth_context,
+    require_internal_api_read_token,
+)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_internal_api_read_token)])
+require_operations_cutover_write = require_api_auth_context(
+    (OPERATIONS_CUTOVER_WRITE_SCOPE,)
+)
+require_operations_cutover_approval = require_api_auth_context(
+    (OPERATIONS_CUTOVER_APPROVE_SCOPE,)
+)
+require_operations_write = require_api_auth_context((OPERATIONS_WRITE_SCOPE,))
+
+
+def _receipt(
+    conn,
+    *,
+    auth: ApiAuthContext,
+    action: str,
+    resource_type: str,
+    resource_id: object,
+    request: Request,
+) -> None:
+    record_api_write_receipt(
+        conn,
+        auth=auth,
+        action=action,
+        resource_type=resource_type,
+        resource_id=str(resource_id),
+        request=request,
+    )
 
 
 class OperationsPolicyResponse(BaseModel):
@@ -338,8 +373,9 @@ def get_operations_assignment_policy() -> OperationsPolicyResponse:
 
 @router.put("/operations/policy", response_model=OperationsPolicyResponse, summary="Update operational readiness policy defaults")
 def put_operations_assignment_policy(
+    request: Request,
     payload: OperationsPolicyUpdateRequest,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_operations_write),
 ) -> OperationsPolicyResponse:
     with connection_scope(_current_db_path()) as conn:
         updated = update_operations_policy(
@@ -353,26 +389,44 @@ def put_operations_assignment_policy(
             service_override_allowed=payload.serviceOverrideAllowed,
             conflict_override_allowed=payload.conflictOverrideAllowed,
         )
+        _receipt(
+            conn,
+            auth=auth,
+            action="operations.policy.update",
+            resource_type="operations_policy",
+            resource_id="default",
+            request=request,
+        )
     return OperationsPolicyResponse(**updated)
 
 
 @router.post("/operations/sync", response_model=OperationsSyncResponse, summary="Sync the shared operations workbook")
 def post_operations_sync(
+    request: Request,
     payload: OperationsSyncRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_operations_write),
 ) -> OperationsSyncResponse:
     from corkysoft import api as api_module
 
     sync_workbook = getattr(api_module, "sync_operations_workbook", sync_operations_workbook)
     with connection_scope(_current_db_path()) as conn:
         summary = sync_workbook(conn, sheet_id_or_url=payload.reference)
+        _receipt(
+            conn,
+            auth=auth,
+            action="operations.workbook.sync",
+            resource_type="operations_workbook",
+            resource_id=payload.reference or "configured",
+            request=request,
+        )
     return OperationsSyncResponse(**summary)
 
 
 @router.post("/operations/segments", response_model=SegmentReadinessResponse, summary="Create or update a job segment for planning")
 def post_operations_segment(
+    request: Request,
     payload: SegmentEnsureRequest,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_operations_write),
 ) -> SegmentReadinessResponse:
     with connection_scope(_current_db_path()) as conn:
         segment = ensure_segment(
@@ -385,6 +439,14 @@ def post_operations_segment(
             planned_end=payload.plannedEnd,
         )
         row = next(item for item in list_segment_readiness(conn, job_id=payload.jobId) if item["segmentId"] == int(segment["id"]))
+        _receipt(
+            conn,
+            auth=auth,
+            action="operations.segment.ensure",
+            resource_type="job_segment",
+            resource_id=segment["id"],
+            request=request,
+        )
     return SegmentReadinessResponse(**row)
 
 
@@ -400,9 +462,10 @@ def get_operations_segment_readiness(
 
 @router.post("/operations/segments/{segment_id}/assign", response_model=SegmentReadinessResponse, summary="Assign trucks and workers to a job segment")
 def post_operations_segment_assignment(
+    request: Request,
     segment_id: int = Path(..., description="Segment identifier"),
     payload: SegmentAssignmentRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_operations_write),
 ) -> SegmentReadinessResponse:
     with connection_scope(_current_db_path()) as conn:
         try:
@@ -414,6 +477,14 @@ def post_operations_segment_assignment(
                 override=payload.override,
                 override_reason_code=payload.overrideReasonCode,
                 override_note=payload.overrideNote,
+            )
+            _receipt(
+                conn,
+                auth=auth,
+                action="operations.segment.assign",
+                resource_type="job_segment",
+                resource_id=segment_id,
+                request=request,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -442,9 +513,10 @@ def get_operations_readiness_resources(
 
 @router.post("/operations/workers/{worker_id}/roles", summary="Assign a role to a worker for operational planning")
 def post_operations_worker_role(
+    request: Request,
     worker_id: int = Path(..., description="Worker identifier"),
     payload: WorkerRoleAssignmentRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_operations_write),
 ) -> dict[str, Any]:
     if payload.roleId is None and not (payload.roleName or "").strip():
         raise HTTPException(status_code=400, detail="Provide roleId or roleName")
@@ -452,6 +524,14 @@ def post_operations_worker_role(
         try:
             role_id = int(payload.roleId) if payload.roleId is not None else ensure_worker_role(conn, name=str(payload.roleName).strip(), description=payload.description or "")
             assign_worker_role(conn, worker_id=worker_id, role_id=role_id)
+            _receipt(
+                conn,
+                auth=auth,
+                action="operations.worker_role.assign",
+                resource_type="worker",
+                resource_id=worker_id,
+                request=request,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"workerId": worker_id, "roleId": role_id}
@@ -459,9 +539,10 @@ def post_operations_worker_role(
 
 @router.post("/operations/workers/{worker_id}/compliances", summary="Assign a compliance to a worker for operational planning")
 def post_operations_worker_compliance(
+    request: Request,
     worker_id: int = Path(..., description="Worker identifier"),
     payload: WorkerComplianceAssignmentRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_operations_write),
 ) -> dict[str, Any]:
     if payload.complianceId is None and not (payload.complianceName or "").strip():
         raise HTTPException(status_code=400, detail="Provide complianceId or complianceName")
@@ -469,6 +550,14 @@ def post_operations_worker_compliance(
         try:
             compliance_id = int(payload.complianceId) if payload.complianceId is not None else ensure_worker_compliance(conn, name=str(payload.complianceName).strip(), description=payload.description or "")
             assign_worker_compliance(conn, worker_id=worker_id, compliance_id=compliance_id, expiry_date=payload.expiryDate)
+            _receipt(
+                conn,
+                auth=auth,
+                action="operations.worker_compliance.assign",
+                resource_type="worker",
+                resource_id=worker_id,
+                request=request,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"workerId": worker_id, "complianceId": compliance_id, "expiryDate": payload.expiryDate}
@@ -501,9 +590,10 @@ def get_operations_cutover_workflows() -> List[OperationsCutoverWorkflowResponse
 
 @router.put("/operations/cutover/workflows/{workflow_key}", response_model=OperationsCutoverWorkflowResponse, summary="Update workflow cutover status and fallback rules")
 def put_operations_cutover_workflow(
+    request: Request,
     workflow_key: str = Path(..., description="Workflow identifier"),
     payload: OperationsCutoverWorkflowUpdateRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_operations_cutover_write),
 ) -> OperationsCutoverWorkflowResponse:
     with connection_scope(_current_db_path()) as conn:
         try:
@@ -525,63 +615,107 @@ def put_operations_cutover_workflow(
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        record_api_write_receipt(
+            conn,
+            auth=auth,
+            action="operations_cutover_workflow_updated",
+            resource_type="operations_cutover_workflow",
+            resource_id=workflow_key,
+            request=request,
+        )
         row = next(item for item in list_operations_cutover_rollout(conn) if item["workflowKey"] == workflow_key)
     return OperationsCutoverWorkflowResponse(**row)
 
 
 @router.post("/operations/cutover/workflows/{workflow_key}/request-promotion", response_model=OperationsCutoverWorkflowResponse, summary="Request the next guarded cutover promotion")
 def post_operations_cutover_request_promotion(
+    request: Request,
     workflow_key: str = Path(..., description="Workflow identifier"),
     payload: OperationsCutoverPromotionRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_operations_cutover_write),
 ) -> OperationsCutoverWorkflowResponse:
     with connection_scope(_current_db_path()) as conn:
         try:
-            row = request_operations_cutover_promotion(conn, workflow_key=workflow_key, actor=payload.actor, note=payload.note, target_status=payload.targetStatus)
+            row = request_operations_cutover_promotion(conn, workflow_key=workflow_key, actor=auth.actor, note=payload.note, target_status=payload.targetStatus)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        record_api_write_receipt(
+            conn,
+            auth=auth,
+            action="operations_cutover_promotion_requested",
+            resource_type="operations_cutover_workflow",
+            resource_id=workflow_key,
+            request=request,
+        )
     return OperationsCutoverWorkflowResponse(**row)
 
 
 @router.post("/operations/cutover/workflows/{workflow_key}/approve-promotion", response_model=OperationsCutoverWorkflowResponse, summary="Approve the next guarded cutover promotion")
 def post_operations_cutover_approve_promotion(
+    request: Request,
     workflow_key: str = Path(..., description="Workflow identifier"),
     payload: OperationsCutoverPromotionDecisionRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_operations_cutover_approval),
 ) -> OperationsCutoverWorkflowResponse:
     with connection_scope(_current_db_path()) as conn:
         try:
-            row = approve_operations_cutover_promotion(conn, workflow_key=workflow_key, actor=payload.actor, note=payload.note, target_status=payload.targetStatus)
+            row = approve_operations_cutover_promotion(conn, workflow_key=workflow_key, actor=auth.actor, note=payload.note, target_status=payload.targetStatus)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        record_api_write_receipt(
+            conn,
+            auth=auth,
+            action="operations_cutover_promotion_approved",
+            resource_type="operations_cutover_workflow",
+            resource_id=workflow_key,
+            request=request,
+        )
     return OperationsCutoverWorkflowResponse(**row)
 
 
 @router.post("/operations/cutover/workflows/{workflow_key}/reject-promotion", response_model=OperationsCutoverWorkflowResponse, summary="Reject the next guarded cutover promotion")
 def post_operations_cutover_reject_promotion(
+    request: Request,
     workflow_key: str = Path(..., description="Workflow identifier"),
     payload: OperationsCutoverPromotionDecisionRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_operations_cutover_approval),
 ) -> OperationsCutoverWorkflowResponse:
     with connection_scope(_current_db_path()) as conn:
         try:
-            row = reject_operations_cutover_promotion(conn, workflow_key=workflow_key, actor=payload.actor, note=payload.note or "", target_status=payload.targetStatus)
+            row = reject_operations_cutover_promotion(conn, workflow_key=workflow_key, actor=auth.actor, note=payload.note or "", target_status=payload.targetStatus)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        record_api_write_receipt(
+            conn,
+            auth=auth,
+            action="operations_cutover_promotion_rejected",
+            resource_type="operations_cutover_workflow",
+            resource_id=workflow_key,
+            request=request,
+        )
     return OperationsCutoverWorkflowResponse(**row)
 
 
 @router.post("/operations/cutover/workflows/{workflow_key}/apply-recommendation", response_model=OperationsCutoverWorkflowResponse, summary="Apply the guarded recommended cutover transition")
 def post_operations_cutover_apply_recommendation(
+    request: Request,
     workflow_key: str = Path(..., description="Workflow identifier"),
     payload: OperationsCutoverTransitionRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_operations_cutover_write),
 ) -> OperationsCutoverWorkflowResponse:
     with connection_scope(_current_db_path()) as conn:
         try:
-            row = apply_operations_cutover_recommendation(conn, workflow_key=workflow_key, actor=payload.actor, note=payload.note)
+            row = apply_operations_cutover_recommendation(conn, workflow_key=workflow_key, actor=auth.actor, note=payload.note)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        record_api_write_receipt(
+            conn,
+            auth=auth,
+            action="operations_cutover_recommendation_applied",
+            resource_type="operations_cutover_workflow",
+            resource_id=workflow_key,
+            request=request,
+        )
     return OperationsCutoverWorkflowResponse(**row)
 
 
@@ -598,9 +732,10 @@ def get_operations_cutover_events(
 
 @router.post("/operations/cutover/workflows/{workflow_key}/events", response_model=OperationsCutoverEventResponse, summary="Record a spreadsheet cutover event")
 def post_operations_cutover_event(
+    request: Request,
     workflow_key: str = Path(..., description="Workflow identifier"),
     payload: OperationsCutoverEventRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_operations_cutover_write),
 ) -> OperationsCutoverEventResponse:
     with connection_scope(_current_db_path()) as conn:
         try:
@@ -608,21 +743,30 @@ def post_operations_cutover_event(
                 conn,
                 workflow_key=workflow_key,
                 event_type=payload.eventType,
-                actor=payload.actor,
+                actor=auth.actor,
                 note=payload.note,
                 event_value=payload.eventValue,
                 created_at=payload.createdAt,
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        record_api_write_receipt(
+            conn,
+            auth=auth,
+            action=f"operations_cutover_event:{payload.eventType}",
+            resource_type="operations_cutover_workflow",
+            resource_id=workflow_key,
+            request=request,
+        )
     return OperationsCutoverEventResponse(**row)
 
 
 @router.post("/operations/inventory/segments/{segment_id}/allocate", summary="Allocate inventory to a planned job segment")
 def post_operations_inventory_allocation(
+    request: Request,
     segment_id: int = Path(..., description="Segment identifier"),
     payload: SegmentInventoryAllocationRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_operations_write),
 ) -> dict[str, Any]:
     with connection_scope(_current_db_path()) as conn:
         try:
@@ -632,6 +776,14 @@ def post_operations_inventory_allocation(
                 inventory_item_id=payload.inventoryItemId,
                 quantity=payload.quantity,
                 status=payload.status,
+            )
+            _receipt(
+                conn,
+                auth=auth,
+                action="operations.inventory.allocate",
+                resource_type="job_segment_shipment",
+                resource_id=shipment["id"],
+                request=request,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -142,6 +142,16 @@ The contract is therefore no longer docs-only. The local bridge and registry
 are implemented, but transport hardening and any mutable tool posture remain
 deferred.
 
+MCP database access is root-scoped. Tools may accept `db_path` for local
+test/agent scenarios, but the resolved path must sit under one of:
+
+- the Corkysoft repository root
+- roots listed in `CORKYSOFT_MCP_DB_ROOTS`, separated by the platform path
+  separator
+- the parent directory of `CORKYSOFT_DB` or `ROUTES_DB`, when configured
+
+Out-of-root `db_path` values fail with an `input_error` envelope.
+
 ## Governance
 
 Promotion criteria for the first implementation:
@@ -154,6 +164,8 @@ Promotion criteria for the first implementation:
 - `tests/test_mcp_tools.py` now enforces the read-only posture by asserting every `ToolSpec` declares `read_only=True`
 - `tests/test_mcp_tools.py` also locks the documented tool names and response_version in place so automation clients can rely on the public contract
 - `tests/test_mcp_tools.py` now asserts error_payload preserves the execution_error code and details when tool execution fails, keeping the governance contract explicit
+- `tests/test_corkysoft_mcp.py` now verifies caller-supplied `db_path` values
+  are constrained to configured MCP DB roots
 
 Do not promote mutable tools until Corkysoft auth, audit, and operator-policy
 boundaries are strong enough to govern them.

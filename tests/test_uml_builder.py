@@ -125,7 +125,10 @@ def test_index_includes_rendered_svg_entrypoints() -> None:
     index = artifacts[index_path]
     assert "[supermega_01.svg](rendered/svg/supermega_01.svg)" in index
     assert "[dashboard_shell.svg](rendered/svg/dashboard_shell.svg)" in index
-    assert "`python scripts/build_supermega_uml.py --render`" in index
+    assert "[service_blueprint_flows.puml](diagrams/service_blueprint_flows.puml)" in index
+    assert "[service_blueprint_flows.svg](diagrams/service_blueprint_flows.svg)" in index
+    assert "[service_blueprint_flows.png](diagrams/service_blueprint_flows.png)" in index
+    assert "`venv/bin/python scripts/build_supermega_uml.py --render`" in index
 
 
 def test_renderable_plantuml_paths_and_svg_targets() -> None:

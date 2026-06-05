@@ -2,6 +2,69 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 
 ---
 
+## Active Audit Update (2026-06-04)
+
+Current canonical status surface:
+
+- [docs/progress_status_board.md](docs/progress_status_board.md) is the
+  current implementation/status tracker.
+- [docs/known_bad_cases.md](docs/known_bad_cases.md) is the canonical register
+  for confirmed bugs, bad cases, accepted risks, owner lanes, and promotion
+  gates.
+- Historical roadmap tables below remain useful context, but they are lower
+  authority than the active wave, progress board, and known-bad-case register.
+
+Priority order for the next execution wave:
+
+1. **P0 security and authority boundary.**
+   Gate sensitive REST reads, replace the single shared write token with scoped
+   service credentials, bind high-authority actions to actor/scope/receipt, and
+   add payload/resource limits for transcript, WhisperX, and MCP paths.
+   Sensitive REST reads now require the internal API token across the current
+   API routers, and transcript/audio uploads now enforce first-pass payload and
+   adapter-boundary limits. MCP `db_path` access is now constrained to
+   configured roots. Scoped credentials, actor-bound writes, and API write
+   receipts now cover operations planning/cutover, calls/transcripts,
+   worker-time review, Kent tender/config writes, labor absence, and
+   MoveWare/Kent importer writes. Remaining P0 work is credential
+   rotation/deprecation docs, exhaustive denial/receipt coverage, and reviewed
+   transcript-promotion governance.
+2. **P1 operator-breaking and decision-misleading bugs.**
+   Fix authenticated hidden-tab reveal, Dispatch empty-filter crashes, broken
+   MoveWare/non-dry-run import paths, CLI history import column drift, and
+   ambiguous margin/date-window/cost-inference analytics.
+3. **P1 control-plane and CI reproducibility.**
+   Make CI run repo-venv pytest plus root Playwright smoke, separate screenshot
+   artifact generation, and remove implicit `git pull`/system-tool startup
+   behavior from scripts.
+4. **P2 roadmap/data-contract hardening.**
+   Finish support-safe workspace-state replay, source shell KPI/alert signals,
+   add operational data contracts, and keep generated UML freshness visible.
+5. **Future product lanes.**
+   Customer tracking/receipts, richer planner/media/CV workflows,
+   international/compliance-heavy work, and deeper solver work should wait
+   until the security, import, and decision-quality gates are under control.
+
+zkSEC-informed security gates:
+
+- treat public or uncertain signals as proposal-only
+- require verified actor identity, authorized scope, plan/receipt metadata, and
+  explicit approval for high-authority actions
+- keep adapter resources inside declared roots and reject secret-like payloads
+- prevent advisory/model/transcript output from silently becoming operational
+  authority without review
+
+Worker lanes for the audit remediation wave:
+
+| Worker | Lane | Primary outcome | Promotion evidence |
+| --- | --- | --- | --- |
+| Worker 1 | Security/API authority | API-wide authz, scoped service credentials, transcript/WhisperX/MCP boundary controls | unauthenticated denial, scoped access, actor receipt, payload/resource-boundary tests |
+| Worker 2 | Persistence/imports | canonical migrations and working non-dry-run imports | old-DB upgrade tests, MoveWare/Kent importer contract tests, bad-row issue capture |
+| Worker 3 | Dashboard shell | hidden-tab enforcement, Dispatch empty-state guard, role-aware child routing, action semantics | behavioral AppTest/Playwright coverage |
+| Worker 4 | Analytics decision quality | finance semantics, history windows, cost inference, telemetry freshness | tests proving denominators, date windows, coverage metadata, stale GPS behavior |
+| Worker 5 | CI/dev workflow | repo-venv CI matrix and safe startup modes | pytest collection/run in CI, Playwright smoke, separated screenshots, venv-only scripts |
+| Worker 6 | Docs/architecture governance | status-surface cleanup, bad-case register, UML freshness, command guidance | README/ROADMAP/progress/status sync and reviewed doc links |
+
 ## UI Revision Audit (2026-04-02)
 
 The major dashboard-shell revision is materially landed in code.
@@ -122,7 +185,7 @@ Completion evidence:
 - no hard-coded decision-looking KPI/alert payloads remain in shell views
 - tests cover fresh, stale, unknown, and advisory-only signal rendering
 
-### 3. State-addressable shell and regression hardening
+### 2. State-addressable shell and regression hardening
 
 Problem:
 
@@ -164,7 +227,7 @@ Completion evidence:
 - tests cover query-param normalization, role/layout reset, hidden-tab
   rejection, and snapshot rehydration
 
-### 4. Architecture surface normalization
+### 3. Architecture surface normalization
 
 Problem:
 
@@ -190,7 +253,7 @@ Completion evidence:
 - UML freshness is checked when shell topology or control boundaries move
 - no competing hand-curated architecture surface drifts away from generated UML
 
-### 5. Operational data contracts
+### 4. Operational data contracts
 
 Problem:
 
@@ -215,7 +278,7 @@ Completion evidence:
   semantics
 - tests verify contract-driven stale/unknown-state rendering and auditability
 
-### 6. Customer-facing tracking and receipt surfaces
+### 5. Customer-facing tracking and receipt surfaces
 
 Problem:
 
@@ -289,6 +352,12 @@ Sidecars:
 
 - Keep `spec.md`, `plan.md`, `status.json`, and `devlog.md` current during the remediation milestone.
 - Keep `docs/progress_status_board.md` and this roadmap synchronized after any feature status changes.
+- Keep `docs/known_bad_cases.md` current when audits find, fix, downgrade, or accept bugs and bad cases.
+- Keep `docs/service_blueprint.md` current when lifecycle, customer,
+  notification, worker, support, or job-completion expectations change.
+- When role/shell ownership changes, update `docs/ui_role_coverage_matrix.md`
+  first, then refresh `docs/operator_user_stories.md` and
+  `docs/usage_onboarding_guide.md` from it.
 - Validate the deliverable status tables against the current code and tests.
 - Decide whether `corkysoft/src/dashboard` remains a packaging stub or should be wired to the main Streamlit entry point.
 - Maintain `docs/contributor_docs_sync.md` as the contributor-facing rule for README/ROADMAP/progress-board/docs alignment after feature or refactor changes.

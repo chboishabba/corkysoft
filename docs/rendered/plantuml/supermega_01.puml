@@ -30,7 +30,7 @@ entrypoints --> quote_routing_core : routes_to_sqlite -> au_address\nquick_quote
 dashboard_shell --> workflow_surfaces : app -> quote_view\napp -> pricing_intelligence_view\napp -> network_view\napp -> operations_view\napp -> admin_view
 dashboard_shell --> analytics_persistence : app -> price_distribution\nauth_ui -> db\ndata_controls -> price_distribution
 dashboard_shell --> quote_routing_core : app -> quote_service\ndata_controls -> quote_service\ndata -> repo
-workflow_surfaces --> dashboard_shell : quote_view -> theme\npricing_intelligence_view -> theme\nnetwork_view -> theme
+workflow_surfaces --> dashboard_shell : quote_view -> shell_signals\npricing_intelligence_view -> shell_signals\nnetwork_view -> shell_signals
 workflow_surfaces --> analytics_persistence : dispatch -> operations_assignment\ndistribution_overview -> price_distribution\ninventory -> db
 workflow_surfaces --> quote_routing_core : kent -> quote_service\nquote_builder -> quote_service\nquote_builder -> routing
 workflow_surfaces --> integrations_extensions : calls -> call_ops\nworker_time -> call_ops

@@ -1,10 +1,12 @@
 # Progress Status Board
 
-Last updated: **2026-04-02**
+Last updated: **2026-06-04**
 
 This page is the operational tracker for implementation-to-docs alignment. Use
 it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and
-[COMPACTIFIED_CONTEXT.md](../COMPACTIFIED_CONTEXT.md).
+[COMPACTIFIED_CONTEXT.md](../COMPACTIFIED_CONTEXT.md). Confirmed bugs, bad
+cases, accepted risks, owner lanes, and promotion gates live in
+[Known Bugs And Bad Cases](known_bad_cases.md).
 
 ## Progress Snapshot
 
@@ -28,7 +30,18 @@ it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and
 - Historical ingest coverage governance: **🟢 implemented**
 - Observer export for diary/reconciliation: **🟢 implemented**
 - MCP adapter for cross-project/tooling access: **🟡 in progress**
+  Current read-only tools now constrain caller-supplied `db_path` values to
+  configured roots; mutable tool governance remains deferred.
 - Kent payload governance and operator workflow validation: **🟡 in progress**
+- API-wide authz and scoped integration credentials: **🟡 in progress**
+  Sensitive REST reads now require the internal API token across current API
+  routers. Scoped service credentials, actor-bound writes, and API write
+  receipts now cover operations planning/cutover, calls/transcripts,
+  worker-time review, Kent tender/config writes, labor absence, and importer
+  writes; credential rotation/deprecation docs and exhaustive denial/receipt
+  coverage remain blockers for customer-facing automation.
+- Canonical migration/import contract: **🔴 blocker**
+- CI/dev workflow reproducibility: **🟡 in progress**
 
 ## Current Audit Conclusions
 
@@ -63,31 +76,66 @@ it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and
   but the telemetry/ETA substrate is reusable: `analytics/live_data.py`
   already provides `truck_positions`, `active_routes`, route progress, ETA,
   and geometry that can anchor a later customer-facing tracker.
+- BAD-001 is corrected for authenticated sensitive reads across the current API
+  surface. Read-scope granularity remains part of the broader BAD-002 scoped
+  credential and actor-binding work.
+- BAD-002 now covers current high-authority API families: `ApiAuthContext`,
+  scoped write credentials, spoofed body actor override for scoped callers,
+  request IDs, and persisted `api_write_receipts` are test-backed for
+  operations planning/cutover, calls/transcripts, worker-time review, Kent,
+  labor absence, and importer writes. Rotation/deprecation docs and exhaustive
+  write-family denial coverage still need completion.
+- BAD-003 is narrowed to reviewed promotion governance: upload size/content
+  checks, strict base64 decoding, extension allowlists, safer WhisperX adapter
+  JSON/error handling, transcript classification, and failed-artifact metadata
+  are now test-backed.
+- BAD-016 is corrected for v1 read-only MCP tools by constraining `db_path` to
+  configured roots and denying out-of-root paths in the result envelope.
 - Validation note: targeted provider and shell regression suites pass in the
   project virtualenv, including a 133-test focused pass across dashboard shell,
   layout, provider, isochrone, and quote-state coverage; repo guidance is
   being tightened so agent/user execution stays inside the repo venv.
+- 2026-06-04 audit note: six read-only lanes found that the highest current
+  risk is not the five-view shell itself, but security/API authority,
+  persistence/import drift, analytics decision-quality semantics, CI/runtime
+  reproducibility, and the absence of a single bad-case register. The register
+  is now [Known Bugs And Bad Cases](known_bad_cases.md).
+- Security note: `../zkSEC` was used as supporting context for governance
+  expectations. Corkysoft should treat public/uncertain signals as
+  proposal-only, require actor/scope/receipt for high-authority actions, bound
+  adapter resources to declared roots, and block secret-like payloads.
 
 ## Current Wave
 
-- Priority 1: document the five-view shell as the canonical user entry model
-- update onboarding, role coverage, roadmap, and README copy so they explain
-  shell entrypoints first and leaf workflows second
+- Priority 0: secure internal API and integration authority
+- current write routers are migrated to scoped credentials with actor binding
+  and receipts; finish credential rotation/deprecation docs and exhaustive
+  denial/receipt coverage
 
-- Priority 2: harden decision-signal governance in the new views
+- Priority 1: implement reviewed promotion for advisory evidence
+- add scoped actor decisions that accept, reject, or hold transcript,
+  browser/OpenRecall, and PNF-derived evidence before it can influence
+  operational or customer-safe state
+
+- Priority 2: fix operator-breaking and decision-misleading bad cases
+- address hidden-tab reveal, Dispatch empty filters, broken MoveWare/non-dry-run
+  imports, CLI history import drift, ambiguous margin semantics, price-history
+  windows, cost inference, and mock/real telemetry freshness
+
+- Priority 3: harden decision-signal governance in the new views
 - replace static KPI and alert content with sourced metrics, freshness stamps,
   and explicit unknown/fallback states
 
-- Priority 3: keep the shell reviewable
+- Priority 4: keep the shell reviewable
 - expand regression coverage around shared UI primitives, role-layout reset,
   deep-link landing, support-grade workspace sharing, and mixed-surface
   composition boundaries
 
-- Priority 4: normalize the architecture surface
+- Priority 5: normalize the architecture surface
 - keep one reviewed metasystem view and child UML/C4 drill-down set aligned
   with the implemented shell and control boundaries
 
-- Priority 5: formalize operational data contracts
+- Priority 6: formalize operational data contracts
 - require source, owner, freshness, stale-threshold, and fallback semantics for
   decision-adjacent shell data before it is treated as operational truth
 
@@ -97,20 +145,34 @@ it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and
 
 ## Worker Lanes
 
-- Worker 1 lane: sourced shell signals
-- Worker 2 lane: state-addressable shell and regression hardening
-- Worker 3 lane: architecture surface normalization
-- Worker 4 lane: operational data contracts
+- Worker 1 lane: security/API authority
+- Worker 2 lane: persistence/import contracts
+- Worker 3 lane: dashboard shell and role/workspace behavior
+- Worker 4 lane: analytics decision quality
+- Worker 5 lane: CI/dev workflow reproducibility
+- Worker 6 lane: docs/architecture governance
 
 ## Orchestrator Control Map
 
-- Worker 1 control objective: replace shell scaffolding with contract-backed
+- Worker 1 control objective: gate internal REST/MCP/transcript surfaces with
+  scoped actor/scope/receipt controls.
+- Worker 2 control objective: collapse schema/import drift behind a canonical
+  migration and importer contract.
+- Worker 3 control objective: keep role visibility, workspace state, and
+  operator selection flows behaviorally safe.
+- Worker 4 control objective: remove ambiguous denominators, date windows,
+  import inference, and telemetry freshness semantics from decision views.
+- Worker 5 control objective: make repo-venv pytest and Playwright smoke the
+  repeatable control plane.
+- Worker 6 control objective: keep roadmap/progress/known-bad-case/UML surfaces
+  synchronized.
+- Previous signal lane control objective: replace shell scaffolding with contract-backed
   KPI/alert signals that expose source, owner, freshness, and fallback.
-- Worker 2 control objective: make workspace state reproducible, shareable, and
+- Previous workspace lane control objective: make workspace state reproducible, shareable, and
   fail-closed under role and query-param constraints.
-- Worker 3 control objective: keep the reviewed metasystem UML/C4 entrypoint
+- Previous architecture lane control objective: keep the reviewed metasystem UML/C4 entrypoint
   and child shell diagrams aligned with current control boundaries.
-- Worker 4 control objective: make operational data contracts explicit before
+- Previous operational-data lane control objective: make operational data contracts explicit before
   decision-looking signals are promoted as operational truth.
 - Future customer-tracking objective: add a tokenized, public-safe status and
   receipt surface with expiring scoped links, explicit data classification, and
@@ -127,6 +189,8 @@ it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and
 - placeholder signals are either sourced and bounded or clearly labeled as
   non-decision-grade scaffolding
 - decision-adjacent shell data declares owner/freshness/fallback semantics
+- all open P0/P1 items in [Known Bugs And Bad Cases](known_bad_cases.md) are
+  either fixed with evidence or explicitly accepted with owner and review date
 - any future customer-facing tracking link remains tokenized, expiring,
   least-privilege, and auditable rather than mirroring internal shell state
 
@@ -134,6 +198,13 @@ it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and
 
 - Keep [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and role-facing
   docs aligned whenever shell labels or role entrypoints change.
+- Keep [Known Bugs And Bad Cases](known_bad_cases.md) aligned whenever audits
+  find, fix, downgrade, or accept bad cases.
+- Keep [Service Blueprint](service_blueprint.md) aligned whenever lifecycle,
+  customer notification, worker execution, support, or job-completion
+  expectations change.
+- Update [UI Role Coverage Matrix](ui_role_coverage_matrix.md) first when
+  role/shell ownership changes, then refresh stories and onboarding from it.
 - Update the C4/PlantUML dashboard-shell diagrams when the five-view shell
   structure changes materially.
 

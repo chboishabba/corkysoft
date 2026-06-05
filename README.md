@@ -1,4 +1,29 @@
 # corkysoft
+
+## CEO Takeaway
+
+Corkysoft improves the removals workflow from quote to completion.
+
+It connects the main business flows: inquiry, quote, booking, dispatch, crew,
+inventory, ETA, completion, and customer updates.
+
+Today, staff often chase information across calls, MoveWare, dispatch notes,
+drivers, admin, and customer messages. Corkysoft turns that into a guided job
+flow:
+
+**Quote -> Booking -> Dispatch -> Live Status -> Completion -> Receipt / Support**
+
+The value is:
+
+**faster quoting, cleaner handoffs, fewer missed details, better customer
+updates, and stronger proof when a job is complete.**
+
+The governance gates are not the headline. They are the guardrails that make
+automation safe.
+
+The product is the **workflow improvement layer** between messy internal
+operations and polished customer-facing service.
+
 [Live Network](docs/live_network_overview.md)
 [Telemetry](docs/mock_telemetry_workflow.md)
 [Price History](docs/price_history.md)
@@ -16,6 +41,7 @@
 [Multi-Truck Route/Load Optimization](docs/multi_truck_route_load_optimization.md)
 [Operator User Stories](docs/operator_user_stories.md)
 [Usage Onboarding Guide](docs/usage_onboarding_guide.md)
+[Service Blueprint](docs/service_blueprint.md)
 [UI Role Coverage Matrix](docs/ui_role_coverage_matrix.md)
 [Naive User Tester Notes](docs/naive_user_tester_notes.md)
 [Rollout Execution Stories](docs/rollout_execution_user_stories.md)
@@ -26,6 +52,7 @@
 [Job Cost and Invoice Reconciliation](docs/job_cost_and_invoice_reconciliation.md)
 [Adaptive Learning Loop](docs/adaptive_learning_loop.md)
 [Auth Red-Team Plan](docs/auth_red_team_plan.md)
+[API Security And Authority Contract](docs/api_security_authority.md)
 [Corkysoft / SB / ITIR Coverage Audit](docs/corkysoft_sb_itir_coverage_audit.md)
 [Corkysoft -> SB / ITIR Downstream Contract](docs/sb_itir_downstream_contract.md)
 [Corkysoft MCP v1 Contract](docs/corkysoft_mcp_v1.md)
@@ -36,10 +63,14 @@
 [Accommodation Availability Operations](docs/accommodation_availability_operations.md)
 [Call Intelligence Workflow](docs/call_intelligence_workflow.md)
 [Contributor Docs Sync](docs/contributor_docs_sync.md)
+[Known Bugs And Bad Cases](docs/known_bad_cases.md)
 [Roadmap](ROADMAP.md)
 
 
-Route profitability tooling for removals operators. The project couples a command-line workflow for distance lookups and cost capture with a Streamlit dashboard that surfaces price distribution, lane performance, and live telemetry overlays.
+Corkysoft is workflow tooling for removals operators. The project couples
+quote, routing, dispatch, inventory, live status, and completion workflows with
+a Streamlit dashboard that surfaces price distribution, lane performance, and
+live telemetry overlays.
 
 Run `./start_app.sh` or `start_app.bat` to run the app.
 
@@ -57,7 +88,13 @@ Environment rule:
 - Job cost and invoicing review: [Job Cost and Invoice Reconciliation](docs/job_cost_and_invoice_reconciliation.md)
 - Adaptive pricing/ETA/risk policy intent: [Adaptive Learning Loop](docs/adaptive_learning_loop.md)
 - Auth hardening and red-team coverage: [Auth Red-Team Plan](docs/auth_red_team_plan.md)
+- API security and authority contract:
+  [API Security And Authority Contract](docs/api_security_authority.md)
 - Architecture and generated UML suite: [UML Index](docs/UML_INDEX.md)
+- Service blueprint story-path diagram:
+  [source](docs/diagrams/service_blueprint_flows.puml) |
+  [SVG](docs/diagrams/service_blueprint_flows.svg) |
+  [PNG](docs/diagrams/service_blueprint_flows.png)
 - Cross-project coverage and boundary audit: [Corkysoft / SB / ITIR Coverage Audit](docs/corkysoft_sb_itir_coverage_audit.md)
 - Downstream contract for SB/ITIR consumers: [Corkysoft -> SB / ITIR Downstream Contract](docs/sb_itir_downstream_contract.md)
 - MCP adapter contract for read-only cross-project/tooling access: [Corkysoft MCP v1 Contract](docs/corkysoft_mcp_v1.md)
@@ -67,9 +104,15 @@ Environment rule:
 - Product and actor intent: [Operator User Stories](docs/operator_user_stories.md)
 - Role-to-surface ownership: [UI Role Coverage Matrix](docs/ui_role_coverage_matrix.md)
 - Formal onboarding and help usage: [Usage Onboarding Guide](docs/usage_onboarding_guide.md)
+- End-to-end service, customer, notification, worker, and completion matrices:
+  [Service Blueprint](docs/service_blueprint.md)
+- Visual service blueprint story paths:
+  [SVG](docs/diagrams/service_blueprint_flows.svg) |
+  [PNG](docs/diagrams/service_blueprint_flows.png)
 - Out-loud user-testing notes: [Naive User Tester Notes](docs/naive_user_tester_notes.md)
 - Cutover, fallback, and rollout governance: [Rollout Execution Stories](docs/rollout_execution_user_stories.md)
 - Current delivery status: [Roadmap](ROADMAP.md)
+- Current bug/risk register: [Known Bugs And Bad Cases](docs/known_bad_cases.md)
 
 ## Operational Roles
 
@@ -98,6 +141,22 @@ inside those five entry views rather than acting as the top-level shell.
 - `System / Rollout Admin`: starts in `Admin`.
 
 See [UI Role Coverage Matrix](docs/ui_role_coverage_matrix.md) for the authoritative tab ownership map.
+
+Documentation authority:
+- [UI Role Coverage Matrix](docs/ui_role_coverage_matrix.md) owns role and surface mapping.
+- [Operator User Stories](docs/operator_user_stories.md) owns actor decisions and actions.
+- [Usage Onboarding Guide](docs/usage_onboarding_guide.md) owns practical daily-use guidance.
+- [Service Blueprint](docs/service_blueprint.md) owns lifecycle, customer, notification, worker, and completion matrices.
+- [Service Blueprint Flows](docs/diagrams/service_blueprint_flows.puml) owns the
+  diagrammatic attribution of user story paths to shells, interactions, and
+  authority gates.
+
+![Service blueprint story paths](docs/diagrams/service_blueprint_flows.svg)
+- [Progress status board](docs/progress_status_board.md) owns current status.
+- [Known Bugs And Bad Cases](docs/known_bad_cases.md) owns confirmed bugs and accepted risks.
+- [API Security And Authority Contract](docs/api_security_authority.md) owns
+  internal API read/write authority, scoped credential, and actor-binding
+  acceptance criteria.
 
 ## Current Status (2026-04-02)
 
@@ -321,7 +380,7 @@ dashboard screenshots and `MIGRATE_AWAY_FROM_streamlit_price_distribution.py` fo
 Launch with:
 
 ```bash
-streamlit run dashboard/app.py
+venv/bin/streamlit run dashboard/app.py
 ```
 
 The dashboard surfaces:
@@ -418,40 +477,40 @@ For operators alternating between providers, consider scripting dedicated CLI en
 Invoke the CLI via:
 
 ```bash
-python routes_to_sqlite.py <command> [options]
+venv/bin/python routes_to_sqlite.py <command> [options]
 ```
 
 Common commands:
 
 - Add a job:
   ```bash
-  python routes_to_sqlite.py add "Melbourne" "Sydney" --hourly 200 --perkm 0.8
+  venv/bin/python routes_to_sqlite.py add "Melbourne" "Sydney" --hourly 200 --perkm 0.8
   ```
 - Add jobs from CSV:
   ```bash
-  python routes_to_sqlite.py add-csv jobs.csv
+  venv/bin/python routes_to_sqlite.py add-csv jobs.csv
   ```
   `jobs.csv` must include headers such as `origin,destination,hourly_rate,per_km_rate,country`.
 - Process pending jobs (fetch distance/duration via ORS):
   ```bash
-  python routes_to_sqlite.py run
+  venv/bin/python routes_to_sqlite.py run
   ```
 - Review stored jobs:
   ```bash
-  python routes_to_sqlite.py list
+  venv/bin/python routes_to_sqlite.py list
   ```
 - Track internal costs privately:
   ```bash
-  python routes_to_sqlite.py cost add 1 crew --quantity 12 --rate 45 --unit hr --description "Crew wages"
-  python routes_to_sqlite.py cost summary 1
+  venv/bin/python routes_to_sqlite.py cost add 1 crew --quantity 12 --rate 45 --unit hr --description "Crew wages"
+  venv/bin/python routes_to_sqlite.py cost summary 1
   ```
 - Import historical jobs with automatic geocoding and routing:
   ```bash
-  python routes_to_sqlite.py import-history historical_jobs.csv --geocode --route
+  venv/bin/python routes_to_sqlite.py import-history historical_jobs.csv --geocode --route
   ```
 - Render an interactive map (add `--show-actual` to overlay routed geometry):
   ```bash
-  python map_jobs.py --out routes_map.html
+  venv/bin/python map_jobs.py --out routes_map.html
   ```
 - Seed clustered mainland-Australia jobs, segments, and container requirements for local planning tests:
   ```bash
@@ -521,7 +580,7 @@ See [Authentication and Users](docs/authentication_and_users.md) for the full en
 The Streamlit map expects live data in `truck_positions` and `active_routes`. A mock ingestor keeps these tables warm:
 
 ```bash
-python -m analytics.ingest_live_data --interval 5 --iterations 0
+venv/bin/python -m analytics.ingest_live_data --interval 5 --iterations 0
 ```
 
 Flags:
@@ -536,7 +595,7 @@ customer origins.
 To ingest real GPS snapshots from a file or stdin (newline-delimited JSON or CSV), stream them into the telemetry harness:
 
 ```bash
-python -m analytics.ingest_real_gps snapshots.ndjson --batch-size 250 --iterations 1
+venv/bin/python -m analytics.ingest_real_gps snapshots.ndjson --batch-size 250 --iterations 1
 ```
 
 Flags:
@@ -550,14 +609,16 @@ Historical jobs with geocoded origins/destinations backfill the mock data so the
 ## Development Workflow
 
 Contributor docs/update policy: see [Contributor Docs Sync](docs/contributor_docs_sync.md).
+Known bugs, bad cases, and accepted risks are tracked in
+[Known Bugs And Bad Cases](docs/known_bad_cases.md).
 
-- **Bootstrap the environment**: Run `python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt`
-  (or execute `./start_app.sh` or `start_app.bat` to combine setup with a `streamlit run dashboard/app.py`).
-- **Iterate on analytics**: Modify modules inside `analytics/` and run targeted tests via `pytest tests/test_<area>.py` to
+- **Bootstrap the environment**: Run `python3 -m venv venv && source venv/bin/activate && venv/bin/python -m pip install -r requirements.txt`.
+- **Launch locally**: Use `venv/bin/streamlit run dashboard/app.py` after the virtualenv exists.
+- **Iterate on analytics**: Modify modules inside `analytics/` and run targeted tests via `venv/bin/python -m pytest tests/test_<area>.py` to
   validate corridor aggregations, optimiser helpers, and export routines before wiring them into Streamlit.
-- **Exercise the CLI**: Use `routes_to_sqlite.py` to seed `routes.db`, export CSVs, and sanity-check new schema changes before
+- **Exercise the CLI**: Use `venv/bin/python routes_to_sqlite.py` to seed `routes.db`, export CSVs, and sanity-check new schema changes before
   exposing them through the dashboard sidebar uploads.
-- **Preview UI updates**: Launch the dashboard with `streamlit run dashboard/app.py`, switch datasets in the sidebar, and keep
+- **Preview UI updates**: Launch the dashboard with `venv/bin/streamlit run dashboard/app.py`, switch datasets in the sidebar, and keep
   an eye on the terminal logs for warnings emitted by `analytics/db.py` when migrations are required.
 - **Keep docs current**: When behaviour or workflows change, update `README.md`, `docs/*.md`, and `ROADMAP.md` so new
   contributors can follow the intended flows without spelunking through code.
@@ -575,10 +636,10 @@ Contributor docs/update policy: see [Contributor Docs Sync](docs/contributor_doc
 Run the full test suite with:
 
 ```bash
-pytest
+venv/bin/python -m pytest
 ```
 
-Target a specific area via `pytest tests/test_price_distribution.py` or similar when iterating quickly.
+Target a specific area via `venv/bin/python -m pytest tests/test_price_distribution.py` or similar when iterating quickly.
 
 
 ## Documentation
@@ -591,6 +652,8 @@ Target a specific area via `pytest tests/test_price_distribution.py` or similar 
 - `docs/mock_telemetry_workflow.md`: Details of the telemetry ingestion harness.
 - `docs/architecture.md`: High-level architecture outline covering how the Streamlit shell composes analytics modules and supporting services.
 - `docs/modules.md`: Module-by-module ownership and entry point summary.
+- `docs/service_blueprint.md`: End-to-end lifecycle, customer communication, worker execution, call follow-up, and completion-gate matrices.
+- `docs/known_bad_cases.md`: Canonical register for confirmed bugs, bad cases, accepted risks, owner lanes, and promotion gates.
 - `docs/operator_user_stories.md`: Actor-based product workflows and decisions.
 - `docs/commercial_workflow_lifecycle.md`: Quote -> tender -> override -> awarded-work lifecycle.
 - `ROADMAP.md`: Active deliverables, progress snapshot, and upcoming work.

@@ -98,13 +98,14 @@ dashboard_components_staff ..> external_analytics_persistence : staff -> db\nsta
 dashboard_components_summary ..> external_analytics_persistence : summary -> price_distribution
 dashboard_components_worker_time ..> external_analytics_persistence : worker_time -> driver_shifts\nworker_time -> operations_assignment
 [Dashboard Shell] as external_dashboard_shell
-dashboard_views_quote_view ..> external_dashboard_shell : quote_view -> theme
-dashboard_views_pricing_intelligence_view ..> external_dashboard_shell : pricing_intelligence_view -> theme
-dashboard_views_network_view ..> external_dashboard_shell : network_view -> theme
-dashboard_views_operations_view ..> external_dashboard_shell : operations_view -> theme
-dashboard_views_admin_view ..> external_dashboard_shell : admin_view -> theme
+dashboard_views_quote_view ..> external_dashboard_shell : quote_view -> shell_signals\nquote_view -> theme
+dashboard_views_pricing_intelligence_view ..> external_dashboard_shell : pricing_intelligence_view -> shell_signals\npricing_intelligence_view -> theme
+dashboard_views_network_view ..> external_dashboard_shell : network_view -> shell_signals\nnetwork_view -> theme
+dashboard_views_operations_view ..> external_dashboard_shell : operations_view -> shell_signals\noperations_view -> theme
+dashboard_views_admin_view ..> external_dashboard_shell : admin_view -> shell_signals\nadmin_view -> theme
 dashboard_components_calls ..> external_dashboard_shell : calls -> state
-dashboard_components_dispatch ..> external_dashboard_shell : dispatch -> state
+dashboard_components_data_provenance ..> external_dashboard_shell : data_provenance -> shell_signals\ndata_provenance -> theme
+dashboard_components_dispatch ..> external_dashboard_shell : dispatch -> query_params\ndispatch -> state
 dashboard_components_maintenance ..> external_dashboard_shell : maintenance -> state
 dashboard_components_maps ..> external_dashboard_shell : maps -> map_provider
 dashboard_components_operations ..> external_dashboard_shell : operations -> state

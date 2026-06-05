@@ -1,13 +1,13 @@
 {
   "architecture": "complete",
-  "audit": "complete",
+  "audit": "active",
   "context": "ready",
-  "docs": "aligned",
+  "docs": "audit-aligned",
   "external_reasoning": "off",
-  "last_action": "document-observer-export-followups",
-  "last_cycle_finished_at": "2026-03-24T13:09:32Z",
-  "last_cycle_started_at": "2026-03-24T13:05:34Z",
+  "last_action": "finish-current-bad-002-write-router-migration",
+  "last_cycle_finished_at": "2026-06-04T00:00:00Z",
+  "last_cycle_started_at": "2026-06-04T00:00:00Z",
   "last_exit_code": 0,
-  "milestones_remaining": 0,
-  "tests": "passing_targeted"
+  "milestones_remaining": 6,
+  "tests": "api-call-whisperx-workbook-mcp-uml-91-passed"
 }

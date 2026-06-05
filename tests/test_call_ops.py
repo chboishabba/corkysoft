@@ -178,10 +178,48 @@ def test_whisperx_submission_and_poll_are_adapter_driven(monkeypatch) -> None:
     completed = poll_transcript_artifact(conn, artifact_id=artifact["id"])
     assert completed["status"] == "completed"
     assert "Manager says switch to dock two" in (completed["transcriptText"] or "")
+    assert completed["dataClassification"] == "observer_capture_transcript"
+    assert completed["authorityClass"] == "observer_capture_ref"
+    assert completed["failureKind"] is None
 
     refreshed = get_call_event(conn, call["id"])
     assert refreshed["processedAt"] is not None
     assert list_call_events(conn, limit=5)[0]["latestTranscriptStatus"] == "completed"
+
+
+def test_poll_transcript_artifact_persists_sanitized_failed_artifact(monkeypatch) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    ensure_dashboard_tables(conn)
+    call = create_call_event(conn, event_kind="ops_call", direction="internal")
+
+    def fake_submit(**kwargs):
+        return {"identifier": "task-failed", "status": "queued"}
+
+    def fake_fetch(**kwargs):
+        return {
+            "status": "failed",
+            "message": "  backend\x00 failed\nwith private-ish detail  ",
+        }
+
+    monkeypatch.setattr("corkysoft.call_ops.submit_transcription", fake_submit)
+    monkeypatch.setattr("corkysoft.call_ops.fetch_task_status", fake_fetch)
+
+    artifact = submit_call_audio_for_transcription(
+        conn,
+        call_event_id=call["id"],
+        service_key="ops",
+        file_bytes=b"audio-bytes",
+        filename="call.wav",
+    )
+    failed = poll_transcript_artifact(conn, artifact_id=artifact["id"])
+
+    assert failed["status"] == "failed"
+    assert failed["isFinal"] is True
+    assert failed["errorMessage"] == "backend failed with private-ish detail"
+    assert failed["dataClassification"] == "failed_observer_capture_transcript"
+    assert failed["authorityClass"] == "observer_capture_ref"
+    assert failed["failureKind"] == "adapter_task_failed"
 
 
 def test_generate_fake_transcript_artifact_produces_completed_text() -> None:
@@ -204,6 +242,8 @@ def test_generate_fake_transcript_artifact_produces_completed_text() -> None:
     )
     assert artifact["status"] == "completed"
     assert artifact["isFinal"] is True
+    assert artifact["dataClassification"] == "synthetic_observer_capture_transcript"
+    assert artifact["authorityClass"] == "observer_capture_ref"
     assert "Manager says the access path has changed." in (artifact["transcriptText"] or "")
     assert "Update the crew and client immediately." in (artifact["transcriptText"] or "")
 

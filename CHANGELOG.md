@@ -1,5 +1,50 @@
 # Changelog
 
+## 2026-06-04
+
+- added `docs/service_blueprint.md` as the canonical lifecycle matrix for
+  inquiry-to-completion, customer communications, worker execution, call
+  follow-up, and job-completion gates
+- added `docs/service_blueprint_flows.puml` and a story path index so diagrams
+  can attribute users, shells, interactions, and gates back to canonical story
+  paths
+- rendered the service blueprint story-path diagram to SVG and PNG, linked the
+  rendered views from README, architecture docs, the service blueprint, and the
+  generated UML index
+- added `docs/api_security_authority.md`, gated sensitive API reads across the
+  current API surface behind the internal API token, removed duplicated
+  Kent/Labor token helpers, and added transcript/audio upload plus WhisperX
+  adapter boundary hardening
+- constrained MCP `db_path` inputs to configured roots and added out-of-root
+  denial coverage for read-only MCP tools
+- added the first BAD-002 scoped authority slice with API auth contexts,
+  operations cutover write/approval scopes, auth-context actor binding,
+  persisted API write receipts, and a Google Sheets export-URL guard so
+  workbook connectors remain read/import-only
+- expanded BAD-002 scoped-write coverage to calls/transcripts, worker-time
+  review, Kent tender/config writes, labor absence records, and MoveWare/Kent
+  importer routes, with scoped actor-binding and API write receipt regressions
+- migrated residual operations-planning mutations to `operations:write`
+  credentials with API write receipts for policy, workbook sync, segment
+  planning, worker role/compliance, and inventory allocation writes
+- added explicit transcript artifact classification, observer-capture authority
+  metadata, sanitized failed-task persistence, and regression coverage for
+  failed call transcript polling
+- strengthened `docs/ui_role_coverage_matrix.md` as the source of truth for
+  internal role-to-shell and role-to-leaf mapping, with user stories and
+  onboarding deriving from it
+- integrated six read-only audit lanes into the canonical planning surfaces
+- added `docs/known_bad_cases.md` as the central register for confirmed bugs,
+  bad cases, accepted risks, owner lanes, and promotion gates
+- reprioritized the active roadmap around security/API authority, import/schema
+  correctness, dashboard operator safety, analytics decision quality, CI/dev
+  reproducibility, and docs/architecture governance
+- folded `../zkSEC` security expectations into Corkysoft promotion gates:
+  proposal-only public signals, actor/scope/receipt for high-authority actions,
+  resource-root bounds, and secret-like payload rejection
+- updated the progress board, README, UML index, and status metadata so roadmap
+  and audit state no longer rely on stale or competing status surfaces
+
 ## 2026-04-02
 
 - normalized the PlantUML supermega/dashboard-shell generator around the

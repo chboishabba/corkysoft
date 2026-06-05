@@ -50,6 +50,27 @@ def resolve_whisperx_service_config(service_key: str) -> WhisperXServiceConfig:
     return WhisperXServiceConfig(service_key=normalized, base_url=base_url.rstrip("/"), timeout_seconds=timeout)
 
 
+def _request_error_message(action: str, exc: requests.RequestException) -> str:
+    response = getattr(exc, "response", None)
+    if response is None:
+        return f"WhisperX {action} failed: {exc}"
+    status = getattr(response, "status_code", None)
+    text = (getattr(response, "text", "") or "").strip()
+    if text:
+        return f"WhisperX {action} failed with HTTP {status}: {text[:500]}"
+    return f"WhisperX {action} failed with HTTP {status}: {exc}"
+
+
+def _json_payload(response: requests.Response, *, action: str) -> Dict[str, Any]:
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise WhisperXAdapterError(f"WhisperX {action} returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise WhisperXAdapterError(f"WhisperX {action} returned a non-object payload")
+    return payload
+
+
 def submit_transcription(
     *,
     service_key: str,
@@ -73,8 +94,8 @@ def submit_transcription(
         )
         response.raise_for_status()
     except requests.RequestException as exc:  # pragma: no cover - network exercised via mocks/tests
-        raise WhisperXAdapterError(f"WhisperX submission failed: {exc}") from exc
-    payload = response.json()
+        raise WhisperXAdapterError(_request_error_message("submission", exc)) from exc
+    payload = _json_payload(response, action="submission")
     identifier = payload.get("identifier")
     if not identifier:
         raise WhisperXAdapterError("WhisperX submission returned no identifier")
@@ -91,5 +112,5 @@ def fetch_task_status(*, service_key: str, identifier: str) -> Dict[str, Any]:
         )
         response.raise_for_status()
     except requests.RequestException as exc:  # pragma: no cover - network exercised via mocks/tests
-        raise WhisperXAdapterError(f"WhisperX status poll failed: {exc}") from exc
-    return response.json()
+        raise WhisperXAdapterError(_request_error_message("status poll", exc)) from exc
+    return _json_payload(response, action="status poll")

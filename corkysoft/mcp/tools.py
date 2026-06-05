@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
 from datetime import date
+import os
+from pathlib import Path
 from typing import Any, Mapping
 
 import pandas as pd
@@ -17,6 +19,9 @@ from analytics.margin_regression import (
     summarise_corridor_margin_validation,
 )
 from .contracts import JsonDict, ToolInputError, ToolSpec
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _optional_str(payload: Mapping[str, Any], key: str) -> str | None:
@@ -93,7 +98,47 @@ def _optional_date(payload: Mapping[str, Any], key: str) -> pd.Timestamp | None:
 
 def _db_path(payload: Mapping[str, Any]) -> str | None:
     path = _optional_str(payload, "db_path")
-    return path or None
+    if path is None:
+        return None
+    resolved = Path(path).expanduser().resolve(strict=False)
+    allowed_roots = _allowed_db_roots()
+    if not any(_is_relative_to(resolved, root) for root in allowed_roots):
+        raise ToolInputError(
+            "db_path must be inside an allowed MCP DB root",
+            details={
+                "field": "db_path",
+                "allowedRoots": [str(root) for root in allowed_roots],
+            },
+        )
+    return str(resolved)
+
+
+def _allowed_db_roots() -> list[Path]:
+    roots: list[Path] = [REPO_ROOT]
+    configured = os.environ.get("CORKYSOFT_MCP_DB_ROOTS", "")
+    for raw_root in configured.split(os.pathsep):
+        text = raw_root.strip()
+        if text:
+            roots.append(Path(text).expanduser())
+    for env_name in ("CORKYSOFT_DB", "ROUTES_DB"):
+        db_path = os.environ.get(env_name)
+        if db_path:
+            roots.append(Path(db_path).expanduser().parent)
+
+    resolved_roots: list[Path] = []
+    for root in roots:
+        resolved = root.resolve(strict=False)
+        if resolved not in resolved_roots:
+            resolved_roots.append(resolved)
+    return resolved_roots
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
 
 
 def _jsonify(value: Any) -> Any:

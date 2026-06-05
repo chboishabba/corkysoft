@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 import sys
@@ -27,6 +28,7 @@ from analytics.operations_diary import (
     upsert_subcontractor_bill_review,
 )
 from corkysoft.call_ops import record_worker_time_capture_event
+from corkysoft.whisperx_adapter import WhisperXAdapterError
 
 
 @pytest.fixture()
@@ -64,6 +66,13 @@ def isolated_db(tmp_path, monkeypatch):
 
 
 AUTH_HEADERS = {"X-Corkysoft-Api-Key": "test-token"}
+
+
+def _set_service_credentials(monkeypatch, credentials):
+    monkeypatch.setenv(
+        "CORKYSOFT_SERVICE_CREDENTIALS_JSON",
+        json.dumps({"credentials": credentials}),
+    )
 
 
 def _create_job(conn: sqlite3.Connection) -> int:
@@ -114,7 +123,7 @@ def test_get_job_by_id_returns_payload(isolated_db):
         conn.commit()
 
     client = TestClient(api.app)
-    response = client.get(f"/jobs/{job_id}")
+    response = client.get(f"/jobs/{job_id}", headers=AUTH_HEADERS)
     assert response.status_code == 200
     payload = response.json()
     assert payload["id"] == str(job_id)
@@ -125,9 +134,37 @@ def test_get_job_by_id_returns_payload(isolated_db):
 
 def test_get_job_by_id_missing_returns_404(isolated_db):
     client = TestClient(api.app)
-    response = client.get("/jobs/9999")
+    response = client.get("/jobs/9999", headers=AUTH_HEADERS)
     assert response.status_code == 404
     assert response.json()["detail"] == "Job not found"
+
+
+def test_top_level_sensitive_read_routes_require_api_token(isolated_db):
+    client = TestClient(api.app)
+
+    job_response = client.get("/jobs/9999")
+    assert job_response.status_code == 401
+    assert job_response.json()["detail"] == "Invalid internal API token"
+
+    shifts_response = client.get("/driver-shifts")
+    assert shifts_response.status_code == 401
+    assert shifts_response.json()["detail"] == "Invalid internal API token"
+
+    operations_response = client.get("/operations/policy")
+    assert operations_response.status_code == 401
+    assert operations_response.json()["detail"] == "Invalid internal API token"
+
+    labor_response = client.get("/labor-analytics/summary")
+    assert labor_response.status_code == 401
+    assert labor_response.json()["detail"] == "Invalid internal API token"
+
+    kent_response = client.get("/kent-ams/config")
+    assert kent_response.status_code == 401
+    assert kent_response.json()["detail"] == "Invalid internal API token"
+
+    calls_response = client.get("/calls/events")
+    assert calls_response.status_code == 401
+    assert calls_response.json()["detail"] == "Invalid internal API token"
 
 
 def test_moveware_importer_returns_summary(isolated_db):
@@ -196,7 +233,7 @@ def test_operations_policy_segment_assignment_and_conflicts(isolated_db):
 
     client = TestClient(api.app)
 
-    response = client.get("/operations/policy")
+    response = client.get("/operations/policy", headers=AUTH_HEADERS)
     assert response.status_code == 200
     assert response.json()["regoWarningDays"] == 30
 
@@ -254,13 +291,13 @@ def test_operations_policy_segment_assignment_and_conflicts(isolated_db):
     assert assigned["workerAssignments"][0]["workerId"] == int(worker["id"])
     assert assigned["workerAssignments"][0]["sourceImportedAt"] == "2026-03-12T00:00:00+00:00"
 
-    response = client.get(f"/operations/segments/readiness?job_id={job_id}")
+    response = client.get(f"/operations/segments/readiness?job_id={job_id}", headers=AUTH_HEADERS)
     assert response.status_code == 200
     rows = response.json()
     assert len(rows) == 1
     assert rows[0]["assignmentStatus"] == "planned"
 
-    response = client.get("/operations/conflicts")
+    response = client.get("/operations/conflicts", headers=AUTH_HEADERS)
     assert response.status_code == 200
     assert response.json() == []
 
@@ -334,7 +371,8 @@ def test_labor_analytics_summary_export_absence_and_cost_drivers(isolated_db):
     client = TestClient(api.app)
 
     response = client.get(
-        "/labor-analytics/summary?start_date=2026-03-14&end_date=2026-03-14"
+        "/labor-analytics/summary?start_date=2026-03-14&end_date=2026-03-14",
+        headers=AUTH_HEADERS,
     )
     assert response.status_code == 200
     summary = response.json()
@@ -346,7 +384,8 @@ def test_labor_analytics_summary_export_absence_and_cost_drivers(isolated_db):
     assert summary["confirmedAbsenceCount"] == 1
 
     response = client.get(
-        "/labor-analytics/export-summary?start_date=2026-03-14&end_date=2026-03-14"
+        "/labor-analytics/export-summary?start_date=2026-03-14&end_date=2026-03-14",
+        headers=AUTH_HEADERS,
     )
     assert response.status_code == 200
     export_rows = response.json()
@@ -358,7 +397,8 @@ def test_labor_analytics_summary_export_absence_and_cost_drivers(isolated_db):
     )
 
     response = client.get(
-        "/labor-analytics/absence?start_date=2026-03-14&end_date=2026-03-14"
+        "/labor-analytics/absence?start_date=2026-03-14&end_date=2026-03-14",
+        headers=AUTH_HEADERS,
     )
     assert response.status_code == 200
     absence = response.json()
@@ -366,7 +406,8 @@ def test_labor_analytics_summary_export_absence_and_cost_drivers(isolated_db):
     assert absence["recordCount"] == 1
 
     response = client.get(
-        "/labor-analytics/cost-drivers?dimension=worker&start_date=2026-03-14&end_date=2026-03-14"
+        "/labor-analytics/cost-drivers?dimension=worker&start_date=2026-03-14&end_date=2026-03-14",
+        headers=AUTH_HEADERS,
     )
     assert response.status_code == 200
     drivers = response.json()
@@ -406,7 +447,7 @@ def test_worker_absence_record_api_round_trip(isolated_db):
     assert created["workerName"] == "Leave Worker"
     assert created["absenceType"] == "sick"
 
-    response = client.get(f"/worker-absence/records?worker_id={int(worker['id'])}")
+    response = client.get(f"/worker-absence/records?worker_id={int(worker['id'])}", headers=AUTH_HEADERS)
     assert response.status_code == 200
     rows = response.json()
     assert len(rows) == 1
@@ -483,7 +524,7 @@ def test_operations_readiness_and_worker_compliance_routes(isolated_db):
     assert response.status_code == 200
     assert response.json()["workerId"] == int(worker["id"])
 
-    response = client.get("/operations/readiness/resources")
+    response = client.get("/operations/readiness/resources", headers=AUTH_HEADERS)
     assert response.status_code == 200
     rows = response.json()
     assert any(
@@ -553,14 +594,14 @@ def test_operations_labor_roster_and_reconciliation_routes(isolated_db):
         )
         conn.commit()
 
-    response = client.get("/operations/labor/roster?start_date=2026-03-14&end_date=2026-03-14")
+    response = client.get("/operations/labor/roster?start_date=2026-03-14&end_date=2026-03-14", headers=AUTH_HEADERS)
     assert response.status_code == 200
     roster = response.json()
     assert len(roster) == 1
     assert roster[0]["workerName"] == "Roster API Worker"
     assert roster[0]["truckIds"] == ["TRK-OPS-3"]
 
-    response = client.get("/operations/labor/reconciliation?start_date=2026-03-14&end_date=2026-03-14")
+    response = client.get("/operations/labor/reconciliation?start_date=2026-03-14&end_date=2026-03-14", headers=AUTH_HEADERS)
     assert response.status_code == 200
     reconciliation = response.json()
     assert any(
@@ -619,7 +660,7 @@ def test_operations_inventory_segment_routes(isolated_db):
     assert response.status_code == 200
     assert response.json()["segmentId"] == segment_id
 
-    response = client.get(f"/operations/inventory/segments?job_id={job_id}")
+    response = client.get(f"/operations/inventory/segments?job_id={job_id}", headers=AUTH_HEADERS)
     assert response.status_code == 200
     rows = response.json()
     assert len(rows) == 1
@@ -693,7 +734,7 @@ def test_operations_jobs_board_route(isolated_db):
     )
     assert response.status_code == 200
 
-    response = client.get(f"/operations/jobs/board?job_id={job_id}")
+    response = client.get(f"/operations/jobs/board?job_id={job_id}", headers=AUTH_HEADERS)
     assert response.status_code == 200
     rows = response.json()
     assert len(rows) == 1
@@ -707,7 +748,7 @@ def test_operations_jobs_board_route(isolated_db):
 def test_operations_cutover_workflow_routes(isolated_db):
     client = TestClient(api.app)
 
-    response = client.get("/operations/cutover/workflows")
+    response = client.get("/operations/cutover/workflows", headers=AUTH_HEADERS)
     assert response.status_code == 200
     rows = response.json()
     assert any(row["workflowKey"] == "dispatch_execution" for row in rows)
@@ -767,11 +808,11 @@ def test_operations_cutover_workflow_routes(isolated_db):
         headers=AUTH_HEADERS,
     )
     assert response.status_code == 200
-    response = client.get("/operations/cutover/events?workflow_key=dispatch_execution")
+    response = client.get("/operations/cutover/events?workflow_key=dispatch_execution", headers=AUTH_HEADERS)
     assert response.status_code == 200
     events = response.json()
     assert len(events) >= 3
-    response = client.get("/operations/cutover/workflows")
+    response = client.get("/operations/cutover/workflows", headers=AUTH_HEADERS)
     assert response.status_code == 200
     rows = response.json()
     dispatch_row = next(row for row in rows if row["workflowKey"] == "dispatch_execution")
@@ -779,6 +820,318 @@ def test_operations_cutover_workflow_routes(isolated_db):
     assert dispatch_row["lastDrillAt"] == "2026-03-12T08:00:00+00:00"
     assert dispatch_row["metrics"]["snapshotConsumerCount"] == 1
     assert "recommendation" in dispatch_row
+
+
+def test_operations_cutover_scoped_credentials_bind_actor_and_receipt(monkeypatch, isolated_db):
+    _set_service_credentials(
+        monkeypatch,
+        [
+            {
+                "id": "ops-cutover-writer",
+                "token": "writer-token",
+                "actor": "credential-ops-manager",
+                "scopes": ["api:read", "operations.cutover:write"],
+            }
+        ],
+    )
+    headers = {
+        "X-Corkysoft-Api-Key": "writer-token",
+        "X-Corkysoft-Request-Id": "req-cutover-001",
+    }
+    client = TestClient(api.app)
+
+    response = client.post(
+        "/operations/cutover/workflows/dispatch_execution/events",
+        json={
+            "eventType": "review",
+            "actor": "spoofed-body-actor",
+            "createdAt": "2026-03-12T09:00:00+00:00",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["actor"] == "credential-ops-manager"
+    with sqlite3.connect(isolated_db) as conn:
+        conn.row_factory = sqlite3.Row
+        event = conn.execute(
+            """
+            SELECT actor
+            FROM operations_cutover_events
+            WHERE workflow_key = ? AND event_type = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            ("dispatch_execution", "review"),
+        ).fetchone()
+        receipt = conn.execute(
+            """
+            SELECT credential_id, actor, scopes_json, action, resource_type,
+                   resource_id, request_id, route, method
+            FROM api_write_receipts
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+    assert event["actor"] == "credential-ops-manager"
+    assert receipt["credential_id"] == "ops-cutover-writer"
+    assert receipt["actor"] == "credential-ops-manager"
+    assert "operations.cutover:write" in json.loads(receipt["scopes_json"])
+    assert receipt["action"] == "operations_cutover_event:review"
+    assert receipt["resource_type"] == "operations_cutover_workflow"
+    assert receipt["resource_id"] == "dispatch_execution"
+    assert receipt["request_id"] == "req-cutover-001"
+    assert receipt["route"] == "/operations/cutover/workflows/dispatch_execution/events"
+    assert receipt["method"] == "POST"
+
+
+def test_operations_cutover_wrong_scope_fails_closed(monkeypatch, isolated_db):
+    _set_service_credentials(
+        monkeypatch,
+        [
+            {
+                "id": "reader-only",
+                "token": "reader-token",
+                "actor": "reader",
+                "scopes": ["api:read"],
+            }
+        ],
+    )
+    client = TestClient(api.app)
+
+    response = client.post(
+        "/operations/cutover/workflows/dispatch_execution/events",
+        json={"eventType": "review", "actor": "spoofed-body-actor"},
+        headers={"X-Corkysoft-Api-Key": "reader-token"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Credential scope is not authorized"
+    with sqlite3.connect(isolated_db) as conn:
+        exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'api_write_receipts'"
+        ).fetchone()
+        receipt_count = 0
+        if exists is not None:
+            receipt_count = conn.execute("SELECT COUNT(*) FROM api_write_receipts").fetchone()[0]
+    assert receipt_count == 0
+
+
+def test_kent_scoped_credentials_bind_operator_and_receipt(monkeypatch, isolated_db):
+    _set_service_credentials(
+        monkeypatch,
+        [
+            {
+                "id": "kent-writer",
+                "token": "kent-token",
+                "actor": "credential-kent-operator",
+                "scopes": ["api:read", "kent:write"],
+            }
+        ],
+    )
+    with sqlite3.connect(isolated_db) as conn:
+        conn.row_factory = sqlite3.Row
+        ensure_dashboard_tables(conn)
+        api.import_kent_ams_records(
+            conn,
+            "tenders",
+            [
+                {
+                    "tenderId": "T-SCOPED",
+                    "moveId": "JOB-SCOPED",
+                    "clientName": "Scoped Kent",
+                    "origin": "Brisbane QLD",
+                    "destination": "Cairns QLD",
+                    "expectedRevenue": 5000.0,
+                    "estimatedCost": 5200.0,
+                    "requiredTrucks": 1,
+                    "requiredWorkers": 2,
+                    "dueAt": "2026-03-20T06:00:00+00:00",
+                    "transferRuleViolated": True,
+                }
+            ],
+            dry_run=False,
+        )
+        conn.commit()
+
+    client = TestClient(api.app)
+    response = client.post(
+        "/kent-ams/tenders/T-SCOPED/override",
+        json={
+            "action": "pursue",
+            "operatorId": "spoofed-body-operator",
+            "reasonCode": "retention",
+            "note": "Scoped credential should bind the actor.",
+        },
+        headers={
+            "X-Corkysoft-Api-Key": "kent-token",
+            "X-Corkysoft-Request-Id": "req-kent-001",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["operatorId"] == "credential-kent-operator"
+    with sqlite3.connect(isolated_db) as conn:
+        conn.row_factory = sqlite3.Row
+        receipt = conn.execute(
+            """
+            SELECT credential_id, actor, action, resource_type, request_id
+            FROM api_write_receipts
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    assert receipt["credential_id"] == "kent-writer"
+    assert receipt["actor"] == "credential-kent-operator"
+    assert receipt["action"] == "kent.tender_override.create"
+    assert receipt["resource_type"] == "kent_tender_override"
+    assert receipt["request_id"] == "req-kent-001"
+
+
+def test_worker_time_scoped_credentials_bind_reviewer_and_receipt(monkeypatch, isolated_db):
+    _set_service_credentials(
+        monkeypatch,
+        [
+            {
+                "id": "worker-time-reviewer",
+                "token": "worker-time-token",
+                "actor": "credential-payroll-reviewer",
+                "scopes": ["api:read", "worker_time:write"],
+            }
+        ],
+    )
+    with sqlite3.connect(isolated_db) as conn:
+        conn.row_factory = sqlite3.Row
+        ensure_dashboard_tables(conn)
+        worker = upsert_worker(conn, name="Scoped Worker", phone="0400123456")
+        event = record_worker_time_capture_event(
+            conn,
+            worker_id=int(worker["id"]),
+            worker_name_raw="Scoped Worker",
+            event_type="clock_on",
+            channel="voice_call",
+            effective_timestamp="2026-03-13T06:30:00+10:00",
+            confidence=0.6,
+        )
+        event_id = int(event["id"])
+        conn.commit()
+
+    client = TestClient(api.app)
+    response = client.post(
+        f"/worker-time/events/{event_id}/decision",
+        json={
+            "reviewStatus": "accepted",
+            "reviewer": "spoofed-body-reviewer",
+            "reviewNote": "Accept from scoped credential.",
+        },
+        headers={
+            "X-Corkysoft-Api-Key": "worker-time-token",
+            "X-Corkysoft-Request-Id": "req-worker-time-001",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["reviewer"] == "credential-payroll-reviewer"
+    with sqlite3.connect(isolated_db) as conn:
+        conn.row_factory = sqlite3.Row
+        receipt = conn.execute(
+            """
+            SELECT credential_id, actor, action, resource_type, resource_id, request_id
+            FROM api_write_receipts
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    assert receipt["credential_id"] == "worker-time-reviewer"
+    assert receipt["actor"] == "credential-payroll-reviewer"
+    assert receipt["action"] == "worker_time.event.decide"
+    assert receipt["resource_type"] == "worker_time_event"
+    assert receipt["resource_id"] == str(event_id)
+    assert receipt["request_id"] == "req-worker-time-001"
+
+
+def test_operations_scoped_credentials_create_segment_and_receipt(monkeypatch, isolated_db):
+    _set_service_credentials(
+        monkeypatch,
+        [
+            {
+                "id": "operations-writer",
+                "token": "operations-token",
+                "actor": "credential-operations-planner",
+                "scopes": ["api:read", "operations:write"],
+            }
+        ],
+    )
+    with sqlite3.connect(isolated_db) as conn:
+        conn.row_factory = sqlite3.Row
+        ensure_dashboard_tables(conn)
+        job_id = _create_job(conn)
+        conn.commit()
+
+    client = TestClient(api.app)
+    response = client.post(
+        "/operations/segments",
+        json={
+            "jobId": job_id,
+            "segmentSequence": 1,
+            "fromLocation": "Depot",
+            "toLocation": "Customer",
+            "plannedStart": "2026-03-16T08:00:00+00:00",
+            "plannedEnd": "2026-03-16T12:00:00+00:00",
+        },
+        headers={
+            "X-Corkysoft-Api-Key": "operations-token",
+            "X-Corkysoft-Request-Id": "req-operations-001",
+        },
+    )
+
+    assert response.status_code == 200
+    segment_id = response.json()["segmentId"]
+    with sqlite3.connect(isolated_db) as conn:
+        conn.row_factory = sqlite3.Row
+        receipt = conn.execute(
+            """
+            SELECT credential_id, actor, action, resource_type, resource_id, request_id
+            FROM api_write_receipts
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    assert receipt["credential_id"] == "operations-writer"
+    assert receipt["actor"] == "credential-operations-planner"
+    assert receipt["action"] == "operations.segment.ensure"
+    assert receipt["resource_type"] == "job_segment"
+    assert receipt["resource_id"] == str(segment_id)
+    assert receipt["request_id"] == "req-operations-001"
+
+
+def test_operations_write_wrong_scope_fails_closed(monkeypatch, isolated_db):
+    _set_service_credentials(
+        monkeypatch,
+        [
+            {
+                "id": "operations-reader",
+                "token": "operations-reader-token",
+                "actor": "read-only-ops",
+                "scopes": ["api:read"],
+            }
+        ],
+    )
+    with sqlite3.connect(isolated_db) as conn:
+        ensure_dashboard_tables(conn)
+        job_id = _create_job(conn)
+        conn.commit()
+
+    client = TestClient(api.app)
+    response = client.post(
+        "/operations/segments",
+        json={"jobId": job_id, "segmentSequence": 1},
+        headers={"X-Corkysoft-Api-Key": "operations-reader-token"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Credential scope is not authorized"
 
 
 def test_operations_cutover_apply_recommendation_route(isolated_db):
@@ -995,7 +1348,7 @@ def test_get_prioritized_kent_tenders_returns_ranked_rows(isolated_db):
         conn.commit()
 
     client = TestClient(api.app)
-    response = client.get("/kent-ams/tenders/prioritized?status=open&limit=10")
+    response = client.get("/kent-ams/tenders/prioritized?status=open&limit=10", headers=AUTH_HEADERS)
     assert response.status_code == 200
     payload = response.json()
     assert len(payload) == 2
@@ -1010,7 +1363,7 @@ def test_get_prioritized_kent_tenders_returns_ranked_rows(isolated_db):
 def test_get_and_update_kent_tender_config(isolated_db):
     client = TestClient(api.app)
 
-    response = client.get("/kent-ams/config")
+    response = client.get("/kent-ams/config", headers=AUTH_HEADERS)
     assert response.status_code == 200
     payload = response.json()
     assert payload["ruleMode"] == "EITHER"
@@ -1109,7 +1462,7 @@ def test_kent_tender_override_reasons_and_history(isolated_db):
 
     client = TestClient(api.app)
 
-    response = client.get("/kent-ams/override-reasons")
+    response = client.get("/kent-ams/override-reasons", headers=AUTH_HEADERS)
     assert response.status_code == 200
     reasons = response.json()
     assert any(row["code"] == "retention" for row in reasons)
@@ -1144,7 +1497,7 @@ def test_kent_tender_override_reasons_and_history(isolated_db):
     assert payload["policyMatched"] is False
     assert payload["lossAlert"] is True
 
-    response = client.get("/kent-ams/tenders/T-OVR/overrides")
+    response = client.get("/kent-ams/tenders/T-OVR/overrides", headers=AUTH_HEADERS)
     assert response.status_code == 200
     history = response.json()
     assert len(history) == 1
@@ -1217,7 +1570,7 @@ def test_get_kent_tender_calibration_returns_band_metrics(isolated_db):
         conn.commit()
 
     client = TestClient(api.app)
-    response = client.get("/kent-ams/tenders/calibration?lookback_days=365")
+    response = client.get("/kent-ams/tenders/calibration?lookback_days=365", headers=AUTH_HEADERS)
     assert response.status_code == 200
     payload = response.json()
     assert payload["summary"]["tenders"] == 2
@@ -1324,7 +1677,7 @@ def test_prioritized_kent_tenders_ignores_unknown_hard_block_flags(isolated_db):
         conn.commit()
 
     client = TestClient(api.app)
-    response = client.get("/kent-ams/tenders/prioritized?status=open&limit=10")
+    response = client.get("/kent-ams/tenders/prioritized?status=open&limit=10", headers=AUTH_HEADERS)
     assert response.status_code == 200
     payload = response.json()
     assert payload[0]["hardBlockFlags"] == []
@@ -1427,7 +1780,7 @@ def test_prioritized_kent_tenders_returns_true_top_n_after_sort(isolated_db):
         conn.commit()
 
     client = TestClient(api.app)
-    response = client.get("/kent-ams/tenders/prioritized?status=open&limit=1")
+    response = client.get("/kent-ams/tenders/prioritized?status=open&limit=1", headers=AUTH_HEADERS)
     assert response.status_code == 200
     payload = response.json()
     assert payload[0]["tenderExternalId"] == "T-TOP"
@@ -1500,7 +1853,7 @@ def test_call_event_routes_create_notes_actions_and_worker_time(isolated_db):
     assert response.json()["reviewStatus"] == "accepted"
     assert response.json()["workerId"] == int(worker["id"])
 
-    response = client.get("/state-egress/events?limit=20")
+    response = client.get("/state-egress/events?limit=20", headers=AUTH_HEADERS)
     assert response.status_code == 200
     event_types = {row["eventType"] for row in response.json()}
     assert "call_event_created" in event_types
@@ -1530,7 +1883,7 @@ def test_call_session_and_ambient_routes(isolated_db):
     session = response.json()
     assert session["rootCallEventId"] is not None
 
-    response = client.get(f"/calls/sessions/{session['id']}/legs")
+    response = client.get(f"/calls/sessions/{session['id']}/legs", headers=AUTH_HEADERS)
     assert response.status_code == 200
     legs = response.json()
     assert len(legs) == 1
@@ -1562,7 +1915,7 @@ def test_call_session_and_ambient_routes(isolated_db):
     assert response.status_code == 200
     assert response.json()["legKind"] == "consult"
 
-    response = client.get(f"/calls/sessions/{session['id']}/routing-events")
+    response = client.get(f"/calls/sessions/{session['id']}/routing-events", headers=AUTH_HEADERS)
     assert response.status_code == 200
     event_types = {row["eventType"] for row in response.json()}
     assert "call_received" in event_types
@@ -1616,6 +1969,9 @@ def test_call_transcription_upload_and_poll_routes(monkeypatch, isolated_db):
             "confidence": None,
             "isFinal": False,
             "errorMessage": None,
+            "dataClassification": "observer_capture_transcript",
+            "authorityClass": "observer_capture_ref",
+            "failureKind": None,
             "createdAt": "2026-03-13T00:00:00+00:00",
             "updatedAt": "2026-03-13T00:00:00+00:00",
         },
@@ -1635,6 +1991,9 @@ def test_call_transcription_upload_and_poll_routes(monkeypatch, isolated_db):
             "confidence": 0.92,
             "isFinal": True,
             "errorMessage": None,
+            "dataClassification": "observer_capture_transcript",
+            "authorityClass": "observer_capture_ref",
+            "failureKind": None,
             "createdAt": "2026-03-13T00:00:00+00:00",
             "updatedAt": "2026-03-13T00:05:00+00:00",
         },
@@ -1661,6 +2020,125 @@ def test_call_transcription_upload_and_poll_routes(monkeypatch, isolated_db):
     assert response.status_code == 200
     assert response.json()["status"] == "completed"
     assert "updated instructions" in response.json()["transcriptText"]
+    assert response.json()["dataClassification"] == "observer_capture_transcript"
+    assert response.json()["authorityClass"] == "observer_capture_ref"
+
+
+def test_call_transcription_upload_rejects_invalid_base64(isolated_db):
+    client = TestClient(api.app)
+    response = client.post(
+        "/calls/events",
+        json={
+            "eventKind": "ops_call",
+            "direction": "internal",
+            "sourceChannel": "imported_recording",
+        },
+        headers=AUTH_HEADERS,
+    )
+    call_event_id = response.json()["id"]
+
+    response = client.post(
+        f"/calls/events/{call_event_id}/transcripts/upload",
+        json={
+            "serviceKey": "ops",
+            "filename": "call.wav",
+            "contentBase64": "not valid base64",
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "contentBase64 must contain valid base64 data"
+
+
+def test_call_transcription_upload_rejects_empty_audio(isolated_db):
+    client = TestClient(api.app)
+    response = client.post(
+        "/calls/events",
+        json={
+            "eventKind": "ops_call",
+            "direction": "internal",
+            "sourceChannel": "imported_recording",
+        },
+        headers=AUTH_HEADERS,
+    )
+    call_event_id = response.json()["id"]
+
+    response = client.post(
+        f"/calls/events/{call_event_id}/transcripts/upload",
+        json={
+            "serviceKey": "ops",
+            "filename": "call.wav",
+            "contentBase64": "",
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "contentBase64 is required"
+
+
+def test_call_transcription_upload_rejects_unsupported_extension(isolated_db):
+    client = TestClient(api.app)
+    response = client.post(
+        "/calls/events",
+        json={
+            "eventKind": "ops_call",
+            "direction": "internal",
+            "sourceChannel": "imported_recording",
+        },
+        headers=AUTH_HEADERS,
+    )
+    call_event_id = response.json()["id"]
+
+    response = client.post(
+        f"/calls/events/{call_event_id}/transcripts/upload",
+        json={
+            "serviceKey": "ops",
+            "filename": "call.txt",
+            "contentBase64": "ZmFrZS1hdWRpbw==",
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "filename must use one of: m4a, mp3, mp4, ogg, wav"
+
+
+def test_call_leg_transcription_upload_maps_adapter_error(monkeypatch, isolated_db):
+    client = TestClient(api.app)
+    session = client.post(
+        "/calls/sessions",
+        json={
+            "eventKind": "ops_call",
+            "direction": "internal",
+            "sourceChannel": "imported_recording",
+        },
+        headers=AUTH_HEADERS,
+    ).json()
+    leg = client.post(
+        f"/calls/sessions/{session['id']}/legs",
+        json={"legKind": "primary", "direction": "inbound"},
+        headers=AUTH_HEADERS,
+    ).json()
+
+    def fail_submitter(conn, **kwargs):
+        raise WhisperXAdapterError("backend down")
+
+    monkeypatch.setattr(api, "submit_call_audio_for_transcription", fail_submitter)
+
+    response = client.post(
+        f"/calls/legs/{leg['id']}/transcripts/upload",
+        json={
+            "serviceKey": "ops",
+            "filename": "call.wav",
+            "contentBase64": "ZmFrZS1hdWRpbw==",
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "backend down"
 
 
 def test_fake_call_transcript_route(isolated_db):
@@ -1755,7 +2233,7 @@ def test_call_link_correction_and_leg_transcript_routes(isolated_db):
     assert response.status_code == 200
     assert response.json()["jobId"] == second_job
 
-    legs = client.get(f"/calls/sessions/{session['id']}/legs").json()
+    legs = client.get(f"/calls/sessions/{session['id']}/legs", headers=AUTH_HEADERS).json()
     leg_id = legs[0]["id"]
     transcript = client.post(
         f"/calls/legs/{leg_id}/transcripts/fake",
@@ -1790,13 +2268,13 @@ def test_state_egress_combines_observer_and_call_ops_streams(isolated_db):
         conn.commit()
 
     client = TestClient(api.app)
-    response = client.get(f"/state-egress/events?surface=observer&jobId={job_id}&limit=20")
+    response = client.get(f"/state-egress/events?surface=observer&jobId={job_id}&limit=20", headers=AUTH_HEADERS)
     assert response.status_code == 200
     payload = response.json()
     assert any(row["eventFamily"] == "diary_task_event" for row in payload)
     assert all(row["surface"] == "observer" for row in payload)
 
-    response = client.get("/state-egress/events?surface=all&limit=20")
+    response = client.get("/state-egress/events?surface=all&limit=20", headers=AUTH_HEADERS)
     assert response.status_code == 200
     surfaces = {row["surface"] for row in response.json()}
     assert "observer" in surfaces

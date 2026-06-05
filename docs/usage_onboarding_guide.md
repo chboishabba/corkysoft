@@ -45,6 +45,8 @@ workflow inside that shell.
 | System / Rollout Admin | `Admin` | `Operations`, `Network`, `Pricing Intelligence`, `Quote` |
 
 See [UI Role Coverage Matrix](ui_role_coverage_matrix.md) for the authoritative role-to-surface mapping.
+See [Service Blueprint](service_blueprint.md) for the end-to-end inquiry,
+customer communication, worker execution, and job-completion matrices.
 
 ## Roles and Starting Surfaces
 
@@ -398,6 +400,7 @@ Record fallback use when:
 
 ## Related Docs
 
+- [Service Blueprint And Workflow Matrices](service_blueprint.md)
 - [Operator User Stories](operator_user_stories.md)
 - [UI Role Coverage Matrix](ui_role_coverage_matrix.md)
 - [Rollout Execution Stories](rollout_execution_user_stories.md)

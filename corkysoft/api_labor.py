@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from analytics.db import (
@@ -20,36 +19,23 @@ from analytics.operations_assignment import (
     list_labor_reconciliation,
     list_planned_labor_assignments,
 )
+from corkysoft.api_shared import (
+    LABOR_WRITE_SCOPE,
+    ApiAuthContext,
+    _current_db_path,
+    record_api_write_receipt,
+    require_api_auth_context,
+    require_internal_api_read_token,
+)
 
-router = APIRouter()
-
-
-def _current_db_path() -> str:
-    return (
-        os.environ.get("CORKYSOFT_DB")
-        or os.environ.get("ROUTES_DB")
-        or "routes.db"
-    )
-
-
-def _required_internal_api_token() -> str:
-    token = os.environ.get("CORKYSOFT_API_TOKEN")
-    if not token:
-        raise HTTPException(
-            status_code=503,
-            detail="CORKYSOFT_API_TOKEN is not configured for mutating API routes",
-        )
-    return token
+router = APIRouter(dependencies=[Depends(require_internal_api_read_token)])
+require_labor_write = require_api_auth_context((LABOR_WRITE_SCOPE,))
 
 
-def require_internal_api_token(
-    x_corkysoft_api_key: Optional[str] = Header(
-        default=None, alias="X-Corkysoft-Api-Key"
-    ),
-) -> None:
-    expected = _required_internal_api_token()
-    if x_corkysoft_api_key != expected:
-        raise HTTPException(status_code=401, detail="Invalid internal API token")
+def _labor_actor(auth: ApiAuthContext, supplied: Optional[str] = None) -> str:
+    if auth.legacy and supplied:
+        return supplied
+    return auth.actor
 
 
 class PlannedLaborAssignmentResponse(BaseModel):
@@ -432,11 +418,12 @@ def get_worker_absence_records(
 @router.post(
     "/worker-absence/records",
     response_model=WorkerAbsenceRecordResponse,
-    dependencies=[Depends(require_internal_api_token)],
     summary="Create a worker absence or leave record",
 )
 def create_worker_absence(
+    request: Request,
     payload: WorkerAbsenceRecordRequest,
+    auth: ApiAuthContext = Depends(require_labor_write),
 ) -> WorkerAbsenceRecordResponse:
     if payload.absenceType.strip().lower() not in ABSENCE_RECORD_TYPES:
         raise HTTPException(status_code=400, detail="Unsupported absence type")
@@ -453,7 +440,15 @@ def create_worker_absence(
             hours_per_day=payload.hoursPerDay,
             note=payload.note,
             source=payload.source,
-            recorded_by=payload.recordedBy,
+            recorded_by=_labor_actor(auth, payload.recordedBy),
+        )
+        record_api_write_receipt(
+            conn,
+            auth=auth,
+            action="labor.worker_absence.create",
+            resource_type="worker_absence_record",
+            resource_id=str(row["id"]),
+            request=request,
         )
     return WorkerAbsenceRecordResponse(
         **{

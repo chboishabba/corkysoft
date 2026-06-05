@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field
 
 from analytics.db_connection import connection_scope
@@ -19,36 +18,34 @@ from analytics.kent_ams_import import (
     update_kent_tender_policy_config,
     upsert_kent_override_reason_code,
 )
+from corkysoft.api_shared import (
+    KENT_WRITE_SCOPE,
+    ApiAuthContext,
+    _current_db_path,
+    record_api_write_receipt,
+    require_api_auth_context,
+    require_internal_api_read_token,
+)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_internal_api_read_token)])
+require_kent_write = require_api_auth_context((KENT_WRITE_SCOPE,))
 
 
-def _current_db_path() -> str:
-    return (
-        os.environ.get("CORKYSOFT_DB")
-        or os.environ.get("ROUTES_DB")
-        or "routes.db"
+def _kent_actor(auth: ApiAuthContext, supplied: Optional[str] = None) -> str:
+    if auth.legacy and supplied:
+        return supplied
+    return auth.actor
+
+
+def _receipt(conn, *, auth: ApiAuthContext, action: str, resource_type: str, resource_id: object, request: Request) -> None:
+    record_api_write_receipt(
+        conn,
+        auth=auth,
+        action=action,
+        resource_type=resource_type,
+        resource_id=str(resource_id),
+        request=request,
     )
-
-
-def _required_internal_api_token() -> str:
-    token = os.environ.get("CORKYSOFT_API_TOKEN")
-    if not token:
-        raise HTTPException(
-            status_code=503,
-            detail="CORKYSOFT_API_TOKEN is not configured for mutating API routes",
-        )
-    return token
-
-
-def require_internal_api_token(
-    x_corkysoft_api_key: Optional[str] = Header(
-        default=None, alias="X-Corkysoft-Api-Key"
-    ),
-) -> None:
-    expected = _required_internal_api_token()
-    if x_corkysoft_api_key != expected:
-        raise HTTPException(status_code=401, detail="Invalid internal API token")
 
 
 class KentTenderPriorityResponse(BaseModel):
@@ -203,8 +200,9 @@ def get_kent_tender_policy() -> KentTenderPolicyConfigResponse:
     summary="Update default Kent tender policy config",
 )
 def put_kent_tender_policy(
+    request: Request,
     payload: KentTenderPolicyConfigUpdateRequest,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_kent_write),
 ) -> KentTenderPolicyConfigResponse:
     with connection_scope(_current_db_path()) as conn:
         updated = update_kent_tender_policy_config(
@@ -213,6 +211,14 @@ def put_kent_tender_policy(
             absolute_margin_threshold=payload.absoluteMarginThreshold,
             margin_percent_threshold=payload.marginPercentThreshold,
             loss_alert_floor=payload.lossAlertFloor,
+        )
+        _receipt(
+            conn,
+            auth=auth,
+            action="kent.policy.update",
+            resource_type="kent_policy_config",
+            resource_id="default",
+            request=request,
         )
     return KentTenderPolicyConfigResponse(**updated)
 
@@ -234,9 +240,10 @@ def get_kent_tender_override_reasons() -> List[KentTenderOverrideReasonCodeRespo
     summary="Create or update a Kent tender override reason code",
 )
 def put_kent_tender_override_reason(
+    request: Request,
     code: str = Path(..., description="Reason code identifier"),
     payload: KentTenderOverrideReasonCodeUpsertRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_kent_write),
 ) -> KentTenderOverrideReasonCodeResponse:
     if code != payload.code:
         raise HTTPException(status_code=400, detail="Path code must match payload code")
@@ -249,6 +256,14 @@ def put_kent_tender_override_reason(
                 description=payload.description,
                 active=payload.active,
             )
+            _receipt(
+                conn,
+                auth=auth,
+                action="kent.override_reason.upsert",
+                resource_type="kent_override_reason",
+                resource_id=payload.code,
+                request=request,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     return KentTenderOverrideReasonCodeResponse(**row)
@@ -260,9 +275,10 @@ def put_kent_tender_override_reason(
     summary="Record an operator override for a Kent tender",
 )
 def post_kent_tender_override(
+    request: Request,
     tender_external_id: str = Path(..., description="Kent tender external id"),
     payload: KentTenderOverrideRequest = ...,
-    _auth: None = Depends(require_internal_api_token),
+    auth: ApiAuthContext = Depends(require_kent_write),
 ) -> KentTenderOverrideResponse:
     with connection_scope(_current_db_path()) as conn:
         try:
@@ -270,9 +286,17 @@ def post_kent_tender_override(
                 conn,
                 tender_external_id=tender_external_id,
                 action=payload.action,
-                operator_id=payload.operatorId,
+                operator_id=_kent_actor(auth, payload.operatorId),
                 reason_code=payload.reasonCode,
                 note=payload.note,
+            )
+            _receipt(
+                conn,
+                auth=auth,
+                action="kent.tender_override.create",
+                resource_type="kent_tender_override",
+                resource_id=row["id"],
+                request=request,
             )
         except ValueError as exc:
             detail = str(exc)
