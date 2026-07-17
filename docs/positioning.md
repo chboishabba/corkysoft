@@ -64,9 +64,12 @@ Strategic framing:
 - That means the value is not just storing jobs, but helping operators decide
   what to quote, accept, plan, staff, escalate, and reconcile.
 
-## Strategy: Integrate, Do Not Replace
+## Strategy: Integrate First, Internalize the Decision-Critical Gaps
 
-The product should sit on top of existing operational systems rather than replace them.
+The product should sit on top of existing operational systems rather than
+attempt to replace every category at once. Corkysoft will selectively
+internalize the execution workflows where its commercial and operational
+reasoning must be acted on directly.
 
 Corkysoft should own:
 - Pricing intelligence and profitability analytics.
@@ -89,6 +92,9 @@ Integration paths:
 - Webhooks for incremental updates.
 
 Selective internalization:
+- The near-term bridge is calendar-first dispatch, crew execution,
+  customer-safe status/receipt updates, quote-to-job handoff, and reviewed
+  closure evidence. See [Operations Platform Roadmap](operations_platform_roadmap.md).
 - Where incumbent systems are weak on reasoning, Corkysoft should gradually
   formalize requirements, proposal, and governance state instead of leaving it
   as undocumented operator memory.
@@ -144,3 +150,12 @@ Derived metrics:
 ## Product Positioning Statement
 
 "Decision intelligence for removals companies."
+
+Near-term commercial expression:
+
+"A moving-company operations platform with unusually deep pricing,
+profitability, corridor, and decision intelligence."
+
+This does not claim general CRM, payment, reputation-management, storage
+billing, or broad connector parity. Those remain integration candidates unless
+a separate product case promotes them into Corkysoft-owned scope.

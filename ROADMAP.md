@@ -2,7 +2,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 
 ---
 
-## Active Audit Update (2026-06-04)
+## Active Audit Update (2026-07-17)
 
 Current canonical status surface:
 
@@ -44,6 +44,11 @@ Priority order for the next execution wave:
    Customer tracking/receipts, richer planner/media/CV workflows,
    international/compliance-heavy work, and deeper solver work should wait
    until the security, import, and decision-quality gates are under control.
+   The [Operations Platform Roadmap](docs/operations_platform_roadmap.md)
+   now consolidates the already-planned calendar dispatch, crew execution,
+   customer-update, quote-to-job, and evidence/closure bridge. It does not
+   expand near-term scope to general CRM, payments, reputation management,
+   storage billing, or broad connector parity.
 
 zkSEC-informed security gates:
 

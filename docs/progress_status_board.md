@@ -1,6 +1,6 @@
 # Progress Status Board
 
-Last updated: **2026-06-04**
+Last updated: **2026-07-17**
 
 This page is the operational tracker for implementation-to-docs alignment. Use
 it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and
@@ -142,6 +142,11 @@ cases, accepted risks, owner lanes, and promotion gates live in
 - Future lane: customer-facing tracking and receipt surfaces
 - build a separate public/customer-safe status and receipt contract on top of
   live telemetry and job-status primitives without reusing internal shell state
+
+- Product-bridge roadmap: [Operations Platform Roadmap](operations_platform_roadmap.md)
+- consolidate calendar-first dispatch, a crew-facing execution workflow,
+  promoted job/customer state, quote-to-job handoff, and reviewed closure
+  evidence without claiming full CRM-to-payment-suite parity
 
 ## Worker Lanes
 

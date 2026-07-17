@@ -49,6 +49,7 @@ operations and polished customer-facing service.
 [Spreadsheet Replacement Plan](docs/spreadsheet_replacement_plan.md)
 [Planner Interaction Model](docs/planner_interaction_model.md)
 [Operations Diary Workflow](docs/operations_diary_workflow.md)
+[Operations Platform Roadmap](docs/operations_platform_roadmap.md)
 [Job Cost and Invoice Reconciliation](docs/job_cost_and_invoice_reconciliation.md)
 [Adaptive Learning Loop](docs/adaptive_learning_loop.md)
 [Auth Red-Team Plan](docs/auth_red_team_plan.md)
@@ -83,6 +84,7 @@ Environment rule:
 
 - Estimator / quoting flow: [Quote to Award Lifecycle](docs/commercial_workflow_lifecycle.md)
 - Dispatch / jobs / execution flow: [Spreadsheet Replacement Plan](docs/spreadsheet_replacement_plan.md)
+- Consolidated operations-platform milestones: [Operations Platform Roadmap](docs/operations_platform_roadmap.md)
 - Planner UX target: [Planner Interaction Model](docs/planner_interaction_model.md)
 - Manager day/week cockpit: [Operations Diary Workflow](docs/operations_diary_workflow.md)
 - Job cost and invoicing review: [Job Cost and Invoice Reconciliation](docs/job_cost_and_invoice_reconciliation.md)
@@ -158,7 +160,7 @@ Documentation authority:
   internal API read/write authority, scoped credential, and actor-binding
   acceptance criteria.
 
-## Current Status (2026-04-02)
+## Current Status (2026-07-17)
 
 Latest tracking page: [Progress status board](docs/progress_status_board.md)
 
@@ -215,6 +217,10 @@ Main blockers to reach the next phase:
 - Kent contract validation against real payloads and real operator usage
 
 High-leverage next features:
+- consolidate the existing dispatch, crew-execution, customer-update,
+  quote-to-job, and evidence plans into the staged Operations Platform roadmap;
+  this is the bridge to a daily operating product, not a claim of full
+  CRM-to-payment-suite parity
 - route and tender calibration against live operator feedback
 - deepen the implemented operations diary cockpit with sourced metrics,
   richer review state, and stronger reconciliation follow-through

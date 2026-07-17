@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-07-17
+
+- consolidated the existing dispatch, worker-execution, customer-communication,
+  quote-to-job, and evidence/closure plans in
+  `docs/operations_platform_roadmap.md`
+- clarified product positioning: Corkysoft integrates first but selectively
+  internalizes decision-critical operational workflows; it does not yet claim
+  general CRM, payments, reputation-management, storage-billing, or broad
+  connector parity
+- aligned README, ROADMAP, and the progress board with the consolidated
+  operations-platform bridge and its unchanged security/import/decision-quality
+  promotion gates
+
 ## 2026-06-04
 
 - added `docs/service_blueprint.md` as the canonical lifecycle matrix for
