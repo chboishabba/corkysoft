@@ -35,7 +35,7 @@ export default defineConfig({
             `PYTHONPATH=${projectRoot}`,
             'CORKYSOFT_ENV=development',
             'CORKYSOFT_ALLOW_ANONYMOUS_UI=1',
-            'venv/bin/python',
+            'python',
             '-m',
             'streamlit',
             'run',
