@@ -100,6 +100,7 @@ def ensure_operations_platform_schema(conn: sqlite3.Connection) -> None:
         "internal_notes": "TEXT",
     }.items():
         _ensure_column(conn, "jobs", name, declaration)
+    _ensure_column(conn, "workers", "employee_code", "TEXT")
     for name, declaration in {
         "assignment_status": "TEXT NOT NULL DEFAULT 'draft'",
         "warning_flags": "TEXT NOT NULL DEFAULT '[]'",
