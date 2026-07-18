@@ -40,6 +40,10 @@ from corkysoft.call_ops import (
     resolve_call_links,
     submit_call_audio_for_transcription,
 )
+from corkysoft.evidence_promotion import (
+    decide_evidence_promotion,
+    propose_evidence_promotion,
+)
 
 
 def _job(conn: sqlite3.Connection) -> int:
@@ -49,6 +53,55 @@ def _job(conn: sqlite3.Connection) -> int:
             ("Client A", "Brisbane", "Cairns", "2026-03-13T00:00:00+00:00"),
         ).lastrowid
     )
+
+
+def test_transcript_evidence_requires_scoped_review_and_stays_proposal_only() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    ensure_dashboard_tables(conn)
+    job_id = _job(conn)
+    call = create_call_event(
+        conn,
+        event_kind="client_call",
+        direction="inbound",
+        caller_phone="0400 111 222",
+        job_id=job_id,
+        title="Evidence boundary",
+    )
+    artifact = generate_fake_transcript_artifact(conn, call_event_id=call["id"])
+
+    proposal = propose_evidence_promotion(
+        conn,
+        source_artifact_id=artifact["id"],
+        proposed_target="job_state",
+        proposed_action="mark_completed",
+        proposed_payload={"jobId": job_id, "state": "completed"},
+        proposed_by="advisory-service",
+    )
+    assert proposal["state"] == "held"
+    assert conn.execute("SELECT COUNT(*) FROM call_notes").fetchone()[0] == 0
+
+    accepted = decide_evidence_promotion(
+        conn,
+        promotion_id=proposal["id"],
+        state="accepted",
+        actor="reviewer@example.test",
+        credential_id="evidence-reviewer",
+        scopes=("evidence:review",),
+        request_id="req-evidence-001",
+        reason="Reviewed against the call recording.",
+    )
+    assert accepted["state"] == "accepted"
+    assert accepted["decidedBy"] == "reviewer@example.test"
+    assert conn.execute("SELECT COUNT(*) FROM call_notes").fetchone()[0] == 0
+    decision = conn.execute(
+        "SELECT actor, credential_id, request_id FROM evidence_promotion_decisions"
+    ).fetchone()
+    assert dict(decision) == {
+        "actor": "reviewer@example.test",
+        "credential_id": "evidence-reviewer",
+        "request_id": "req-evidence-001",
+    }
 
 
 def test_call_event_auto_creates_client_and_notes_actions_flow(monkeypatch) -> None:

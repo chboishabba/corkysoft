@@ -119,6 +119,7 @@ Initial supported scopes:
 - `import:write`
 - `calls:write`
 - `worker_time:write`
+- `evidence:review`
 - `kent:write`
 - `labor:write`
 - `operations:write`
@@ -132,6 +133,17 @@ Customer-visible status, tracking, receipts, notifications, and support replay
 must consume only reviewed public-safe projections. They must not expose raw
 dashboard state, internal notes, margin/cost data, worker private data, raw
 telemetry, or advisory transcript/model output.
+
+## Reviewed Evidence Promotion
+
+Transcript and model evidence is never an authority-bearing command. A caller
+with `evidence:review` may create a durable, `held` proposal naming its source
+artifact, target, proposed action, and public/internal payload. A scoped actor
+can later record `accepted`, `rejected`, or `held`; the decision stores actor,
+credential, scopes, request id, reason, and immutable history. Neither
+proposal nor acceptance itself applies a note, worker-time decision, job-state
+change, or customer projection. Those effects remain separate governed writes,
+so raw evidence cannot silently cross into operations.
 
 ## Acceptance Criteria
 

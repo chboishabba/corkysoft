@@ -27,7 +27,11 @@ from analytics.operations_diary import (
     upsert_operations_diary_task,
     upsert_subcontractor_bill_review,
 )
-from corkysoft.call_ops import record_worker_time_capture_event
+from corkysoft.call_ops import (
+    create_call_event,
+    generate_fake_transcript_artifact,
+    record_worker_time_capture_event,
+)
 from corkysoft.whisperx_adapter import WhisperXAdapterError
 
 
@@ -1185,6 +1189,64 @@ def test_legacy_write_token_is_denied_without_explicit_compatibility_flag(isolat
     )
 
     assert response.status_code == 401
+
+
+def test_evidence_promotion_uses_scoped_actor_and_never_applies_raw_payload(monkeypatch, isolated_db):
+    _set_service_credentials(
+        monkeypatch,
+        [{
+            "id": "evidence-reviewer",
+            "token": "evidence-review-token",
+            "actor": "reviewer@example.test",
+            "scopes": ["api:read", "evidence:review"],
+        }],
+    )
+    with sqlite3.connect(isolated_db) as conn:
+        conn.row_factory = sqlite3.Row
+        ensure_dashboard_tables(conn)
+        job_id = _create_job(conn)
+        call = create_call_event(
+            conn,
+            event_kind="client_call",
+            direction="inbound",
+            caller_phone="0400 111 222",
+            job_id=job_id,
+            title="Promotion review",
+        )
+        artifact = generate_fake_transcript_artifact(conn, call_event_id=call["id"])
+        conn.commit()
+
+    client = TestClient(api.app)
+    proposed = client.post(
+        "/evidence-promotions",
+        json={
+            "sourceArtifactId": artifact["id"],
+            "proposedTarget": "customer_projection",
+            "proposedAction": "send_completion_message",
+            "proposedPayload": {"jobId": job_id, "message": "Move complete"},
+        },
+        headers={
+            "X-Corkysoft-Api-Key": "evidence-review-token",
+            "X-Corkysoft-Request-Id": "req-evidence-001",
+        },
+    )
+    assert proposed.status_code == 200
+    assert proposed.json()["state"] == "held"
+    promotion_id = proposed.json()["id"]
+
+    decided = client.post(
+        f"/evidence-promotions/{promotion_id}/decision",
+        json={"state": "accepted", "reason": "Operator reviewed source."},
+        headers={"X-Corkysoft-Api-Key": "evidence-review-token"},
+    )
+    assert decided.status_code == 200
+    assert decided.json()["decidedBy"] == "reviewer@example.test"
+    with sqlite3.connect(isolated_db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM call_notes").fetchone()[0] == 0
+        receipt = conn.execute(
+            "SELECT actor, action FROM api_write_receipts ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert tuple(receipt) == ("reviewer@example.test", "evidence_promotion.decide")
 
 
 def test_operations_cutover_apply_recommendation_route(isolated_db):

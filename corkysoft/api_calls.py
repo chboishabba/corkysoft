@@ -16,6 +16,7 @@ from analytics.operations_diary import (
 )
 from corkysoft.api_shared import (
     CALLS_WRITE_SCOPE,
+    EVIDENCE_REVIEW_SCOPE,
     WORKER_TIME_WRITE_SCOPE,
     ApiAuthContext,
     _current_db_path,
@@ -67,11 +68,19 @@ from corkysoft.call_ops import (
     resolve_call_links,
     submit_call_audio_for_transcription,
 )
+from corkysoft.evidence_promotion import (
+    PROMOTION_STATES,
+    PROMOTION_TARGETS,
+    decide_evidence_promotion,
+    get_evidence_promotion,
+    propose_evidence_promotion,
+)
 from corkysoft.whisperx_adapter import WhisperXAdapterError
 
 router = APIRouter(dependencies=[Depends(require_internal_api_read_token)])
 require_calls_write = require_api_auth_context((CALLS_WRITE_SCOPE,))
 require_worker_time_write = require_api_auth_context((WORKER_TIME_WRITE_SCOPE,))
+require_evidence_review = require_api_auth_context((EVIDENCE_REVIEW_SCOPE,))
 
 _ALLOWED_TRANSCRIPT_AUDIO_EXTENSIONS = {".m4a", ".mp3", ".mp4", ".ogg", ".wav"}
 _MAX_TRANSCRIPT_AUDIO_BYTES = 25 * 1024 * 1024
@@ -370,6 +379,37 @@ class TranscriptUploadRequest(BaseModel):
     contentBase64: str = Field(..., max_length=_MAX_TRANSCRIPT_BASE64_CHARS)
     language: Optional[str] = Field(default=None, max_length=16)
     diarize: bool = True
+
+
+class EvidencePromotionCreateRequest(BaseModel):
+    sourceArtifactId: int
+    proposedTarget: str = Field(..., description="Operational target; remains proposal-only")
+    proposedAction: str = Field(..., min_length=1, max_length=128)
+    proposedPayload: Dict[str, Any] = Field(default_factory=dict)
+
+
+class EvidencePromotionDecisionRequest(BaseModel):
+    state: str = Field(..., description="held, accepted, or rejected")
+    reason: Optional[str] = Field(default=None, max_length=2_000)
+
+
+class EvidencePromotionResponse(BaseModel):
+    id: int
+    sourceId: int
+    sourceType: str
+    sourceClassification: str
+    proposedTarget: str
+    proposedAction: str
+    proposedPayload: Dict[str, Any]
+    state: str
+    proposedBy: str
+    decidedBy: Optional[str] = None
+    decisionReason: Optional[str] = None
+    decisionCredentialId: Optional[str] = None
+    decisionScopes: List[str] = Field(default_factory=list)
+    requestId: Optional[str] = None
+    createdAt: str
+    decidedAt: Optional[str] = None
 
 
 def _decode_transcript_audio_upload(
@@ -1144,6 +1184,97 @@ def post_call_extracted_action_decision(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ExtractedActionResponse(**row)
+
+
+@router.post(
+    "/evidence-promotions",
+    response_model=EvidencePromotionResponse,
+    summary="Create a held proposal from reviewed advisory evidence",
+)
+def post_evidence_promotion(
+    request: Request,
+    payload: EvidencePromotionCreateRequest,
+    auth: ApiAuthContext = Depends(require_evidence_review),
+) -> EvidencePromotionResponse:
+    """Persist a proposal only; this endpoint cannot apply an operational effect."""
+
+    if payload.proposedTarget not in PROMOTION_TARGETS:
+        raise HTTPException(status_code=400, detail="Unsupported evidence promotion target")
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = propose_evidence_promotion(
+                conn,
+                source_artifact_id=payload.sourceArtifactId,
+                proposed_target=payload.proposedTarget,
+                proposed_action=payload.proposedAction,
+                proposed_payload=payload.proposedPayload,
+                proposed_by=auth.actor,
+            )
+            _receipt(
+                conn,
+                auth=auth,
+                action="evidence_promotion.propose",
+                resource_type="evidence_promotion",
+                resource_id=row["id"],
+                request=request,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return EvidencePromotionResponse(**row)
+
+
+@router.get(
+    "/evidence-promotions/{promotion_id}",
+    response_model=EvidencePromotionResponse,
+    summary="Get a reviewed-evidence promotion proposal",
+)
+def get_evidence_promotion_route(
+    promotion_id: int = Path(..., description="Evidence promotion identifier"),
+) -> EvidencePromotionResponse:
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = get_evidence_promotion(conn, promotion_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return EvidencePromotionResponse(**row)
+
+
+@router.post(
+    "/evidence-promotions/{promotion_id}/decision",
+    response_model=EvidencePromotionResponse,
+    summary="Accept, reject, or hold a reviewed-evidence proposal",
+)
+def post_evidence_promotion_decision(
+    request: Request,
+    promotion_id: int = Path(..., description="Evidence promotion identifier"),
+    payload: EvidencePromotionDecisionRequest = ...,
+    auth: ApiAuthContext = Depends(require_evidence_review),
+) -> EvidencePromotionResponse:
+    if payload.state not in PROMOTION_STATES:
+        raise HTTPException(status_code=400, detail="Invalid evidence promotion decision state")
+    with connection_scope(_current_db_path()) as conn:
+        try:
+            row = decide_evidence_promotion(
+                conn,
+                promotion_id=promotion_id,
+                state=payload.state,
+                actor=auth.actor,
+                credential_id=auth.credential_id,
+                scopes=auth.scopes,
+                request_id=auth.request_id,
+                reason=payload.reason,
+            )
+            _receipt(
+                conn,
+                auth=auth,
+                action="evidence_promotion.decide",
+                resource_type="evidence_promotion",
+                resource_id=promotion_id,
+                request=request,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return EvidencePromotionResponse(**row)
 
 
 @router.post(
