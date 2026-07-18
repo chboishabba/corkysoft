@@ -33,13 +33,16 @@ cases, accepted risks, owner lanes, and promotion gates live in
   Current read-only tools now constrain caller-supplied `db_path` values to
   configured roots; mutable tool governance remains deferred.
 - Kent payload governance and operator workflow validation: **🟡 in progress**
-- API-wide authz and scoped integration credentials: **🟡 in progress**
+- API-wide authz and scoped integration credentials: **🟢 implemented**
   Sensitive REST reads now require the internal API token across current API
   routers. Scoped service credentials, actor-bound writes, and API write
   receipts now cover operations planning/cutover, calls/transcripts,
   worker-time review, Kent tender/config writes, labor absence, and importer
-  writes; credential rotation/deprecation docs and exhaustive denial/receipt
-  coverage remain blockers for customer-facing automation.
+  writes. Credential lifecycle checks, explicit legacy-write gating, rotation/
+  revocation guidance, and receipt outcomes are now enforced.
+- Reviewed evidence promotion boundary: **🟢 implemented**
+  Advisory transcript evidence creates proposal-only records; scoped reviewers
+  decide held/accepted/rejected states with durable decision history and receipts.
 - Canonical migration/import contract: **🔴 blocker**
 - CI/dev workflow reproducibility: **🟡 in progress**
 
@@ -113,17 +116,9 @@ and promoted with behavioral coverage.
 
 ## Current Wave
 
-- Priority 0: secure internal API and integration authority ([#221](https://github.com/chboishabba/corkysoft/issues/221))
-- current write routers are migrated to scoped credentials with actor binding
-  and receipts; finish credential rotation/deprecation docs and exhaustive
-  denial/receipt coverage
+- Priority 0 complete: API authority [#221](https://github.com/chboishabba/corkysoft/issues/221) and reviewed evidence promotion [#222](https://github.com/chboishabba/corkysoft/issues/222).
 
-- Priority 1: implement reviewed promotion for advisory evidence ([#222](https://github.com/chboishabba/corkysoft/issues/222))
-- add scoped actor decisions that accept, reject, or hold transcript,
-  browser/OpenRecall, and PNF-derived evidence before it can influence
-  operational or customer-safe state
-
-- Priority 2: establish canonical migrations and imports ([#223](https://github.com/chboishabba/corkysoft/issues/223))
+- Priority 1: establish canonical migrations and imports ([#223](https://github.com/chboishabba/corkysoft/issues/223))
 - unify DDL authority, old-DB upgrades, MoveWare schema alignment, and
   persisted import issue reporting before downstream workflows depend on them
 
