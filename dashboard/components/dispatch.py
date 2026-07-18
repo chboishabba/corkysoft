@@ -271,6 +271,10 @@ def render_dispatch_tab(conn: sqlite3.Connection) -> None:
                 hide_index=True,
             )
 
+    if not filtered_rows:
+        st.info("No dispatch jobs match the current filters. Adjust the filters to inspect a job.")
+        return
+
     options = {
         f"Job {row['jobId']} · {row.get('jobClient') or 'Unassigned client'} · {row['jobStatus']}": row
         for row in filtered_rows
