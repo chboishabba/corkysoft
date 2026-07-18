@@ -8,6 +8,9 @@ from dashboard.components.kpi_strip import render_kpi_strip
 from dashboard.components.alert_banner import render_alert_banner
 from dashboard.components.data_provenance import render_signal_contract_notice
 from dashboard.components.dispatch import render_dispatch_tab
+from dashboard.components.dispatch_calendar import render_dispatch_calendar
+from dashboard.components.crew_workflow import render_crew_workflow
+from dashboard.components.customer_communications import render_customer_communications
 from dashboard.components.operations_diary import render_operations_diary_tab
 from dashboard.components.planner import render_planner_tab
 from dashboard.components.operations import render_operations_tab
@@ -18,6 +21,7 @@ from dashboard.components.worker_time import render_driver_shifts_tab
 from dashboard.components.payroll_labor_analytics import render_payroll_labor_analytics_tab
 from dashboard.shell_signals import build_operations_shell_signal_bundle
 from dashboard.theme import tier_separator, hero_section
+from corkysoft.operations_platform import ensure_operations_platform_schema
 
 
 def _display_operations_primary_tabs(
@@ -37,6 +41,8 @@ def render_operations_view(
     rerun_app: Any,
     workspace_state: dict[str, Any] | None = None,
 ):
+    ensure_operations_platform_schema(conn)
+
     # ── Tier 1: KPI Strip ──────────────────────────────────────────
     signal_bundle = build_operations_shell_signal_bundle(conn)
     render_signal_contract_notice(signal_bundle)
@@ -52,9 +58,19 @@ def render_operations_view(
     tier_separator()
 
     # ── Tier 3: Primary Decision View (Hero) ───────────────────────
-    hero_section("Operations Control", "Dispatch board, route planning, and daily operations diary.")
+    hero_section(
+        "Operations Control",
+        "Dispatch, calendar, crew execution, customer communication, planning and closure.",
+    )
 
-    primary_tab_labels = ["Dispatch", "Planner", "Operations Diary"]
+    primary_tab_labels = [
+        "Dispatch",
+        "Calendar",
+        "Crew",
+        "Customer Comms",
+        "Planner",
+        "Operations Diary",
+    ]
     requested_primary_tab = str((workspace_state or {}).get("operations_tab") or primary_tab_labels[0])
     if requested_primary_tab not in primary_tab_labels:
         requested_primary_tab = primary_tab_labels[0]
@@ -80,6 +96,12 @@ def render_operations_view(
     primary_tab_map = dict(zip(display_tab_labels, primary_tabs, strict=False))
     with primary_tab_map["Dispatch"]:
         render_dispatch_tab(conn)
+    with primary_tab_map["Calendar"]:
+        render_dispatch_calendar(conn)
+    with primary_tab_map["Crew"]:
+        render_crew_workflow(conn)
+    with primary_tab_map["Customer Comms"]:
+        render_customer_communications(conn)
     with primary_tab_map["Planner"]:
         render_planner_tab(filtered_df=filtered_df, conn=conn)
     with primary_tab_map["Operations Diary"]:
