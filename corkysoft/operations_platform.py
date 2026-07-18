@@ -92,6 +92,7 @@ def ensure_operations_platform_schema(conn: sqlite3.Connection) -> None:
         _ensure_column(conn, "quotes", name, declaration)
     for name, declaration in {
         "job_number": "TEXT",
+        "created_at": "TEXT",
         "quote_id": "INTEGER",
         "status": "TEXT NOT NULL DEFAULT 'draft'",
         "planned_start": "TEXT",
