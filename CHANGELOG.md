@@ -13,6 +13,14 @@
   operations-platform bridge and its unchanged security/import/decision-quality
   promotion gates
 
+## 2026-07-18
+
+- recorded the implementation programme in the canonical status surfaces:
+  GitHub issues #221–#225 cover authority, reviewed evidence, migrations/imports,
+  dashboard defects, and analytics correctness
+- linked PR #226 for the BAD-005 Dispatch empty-filter guard; the case remains
+  open pending merge and promotion coverage
+
 ## 2026-06-04
 
 - added `docs/service_blueprint.md` as the canonical lifecycle matrix for

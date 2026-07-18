@@ -1,6 +1,6 @@
 # Progress Status Board
 
-Last updated: **2026-07-17**
+Last updated: **2026-07-18**
 
 This page is the operational tracker for implementation-to-docs alignment. Use
 it with [ROADMAP.md](../ROADMAP.md), [README.md](../README.md), and
@@ -42,6 +42,12 @@ cases, accepted risks, owner lanes, and promotion gates live in
   coverage remain blockers for customer-facing automation.
 - Canonical migration/import contract: **🔴 blocker**
 - CI/dev workflow reproducibility: **🟡 in progress**
+
+GitHub execution tracking (2026-07-18): issues [#221](https://github.com/chboishabba/corkysoft/issues/221)
+through [#225](https://github.com/chboishabba/corkysoft/issues/225) now track the
+remaining implementation programme. PR [#226](https://github.com/chboishabba/corkysoft/pull/226)
+contains the BAD-005 Dispatch empty-filter guard; it remains open until merged
+and promoted with behavioral coverage.
 
 ## Current Audit Conclusions
 
@@ -107,22 +113,29 @@ cases, accepted risks, owner lanes, and promotion gates live in
 
 ## Current Wave
 
-- Priority 0: secure internal API and integration authority
+- Priority 0: secure internal API and integration authority ([#221](https://github.com/chboishabba/corkysoft/issues/221))
 - current write routers are migrated to scoped credentials with actor binding
   and receipts; finish credential rotation/deprecation docs and exhaustive
   denial/receipt coverage
 
-- Priority 1: implement reviewed promotion for advisory evidence
+- Priority 1: implement reviewed promotion for advisory evidence ([#222](https://github.com/chboishabba/corkysoft/issues/222))
 - add scoped actor decisions that accept, reject, or hold transcript,
   browser/OpenRecall, and PNF-derived evidence before it can influence
   operational or customer-safe state
 
-- Priority 2: fix operator-breaking and decision-misleading bad cases
-- address hidden-tab reveal, Dispatch empty filters, broken MoveWare/non-dry-run
-  imports, CLI history import drift, ambiguous margin semantics, price-history
-  windows, cost inference, and mock/real telemetry freshness
+- Priority 2: establish canonical migrations and imports ([#223](https://github.com/chboishabba/corkysoft/issues/223))
+- unify DDL authority, old-DB upgrades, MoveWare schema alignment, and
+  persisted import issue reporting before downstream workflows depend on them
 
-- Priority 3: harden decision-signal governance in the new views
+- Priority 3: finish operator-breaking dashboard fixes ([#224](https://github.com/chboishabba/corkysoft/issues/224))
+- close hidden-tab reveal and promote the Dispatch empty-filter guard in PR
+  [#226](https://github.com/chboishabba/corkysoft/pull/226) with behavioral tests
+
+- Priority 4: correct analytics decision quality ([#225](https://github.com/chboishabba/corkysoft/issues/225))
+- address margin semantics, deterministic history windows, cost/revenue
+  collisions, and telemetry freshness
+
+- Priority 5: harden decision-signal governance in the new views
 - replace static KPI and alert content with sourced metrics, freshness stamps,
   and explicit unknown/fallback states
 

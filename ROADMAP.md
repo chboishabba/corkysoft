@@ -2,7 +2,7 @@ Unified deliverables map for Corkysoft, aligning current implementation status w
 
 ---
 
-## Active Audit Update (2026-07-17)
+## Active Audit Update (2026-07-18)
 
 Current canonical status surface:
 
@@ -16,7 +16,7 @@ Current canonical status surface:
 
 Priority order for the next execution wave:
 
-1. **P0 security and authority boundary.**
+1. **P0 security and authority boundary (GitHub issue [#221](https://github.com/chboishabba/corkysoft/issues/221)).**
    Gate sensitive REST reads, replace the single shared write token with scoped
    service credentials, bind high-authority actions to actor/scope/receipt, and
    add payload/resource limits for transcript, WhisperX, and MCP paths.
@@ -29,18 +29,25 @@ Priority order for the next execution wave:
    MoveWare/Kent importer writes. Remaining P0 work is credential
    rotation/deprecation docs, exhaustive denial/receipt coverage, and reviewed
    transcript-promotion governance.
-2. **P1 operator-breaking and decision-misleading bugs.**
+2. **P1 reviewed evidence promotion (GitHub issue [#222](https://github.com/chboishabba/corkysoft/issues/222)).**
+   Keep transcript and model-derived signals proposal-only until an authorised
+   actor accepts, rejects, or holds the evidence.
+3. **P1 canonical migrations and imports (GitHub issue [#223](https://github.com/chboishabba/corkysoft/issues/223)).**
+   Unify schema authority and make legacy upgrades/import issue persistence
+   explicit before relying on downstream operational data.
+4. **P1 operator-breaking and decision-misleading bugs (GitHub issues [#224](https://github.com/chboishabba/corkysoft/issues/224) and [#225](https://github.com/chboishabba/corkysoft/issues/225)).**
    Fix authenticated hidden-tab reveal, Dispatch empty-filter crashes, broken
    MoveWare/non-dry-run import paths, CLI history import column drift, and
    ambiguous margin/date-window/cost-inference analytics.
-3. **P1 control-plane and CI reproducibility.**
+   The direct BAD-005 fix is currently in [PR #226](https://github.com/chboishabba/corkysoft/pull/226).
+5. **P1 control-plane and CI reproducibility.**
    Make CI run repo-venv pytest plus root Playwright smoke, separate screenshot
    artifact generation, and remove implicit `git pull`/system-tool startup
    behavior from scripts.
-4. **P2 roadmap/data-contract hardening.**
+6. **P2 roadmap/data-contract hardening.**
    Finish support-safe workspace-state replay, source shell KPI/alert signals,
    add operational data contracts, and keep generated UML freshness visible.
-5. **Future product lanes.**
+7. **Future product lanes.**
    Customer tracking/receipts, richer planner/media/CV workflows,
    international/compliance-heavy work, and deeper solver work should wait
    until the security, import, and decision-quality gates are under control.
