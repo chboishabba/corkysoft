@@ -8,7 +8,6 @@ from typing import Any, Iterable, Sequence
 from analytics.db.parameters import ensure_global_parameters_table, get_parameter_text, set_parameter_text
 
 DASHBOARD_ROLE_LAYOUTS_KEY = "dashboard.role_layouts.v1"
-
 ROLE_LAYOUT_DEFAULTS: dict[str, dict[str, Any]] = {
     "estimator": {
         "label": "Estimator",
@@ -232,9 +231,14 @@ def resolve_dashboard_layout(
     show_all_tabs: bool = False,
 ) -> dict[str, Any]:
     base_order = list(available_tabs)
+    role_key = str(layout.get("roleKey") or "")
     primary_tabs = _normalise_tabs(session_primary_tabs or layout.get("primaryTabs", []), base_order)
-    hidden_tabs = [] if show_all_tabs else _recommended_hidden_tabs(
-        str(layout.get("roleKey") or ""),
+    # PRIMARY_ONLY roles are an authorization boundary, not a presentation preference.
+    # Their hidden views remain hidden even when stale session state or a manipulated
+    # request asks to reveal every tab. Only non-restricted roles may use show-all.
+    may_show_all = bool(show_all_tabs) and role_key not in PRIMARY_ONLY_ROLE_KEYS
+    hidden_tabs = [] if may_show_all else _recommended_hidden_tabs(
+        role_key,
         primary_tabs=primary_tabs,
         hidden_tabs=session_hidden_tabs or layout.get("hiddenTabs", []),
         available_tabs=base_order,
