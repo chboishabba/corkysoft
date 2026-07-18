@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 import json
 import os
 import secrets
@@ -30,6 +31,34 @@ class ApiAuthContext:
     scopes: tuple[str, ...]
     request_id: str
     legacy: bool = False
+
+
+def _parse_credential_time(value: object, field: str, credential_id: str) -> datetime | None:
+    """Parse an optional timezone-aware ISO-8601 lifecycle timestamp."""
+
+    if value in (None, ""):
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Credential {credential_id!r} has an invalid {field} timestamp",
+        ) from exc
+    if parsed.tzinfo is None:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Credential {credential_id!r} {field} must include a timezone",
+        )
+    return parsed.astimezone(UTC)
+
+
+def _legacy_write_token_enabled() -> bool:
+    """Return whether the deprecated shared write token has been explicitly enabled."""
+
+    return os.environ.get("CORKYSOFT_ALLOW_LEGACY_API_WRITE_TOKEN", "").strip().lower() in {
+        "1", "true", "yes"
+    }
 
 
 def _current_db_path() -> str:
@@ -70,7 +99,10 @@ def require_internal_api_read_token(
     """Require internal authorization for sensitive read endpoints."""
 
     for credential in _service_credentials():
-        if x_corkysoft_api_key == credential["token"]:
+        if secrets.compare_digest(x_corkysoft_api_key or "", credential["token"]):
+            lifecycle_error = _credential_lifecycle_error(credential)
+            if lifecycle_error:
+                raise HTTPException(status_code=401, detail=lifecycle_error)
             if API_READ_SCOPE not in credential["scopes"]:
                 raise HTTPException(status_code=403, detail="Credential scope is not authorized")
             return
@@ -115,9 +147,25 @@ def _service_credentials() -> list[dict]:
                 "token": token,
                 "actor": actor,
                 "scopes": tuple(str(scope).strip() for scope in scopes if str(scope).strip()),
+                "not_before": _parse_credential_time(item.get("not_before"), "not_before", credential_id),
+                "expires_at": _parse_credential_time(item.get("expires_at"), "expires_at", credential_id),
+                "revoked_at": _parse_credential_time(item.get("revoked_at"), "revoked_at", credential_id),
             }
         )
     return credentials
+
+
+def _credential_lifecycle_error(credential: dict, now: datetime | None = None) -> str | None:
+    """Return a fail-closed lifecycle error when a credential is inactive."""
+
+    now = now or datetime.now(UTC)
+    if credential.get("revoked_at") is not None and credential["revoked_at"] <= now:
+        return "Credential has been revoked"
+    if credential.get("not_before") is not None and credential["not_before"] > now:
+        return "Credential is not active yet"
+    if credential.get("expires_at") is not None and credential["expires_at"] <= now:
+        return "Credential has expired"
+    return None
 
 
 def _request_id(value: str | None) -> str:
@@ -142,8 +190,11 @@ def require_api_auth_context(
     ) -> ApiAuthContext:
         request_id = _request_id(x_corkysoft_request_id)
         for credential in _service_credentials():
-            if x_corkysoft_api_key != credential["token"]:
+            if not secrets.compare_digest(x_corkysoft_api_key or "", credential["token"]):
                 continue
+            lifecycle_error = _credential_lifecycle_error(credential)
+            if lifecycle_error:
+                raise HTTPException(status_code=401, detail=lifecycle_error)
             scopes = credential["scopes"]
             missing = [scope for scope in required if scope not in scopes]
             if missing:
@@ -154,7 +205,7 @@ def require_api_auth_context(
                 scopes=scopes,
                 request_id=request_id,
             )
-        if allow_legacy_token:
+        if allow_legacy_token and _legacy_write_token_enabled():
             expected = _required_internal_api_token()
             if x_corkysoft_api_key == expected:
                 scopes = tuple(sorted({API_READ_SCOPE, *required}))
@@ -178,6 +229,7 @@ def ensure_api_write_receipts_table(conn: sqlite3.Connection) -> None:
             credential_id TEXT NOT NULL,
             actor TEXT NOT NULL,
             scopes_json TEXT NOT NULL,
+            outcome TEXT NOT NULL DEFAULT 'succeeded',
             action TEXT NOT NULL,
             resource_type TEXT NOT NULL,
             resource_id TEXT NOT NULL,
@@ -188,6 +240,14 @@ def ensure_api_write_receipts_table(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(api_write_receipts)").fetchall()
+    }
+    if "outcome" not in columns:
+        conn.execute(
+            "ALTER TABLE api_write_receipts ADD COLUMN outcome TEXT NOT NULL DEFAULT 'succeeded'"
+        )
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_api_write_receipts_request
@@ -210,6 +270,7 @@ def record_api_write_receipt(
     action: str,
     resource_type: str,
     resource_id: str,
+    outcome: str = "succeeded",
     request: Request | None = None,
 ) -> dict:
     ensure_api_write_receipts_table(conn)
@@ -221,18 +282,20 @@ def record_api_write_receipt(
             credential_id,
             actor,
             scopes_json,
+            outcome,
             action,
             resource_type,
             resource_id,
             request_id,
             route,
             method
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             auth.credential_id,
             auth.actor,
             json.dumps(list(auth.scopes)),
+            outcome,
             action,
             resource_type,
             str(resource_id),

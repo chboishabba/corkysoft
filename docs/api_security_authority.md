@@ -1,6 +1,6 @@
 # API Security And Authority Contract
 
-Last updated: 2026-06-06.
+Last updated: 2026-07-18.
 
 This document owns Corkysoft's internal API security and authority contract.
 Dashboard user auth remains documented separately in
@@ -35,7 +35,10 @@ Scoped credentials are now supported for migrated routes through:
 - `CORKYSOFT_SERVICE_CREDENTIALS_JSON`
 - optional `X-Corkysoft-Request-Id`
 
-Each credential entry supplies an id, token, actor, and scopes. Migrated routes
+Each credential entry supplies an id, token, actor, and scopes. Optional
+timezone-aware `not_before`, `expires_at`, and `revoked_at` timestamps define
+its lifecycle; inactive, expired, not-yet-active, and revoked credentials fail
+closed. Migrated routes
 derive authority from the resulting API auth context instead of trusting actor
 fields in request bodies.
 
@@ -43,9 +46,30 @@ Operations planning, operations cutover, calls/transcripts, worker-time review,
 Kent tender policy and override, labor absence, and MoveWare/Kent importer
 writes are now migrated to scoped service credentials. Migrated routes bind
 persisted actor/operator identity to the auth context for scoped callers and
-write `api_write_receipts` rows after successful mutations. The legacy
-`CORKYSOFT_API_TOKEN` still works as a temporary compatibility credential for
-current internal clients while rotation/deprecation guidance is completed.
+write `api_write_receipts` rows after successful mutations. Receipts include
+the authenticated actor, credential, scopes, request id, action/resource,
+route/method, timestamp, and `succeeded` outcome.
+
+`CORKYSOFT_API_TOKEN` remains valid for protected reads. It is no longer an
+implicit write credential: legacy write compatibility is disabled by default
+and must be explicitly enabled with
+`CORKYSOFT_ALLOW_LEGACY_API_WRITE_TOKEN=1` during a bounded migration window.
+
+## Credential Rotation And Revocation
+
+Rotate a service by publishing its replacement credential with a distinct id,
+actor, token, and bounded `not_before`/`expires_at` overlap. Deploy consumers
+onto the replacement, then set `revoked_at` on the old credential (or remove
+it) when the overlap ends. The API evaluates lifecycle state on every request;
+revocation takes effect immediately without a server restart because the
+credential configuration is read for each request.
+
+Do not create unbounded credential pairs. Every production service credential
+should have an `expires_at`; missing expiry is tolerated only for existing
+compatibility configuration while it is migrated. Record the planned legacy
+token removal date in deployment configuration, remove
+`CORKYSOFT_ALLOW_LEGACY_API_WRITE_TOKEN`, and then remove the shared token from
+write clients.
 
 ## Remaining P0 Scope
 
@@ -53,12 +77,13 @@ BAD-001 is corrected for authenticated sensitive reads. Read-scope granularity
 still belongs to BAD-002 because the current token is not a scoped service
 credential.
 
-BAD-002 is substantially implemented for current high-authority API families.
+BAD-002 is implemented for current high-authority API families.
 Scoped service credentials, actor-bound writes, and API write receipts are in
 place for operations planning and cutover, calls/transcripts, worker-time
 review, Kent tenders/config, labor absence, and importer writes. BAD-002
-remains open until credential rotation/deprecation docs are explicit and
-denial/receipt coverage spans every write family.
+now has explicit rotation/revocation/deprecation behavior and regression
+coverage for wrong-scope, expired, revoked, legacy-disabled, actor-binding, and
+receipt-outcome behavior.
 
 BAD-003 is narrowed to promotion governance. Transcript/audio uploads now
 enforce size/content checks, strict base64 decoding, extension allowlists, and

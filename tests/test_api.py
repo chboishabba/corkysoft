@@ -38,6 +38,7 @@ def isolated_db(tmp_path, monkeypatch):
     db_path = tmp_path / "api.db"
     monkeypatch.setenv("CORKYSOFT_DB", str(db_path))
     monkeypatch.setenv("CORKYSOFT_API_TOKEN", "test-token")
+    monkeypatch.setenv("CORKYSOFT_ALLOW_LEGACY_API_WRITE_TOKEN", "1")
     with sqlite3.connect(db_path) as conn:
         conn.executescript(
             """
@@ -1037,7 +1038,7 @@ def test_worker_time_scoped_credentials_bind_reviewer_and_receipt(monkeypatch, i
         conn.row_factory = sqlite3.Row
         receipt = conn.execute(
             """
-            SELECT credential_id, actor, action, resource_type, resource_id, request_id
+            SELECT credential_id, actor, action, resource_type, resource_id, request_id, outcome
             FROM api_write_receipts
             ORDER BY id DESC
             LIMIT 1
@@ -1092,7 +1093,7 @@ def test_operations_scoped_credentials_create_segment_and_receipt(monkeypatch, i
         conn.row_factory = sqlite3.Row
         receipt = conn.execute(
             """
-            SELECT credential_id, actor, action, resource_type, resource_id, request_id
+            SELECT credential_id, actor, action, resource_type, resource_id, request_id, outcome
             FROM api_write_receipts
             ORDER BY id DESC
             LIMIT 1
@@ -1104,6 +1105,7 @@ def test_operations_scoped_credentials_create_segment_and_receipt(monkeypatch, i
     assert receipt["resource_type"] == "job_segment"
     assert receipt["resource_id"] == str(segment_id)
     assert receipt["request_id"] == "req-operations-001"
+    assert receipt["outcome"] == "succeeded"
 
 
 def test_operations_write_wrong_scope_fails_closed(monkeypatch, isolated_db):
@@ -1132,6 +1134,57 @@ def test_operations_write_wrong_scope_fails_closed(monkeypatch, isolated_db):
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Credential scope is not authorized"
+
+
+@pytest.mark.parametrize(
+    ("lifecycle", "expected_detail"),
+    [
+        ({"expires_at": "2000-01-01T00:00:00+00:00"}, "Credential has expired"),
+        ({"revoked_at": "2000-01-01T00:00:00+00:00"}, "Credential has been revoked"),
+    ],
+)
+def test_operations_write_inactive_credential_fails_closed(
+    monkeypatch, isolated_db, lifecycle, expected_detail
+):
+    _set_service_credentials(
+        monkeypatch,
+        [{
+            "id": "inactive-operations-writer",
+            "token": "inactive-operations-token",
+            "actor": "retired-service",
+            "scopes": ["api:read", "operations:write"],
+            **lifecycle,
+        }],
+    )
+    with sqlite3.connect(isolated_db) as conn:
+        ensure_dashboard_tables(conn)
+        job_id = _create_job(conn)
+        conn.commit()
+
+    response = TestClient(api.app).post(
+        "/operations/segments",
+        json={"jobId": job_id, "segmentSequence": 1},
+        headers={"X-Corkysoft-Api-Key": "inactive-operations-token"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == expected_detail
+
+
+def test_legacy_write_token_is_denied_without_explicit_compatibility_flag(isolated_db, monkeypatch):
+    monkeypatch.delenv("CORKYSOFT_ALLOW_LEGACY_API_WRITE_TOKEN", raising=False)
+    with sqlite3.connect(isolated_db) as conn:
+        ensure_dashboard_tables(conn)
+        job_id = _create_job(conn)
+        conn.commit()
+
+    response = TestClient(api.app).post(
+        "/operations/segments",
+        json={"jobId": job_id, "segmentSequence": 1},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 401
 
 
 def test_operations_cutover_apply_recommendation_route(isolated_db):

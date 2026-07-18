@@ -454,7 +454,9 @@ Usage notes:
 
 - `ROUTES_DB`: Path to the SQLite database (default `routes.db`).
 - `CORKYSOFT_DB`: Alternate variable for pointing the dashboard at another SQLite database (overrides `ROUTES_DB` for analytics views).
-- `CORKYSOFT_API_TOKEN`: Required for mutating internal API routes such as importer writes, Kent policy changes, and override recording.
+- `CORKYSOFT_API_TOKEN`: Protected-read compatibility token. It is not an implicit mutating-route credential.
+- `CORKYSOFT_SERVICE_CREDENTIALS_JSON`: Scoped service credentials for mutating API routes. See [API security and authority](docs/api_security_authority.md).
+- `CORKYSOFT_ALLOW_LEGACY_API_WRITE_TOKEN=1`: Temporary, explicit compatibility switch for legacy write clients during credential rotation; leave unset in normal deployments.
 - `OPERATIONS_WORKBOOK_SHEET_ID` or `OPERATIONS_WORKBOOK_URL`: Shared Google Sheets workbook for `FLEET`, `STAFF`, and `SUPPLIERS` imports.
 - `OPERATIONS_STAFF_SHEET_NAME` (optional): Defaults to `STAFF` for shared-workbook staff sync.
 - `OPERATIONS_SUPPLIERS_SHEET_NAME` (optional): Defaults to `SUPPLIERS` for shared-workbook supplier sync.
