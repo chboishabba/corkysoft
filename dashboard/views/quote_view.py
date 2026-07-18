@@ -7,17 +7,19 @@ from dashboard.components.kpi_strip import render_kpi_strip
 from dashboard.components.alert_banner import render_alert_banner
 from dashboard.components.data_provenance import render_signal_contract_notice
 from dashboard.components.quote_builder import render_quote_builder
+from dashboard.components.accepted_work import render_quote_acceptance_panel
 from dashboard.components.calls import render_calls_tab
 from dashboard.components.kent import render_kent_tenders_tab
 from dashboard.shell_signals import build_quote_shell_signal_bundle
 from dashboard.theme import tier_separator, hero_section
+
 
 def render_quote_view(
     conn: sqlite3.Connection,
     filtered_df: pd.DataFrame,
     mapping: Dict[str, Any],
     state: Any,
-    rerun_app: Any
+    rerun_app: Any,
 ):
     # ── Tier 1: KPI Strip ──────────────────────────────────────────
     signal_bundle = build_quote_shell_signal_bundle(conn)
@@ -44,18 +46,14 @@ def render_quote_view(
 
     tier_separator()
 
-    # ── Tier 4: Actions (above secondary data) ─────────────────────
+    # ── Tier 4: Quote-to-job action ────────────────────────────────
     st.markdown(
         '<div class="ck-action-bar">'
-        '<span class="ck-action-label">Quote Actions</span>'
+        '<span class="ck-action-label">Accepted Work</span>'
         '</div>',
         unsafe_allow_html=True,
     )
-    action_cols = st.columns([1, 1, 4])
-    with action_cols[0]:
-        st.button("Save Draft Quote", type="primary", key="quote_save_draft")
-    with action_cols[1]:
-        st.button("Request Approval", key="quote_request_approval")
+    render_quote_acceptance_panel(conn)
 
     tier_separator()
 
