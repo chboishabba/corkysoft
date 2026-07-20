@@ -124,18 +124,37 @@ def test_missing_recommended_primary_tabs_detects_stale_dispatcher_layout() -> N
     assert "Quote" in missing
 
 
-def test_find_layout_by_tab_selects_correct_role() -> None:
+def test_find_layout_by_tab_does_not_infer_role_from_shared_surfaces() -> None:
     conn = sqlite3.connect(":memory:")
     ensure_global_parameters_table(conn)
     layouts = get_dashboard_role_layouts(conn, available_tabs=TABS)
-    estimator = find_layout_by_tab(layouts, "Quote")
-    dispatcher = find_layout_by_tab(layouts, "Operations")
-    assert estimator is not None and estimator["roleKey"] == "estimator"
-    assert dispatcher is not None and dispatcher["roleKey"] == "dispatcher"
+    assert find_layout_by_tab(layouts, "Quote") is None
+    assert find_layout_by_tab(layouts, "Operations") is None
+    assert find_layout_by_tab(layouts, "Network") is None
     assert find_layout_by_tab(layouts, "Nonexistent tab") is None
 
 
-def test_find_layout_by_tab_prefers_primary_membership_over_hidden_membership() -> None:
+def test_find_layout_by_tab_returns_unique_primary_match() -> None:
+    layouts = [
+        {
+            "roleKey": "dispatcher",
+            "label": "Dispatcher",
+            "primaryTabs": ["Operations"],
+            "hiddenTabs": ["Admin"],
+        },
+        {
+            "roleKey": "labor_planner",
+            "label": "Labor Planner / Staff Coordinator",
+            "primaryTabs": ["Network"],
+            "hiddenTabs": [],
+        },
+    ]
+    selected = find_layout_by_tab(layouts, "Operations")
+    assert selected is not None
+    assert selected["roleKey"] == "dispatcher"
+
+
+def test_find_layout_by_tab_rejects_ambiguous_primary_matches() -> None:
     layouts = [
         {
             "roleKey": "dispatcher",
@@ -150,6 +169,4 @@ def test_find_layout_by_tab_prefers_primary_membership_over_hidden_membership() 
             "hiddenTabs": [],
         },
     ]
-    selected = find_layout_by_tab(layouts, "Operations")
-    assert selected is not None
-    assert selected["roleKey"] == "dispatcher"
+    assert find_layout_by_tab(layouts, "Operations") is None
