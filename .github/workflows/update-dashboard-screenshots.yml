@@ -1,0 +1,100 @@
+name: Update dashboard screenshots
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'dashboard/**'
+      - 'analytics/**'
+      - 'corkysoft/**'
+      - 'e2e/dashboard-screenshots.spec.ts'
+      - 'playwright.config.ts'
+      - 'requirements.txt'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/update-dashboard-screenshots.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dashboard-readme-screenshots
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONPATH: .
+      CORKYSOFT_ALLOW_ANONYMOUS: '1'
+      STREAMLIT_SERVER_HEADLESS: 'true'
+      STREAMLIT_BROWSER_GATHER_USAGE_STATS: 'false'
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install browser dependencies
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Start dashboard
+        run: |
+          nohup npm run start:dashboard > /tmp/corkysoft-streamlit.log 2>&1 &
+          echo $! > /tmp/corkysoft-streamlit.pid
+
+      - name: Wait for dashboard
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8501/_stcore/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/corkysoft-streamlit.log
+          exit 1
+
+      - name: Capture README screenshots
+        run: npm run screenshots:dashboard
+
+      - name: Upload screenshots for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-screenshots
+          path: docs/img/dashboard-*.png
+          if-no-files-found: error
+
+      - name: Commit refreshed screenshots
+        run: |
+          if git diff --quiet -- docs/img/dashboard-*.png; then
+            echo 'Dashboard screenshots are already current.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/img/dashboard-*.png
+          git commit -m 'docs: refresh dashboard screenshots'
+          git push
+
+      - name: Print dashboard log on failure
+        if: failure()
+        run: cat /tmp/corkysoft-streamlit.log || true
