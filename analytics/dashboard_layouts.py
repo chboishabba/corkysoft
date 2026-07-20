@@ -172,16 +172,29 @@ def find_layout_by_tab(
     layouts: Sequence[dict[str, Any]],
     tab: str | None,
 ) -> dict[str, Any] | None:
+    """Return a layout only when ``tab`` identifies exactly one role.
+
+    A dashboard surface is not an operator identity. Shared surfaces such as
+    Network and Operations therefore cannot safely select a role based on list
+    order. Primary membership takes precedence over hidden membership, but each
+    tier must contain exactly one match before a role is inferred.
+    """
     if not tab:
         return None
-    for layout in layouts:
-        primary_tabs = set(layout.get("primaryTabs", []))
-        if tab in primary_tabs:
-            return layout
-    for layout in layouts:
-        hidden_tabs = set(layout.get("hiddenTabs", []))
-        if tab in hidden_tabs:
-            return layout
+
+    primary_matches = [
+        layout for layout in layouts if tab in set(layout.get("primaryTabs", []))
+    ]
+    if len(primary_matches) == 1:
+        return primary_matches[0]
+    if primary_matches:
+        return None
+
+    hidden_matches = [
+        layout for layout in layouts if tab in set(layout.get("hiddenTabs", []))
+    ]
+    if len(hidden_matches) == 1:
+        return hidden_matches[0]
     return None
 
 
