@@ -69,8 +69,8 @@ def _legacy_write_token_enabled() -> bool:
     )
 
 
-def _legacy_read_token_enabled() -> bool:
-    """Allow read-token compatibility unless it is explicitly disabled."""
+def _legacy_direct_token_enabled() -> bool:
+    """Allow direct legacy-token compatibility unless explicitly disabled."""
 
     return _env_flag("CORKYSOFT_ALLOW_LEGACY_API_TOKEN", default=True)
 
@@ -100,7 +100,7 @@ def require_internal_api_token(
         default=None, alias="X-Corkysoft-Api-Key"
     ),
 ) -> None:
-    if not _legacy_write_token_enabled():
+    if not _legacy_direct_token_enabled():
         raise HTTPException(status_code=401, detail="Legacy internal API token is disabled")
     expected = _required_internal_api_token()
     if x_corkysoft_api_key != expected:
@@ -122,7 +122,7 @@ def require_internal_api_read_token(
             if API_READ_SCOPE not in credential["scopes"]:
                 raise HTTPException(status_code=403, detail="Credential scope is not authorized")
             return
-    if not _legacy_read_token_enabled():
+    if not _legacy_direct_token_enabled():
         raise HTTPException(status_code=401, detail="Invalid internal API token")
     expected = _required_internal_api_token()
     if x_corkysoft_api_key != expected:
