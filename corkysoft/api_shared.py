@@ -54,12 +54,25 @@ def _parse_credential_time(value: object, field: str, credential_id: str) -> dat
     return parsed.astimezone(UTC)
 
 
+def _env_flag(name: str, *, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _legacy_write_token_enabled() -> bool:
     """Return whether the deprecated shared write token has been explicitly enabled."""
 
-    return os.environ.get("CORKYSOFT_ALLOW_LEGACY_API_WRITE_TOKEN", "").strip().lower() in {
-        "1", "true", "yes"
-    }
+    return _env_flag("CORKYSOFT_ALLOW_LEGACY_API_WRITE_TOKEN") or _env_flag(
+        "CORKYSOFT_ALLOW_LEGACY_API_TOKEN"
+    )
+
+
+def _legacy_direct_token_enabled() -> bool:
+    """Allow direct legacy-token compatibility unless explicitly disabled."""
+
+    return _env_flag("CORKYSOFT_ALLOW_LEGACY_API_TOKEN", default=True)
 
 
 def _current_db_path() -> str:
@@ -87,6 +100,8 @@ def require_internal_api_token(
         default=None, alias="X-Corkysoft-Api-Key"
     ),
 ) -> None:
+    if not _legacy_direct_token_enabled():
+        raise HTTPException(status_code=401, detail="Legacy internal API token is disabled")
     expected = _required_internal_api_token()
     if x_corkysoft_api_key != expected:
         raise HTTPException(status_code=401, detail="Invalid internal API token")
@@ -107,6 +122,8 @@ def require_internal_api_read_token(
             if API_READ_SCOPE not in credential["scopes"]:
                 raise HTTPException(status_code=403, detail="Credential scope is not authorized")
             return
+    if not _legacy_direct_token_enabled():
+        raise HTTPException(status_code=401, detail="Invalid internal API token")
     expected = _required_internal_api_token()
     if x_corkysoft_api_key != expected:
         raise HTTPException(status_code=401, detail="Invalid internal API token")
@@ -131,6 +148,8 @@ def _service_credentials() -> list[dict]:
             detail="CORKYSOFT_SERVICE_CREDENTIALS_JSON must define a credentials list",
         )
     credentials = []
+    seen_tokens: set[str] = set()
+    seen_ids: set[str] = set()
     for item in parsed:
         if not isinstance(item, dict):
             continue
@@ -142,12 +161,19 @@ def _service_credentials() -> list[dict]:
             scopes = [scopes]
         if not token or not credential_id or not actor or not isinstance(scopes, list):
             continue
+        if token in seen_tokens:
+            raise HTTPException(status_code=503, detail="Service credential tokens must be unique")
+        if credential_id in seen_ids:
+            raise HTTPException(status_code=503, detail="Service credential IDs must be unique")
+        seen_tokens.add(token)
+        seen_ids.add(credential_id)
         credentials.append(
             {
                 "id": credential_id,
                 "token": token,
                 "actor": actor,
                 "scopes": tuple(str(scope).strip() for scope in scopes if str(scope).strip()),
+                "status": str(item.get("status") or "active").strip().lower(),
                 "not_before": _parse_credential_time(item.get("not_before"), "not_before", credential_id),
                 "expires_at": _parse_credential_time(item.get("expires_at"), "expires_at", credential_id),
                 "revoked_at": _parse_credential_time(item.get("revoked_at"), "revoked_at", credential_id),
@@ -160,6 +186,11 @@ def _credential_lifecycle_error(credential: dict, now: datetime | None = None) -
     """Return a fail-closed lifecycle error when a credential is inactive."""
 
     now = now or datetime.now(UTC)
+    status = str(credential.get("status") or "active").strip().lower()
+    if status in {"revoked", "disabled", "retired"}:
+        return "Credential has been revoked"
+    if status not in {"active", "overlap"}:
+        return "Credential is not active"
     if credential.get("revoked_at") is not None and credential["revoked_at"] <= now:
         return "Credential has been revoked"
     if credential.get("not_before") is not None and credential["not_before"] > now:
